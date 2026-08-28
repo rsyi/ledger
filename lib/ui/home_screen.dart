@@ -284,7 +284,10 @@ class _HomeScreenState extends State<HomeScreen> {
           appBar: AppBar(
             title: Text(appName),
             actions: [
-              const SyncStatusButton(),
+              // Not const: a const instance is identical across parent
+              // rebuilds, so Flutter would skip build() and freeze the
+              // pre-bootstrap empty state (SyncScheduler.instance null).
+              SyncStatusButton(),
               if (chatModel != null)
                 IconButton(
                   icon: const Icon(Icons.smart_toy_outlined),

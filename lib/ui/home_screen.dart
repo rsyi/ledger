@@ -12,6 +12,10 @@ import '../services/analytics_engine.dart';
 import '../services/app_config.dart';
 import '../services/connector_registry.dart';
 import '../services/engine.dart';
+import '../services/engine_ledger_connector.dart';
+import '../services/sync_scheduler.dart';
+import '../services/engine_schema_adapter.dart';
+import 'widgets/sync_status_button.dart';
 import '../services/github_client.dart';
 import '../services/icon_resolver.dart';
 import '../services/llm_client.dart';
@@ -110,6 +114,18 @@ class _HomeScreenState extends State<HomeScreen> {
       // (see retryTransient). A few short retries ride out the window that
       // a manual refresh would otherwise have to.
       await retryTransient(() => registry.forView(view).ensureTable(view));
+    }
+    // Local-first: hand the sync scheduler the gsheets entry views and
+    // fire the app-start sync. (ensureTable above is a local no-op on
+    // the ledger connector — the sheet tabs get ensured during sync.)
+    if (repo is EngineLedgerConnector) {
+      await SyncScheduler.init(
+        ledger: repo,
+        viewsJson: views
+            .where((v) => v.hasInputOverlay && v.datasource == 'gsheets')
+            .map(viewSchemaToEngineJson)
+            .toList(),
+      );
     }
     // disable_post_log in config.yml gates every piece of the LLM plumbing.
     // When set, we hand TimelineScreen `null` llm/cache so the post-log hook
@@ -268,6 +284,7 @@ class _HomeScreenState extends State<HomeScreen> {
           appBar: AppBar(
             title: Text(appName),
             actions: [
+              const SyncStatusButton(),
               if (chatModel != null)
                 IconButton(
                   icon: const Icon(Icons.smart_toy_outlined),

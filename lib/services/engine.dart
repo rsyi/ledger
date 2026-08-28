@@ -11,6 +11,7 @@ library;
 
 import 'package:airledger_engine/airledger_engine.dart';
 
+import 'engine_ledger_connector.dart';
 import 'engine_sheets_connector.dart';
 import 'sheets_repository.dart';
 import 'warehouse_connector.dart';
@@ -23,6 +24,12 @@ import 'warehouse_connector.dart';
 /// Reverting to false should require no other changes — both paths
 /// stay compiled in.
 const useEngine = true;
+
+/// When true (and [useEngine] is true), the bundled gsheets-backed
+/// connector becomes local-first: reads/writes hit the engine's
+/// on-device SQLite store and a background [SyncScheduler] pushes/
+/// pulls the Sheet. Flip off to fall back to direct Sheets I/O.
+const useLocalFirst = true;
 
 AirledgerEngine? _engine;
 
@@ -39,6 +46,12 @@ Future<WarehouseConnector> connectSheetsConnector({
   required String defaultSpreadsheetId,
   required String serviceAccountKeyJson,
 }) async {
+  if (useEngine && useLocalFirst) {
+    return EngineLedgerConnector.connectFromKey(
+      defaultSpreadsheetId: defaultSpreadsheetId,
+      serviceAccountKeyJson: serviceAccountKeyJson,
+    );
+  }
   if (useEngine) {
     return EngineSheetsConnector.connectFromKey(
       defaultSpreadsheetId: defaultSpreadsheetId,

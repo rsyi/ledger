@@ -24,6 +24,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'engine_ledger_connector.dart';
+import 'integrations/registry.dart';
 
 class SyncScheduler with WidgetsBindingObserver {
   SyncScheduler._(this._ledger, this._viewsJson, this._prefs);
@@ -119,6 +120,10 @@ class SyncScheduler with WidgetsBindingObserver {
     }
     syncing.value = true;
     try {
+      // Pull due integration sources first so fresh external data
+      // rides this same cycle's push to the Sheet. pullDue() contains
+      // its own failures — a source outage never blocks the sync.
+      await IntegrationRegistry.instance?.pullDue();
       final results = await _ledger.repo.sync(_viewsJson);
       final errors = results
           .map((r) => r['error'])

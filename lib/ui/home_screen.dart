@@ -16,6 +16,9 @@ import '../services/engine_ledger_connector.dart';
 import '../services/sync_scheduler.dart';
 import '../services/engine_schema_adapter.dart';
 import 'widgets/sync_status_button.dart';
+import 'integrations_screen.dart';
+import '../services/integrations/registry.dart';
+import '../services/integrations/withings.dart';
 import '../services/github_client.dart';
 import '../services/icon_resolver.dart';
 import '../services/llm_client.dart';
@@ -119,6 +122,21 @@ class _HomeScreenState extends State<HomeScreen> {
     // fire the app-start sync. (ensureTable above is a local no-op on
     // the ledger connector — the sheet tabs get ensured during sync.)
     if (repo is EngineLedgerConnector) {
+      // Integrations first: the scheduler's app-start sync pulls due
+      // sources before pushing the ledger.
+      ViewSchema? weightView;
+      for (final v in views) {
+        if (v.name == 'weight') weightView = v;
+      }
+      IntegrationRegistry.init(integrations: [
+        if (weightView != null)
+          WithingsIntegration(
+            config: assetConfig.withings,
+            repo: repo.repo,
+            weightViewJson: viewSchemaToEngineJson(weightView),
+          ),
+        ComingSoonIntegration('Macrofactor', '→ meals (via Health Connect)'),
+      ]);
       await SyncScheduler.init(
         ledger: repo,
         viewsJson: views
@@ -343,9 +361,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   Expanded(
                     child: ListView.separated(
-                      itemCount: entryViews.length + 1,
+                      itemCount: entryViews.length + 2,
                       separatorBuilder: (_, _) => const Divider(height: 1),
                       itemBuilder: (_, i) {
+                        if (i == entryViews.length + 1) {
+                          return ListTile(
+                            leading: const Icon(Icons.sync_alt),
+                            title: const Text('Integrations'),
+                            subtitle: const Text(
+                                'Withings and other sources → ledger'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const IntegrationsScreen(),
+                              ),
+                            ),
+                          );
+                        }
                         if (i == entryViews.length) {
                           return ListTile(
                             leading: const Icon(Icons.bar_chart),

@@ -1,7 +1,7 @@
 /// Withings → weight integration.
 ///
-/// OAuth2 (browser consent via flutter_web_auth_2, custom scheme
-/// airledger://oauth/withings), tokens in flutter_secure_storage,
+/// OAuth2 (in-app WebView consent intercepting the custom-scheme
+/// callback airledger://oauth/withings), tokens in secure storage,
 /// `getmeas` pulls transformed to engine ingest batches, and a
 /// rolling-window deletion reconcile backed by the engine's
 /// provenance table.
@@ -11,12 +11,12 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:airledger_engine/airledger_engine.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
 
 import '../app_config.dart' show WithingsConfig;
+import '../../ui/oauth_webview_screen.dart';
 import 'integration.dart';
 
 const _kAuthorizeUrl = 'https://account.withings.com/oauth2_user/authorize2';
@@ -176,10 +176,19 @@ class WithingsIntegration implements Integration {
       'redirect_uri': _kRedirectUri,
       'state': state,
     });
-    final result = await FlutterWebAuth2.authenticate(
-      url: url.toString(),
-      callbackUrlScheme: 'airledger',
+    // In-app WebView, not a Custom Tab: Chrome silently blocks the
+    // post-consent redirect to a custom scheme, so we intercept the
+    // callback navigation ourselves.
+    final result = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => OAuthWebViewScreen(
+          title: 'Connect Withings',
+          authorizeUrl: url,
+          callbackScheme: 'airledger',
+        ),
+      ),
     );
+    if (result == null) return; // user backed out
     final back = Uri.parse(result);
     if (back.queryParameters['state'] != state) {
       throw StateError('withings oauth: state mismatch');

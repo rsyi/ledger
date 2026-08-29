@@ -37,6 +37,11 @@ class AppConfig {
   /// `quickbooks:` block; the feature stays inert.
   final QuickBooksConfig? quickbooks;
 
+  /// Optional Withings integration credentials — drives the Withings
+  /// card on the Integrations page. Null when the build has no
+  /// `integrations.withings` block; the card shows a setup hint.
+  final WithingsConfig? withings;
+
   AppConfig({
     required this.spreadsheetId,
     required this.models,
@@ -44,6 +49,7 @@ class AppConfig {
     this.github,
     this.kioskView,
     this.quickbooks,
+    this.withings,
   });
 
   static Future<AppConfig> load() async {
@@ -79,8 +85,33 @@ class AppConfig {
       quickbooks: node['quickbooks'] is YamlMap
           ? QuickBooksConfig.fromYaml(node['quickbooks'] as YamlMap)
           : null,
+      withings: node['integrations'] is YamlMap &&
+              (node['integrations'] as YamlMap)['withings'] is YamlMap
+          ? WithingsConfig.fromYaml(_yamlMapToJson(
+              (node['integrations'] as YamlMap)['withings'] as YamlMap))
+          : null,
     );
   }
+}
+
+class WithingsConfig {
+  const WithingsConfig({required this.clientId, required this.clientSecret});
+
+  final String clientId;
+  final String clientSecret;
+
+  /// False while the .env still carries the SET_ME placeholders —
+  /// the Integrations page shows a setup hint instead of Connect.
+  bool get isConfigured =>
+      clientId.isNotEmpty &&
+      clientSecret.isNotEmpty &&
+      clientId != 'SET_ME' &&
+      clientSecret != 'SET_ME';
+
+  static WithingsConfig fromYaml(Map<String, dynamic> m) => WithingsConfig(
+        clientId: (m['client_id'] ?? '').toString(),
+        clientSecret: (m['client_secret'] ?? '').toString(),
+      );
 }
 
 Map<String, dynamic> _yamlMapToJson(YamlMap m) => {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:airledger_engine/airledger_engine.dart';
 import 'package:flutter/foundation.dart';
@@ -16,6 +17,10 @@ enum HrState { disconnected, connecting, connected, reconnecting }
 /// Ledger meta keys (shared with the Whoop integration card):
 ///   - `integration_whoop_device_id` — remembered BLE remote id
 ///   - `user_max_hr` — user's max HR; drives zone thresholds
+///
+/// On unexpected drops it reconnects with exponential backoff (3s → 30s
+/// cap) and keeps retrying while the app is backgrounded — by design, so
+/// a workout keeps recording with the screen off.
 class HeartRateService {
   HeartRateService({required this.repo});
 
@@ -43,7 +48,12 @@ class HeartRateService {
   StreamSubscription<List<int>>? _valueSub;
   StreamSubscription<BluetoothConnectionState>? _connSub;
   bool _wantConnected = false;
-  bool _retryPending = false;
+  Timer? _retryTimer;
+  int _retryAttempt = 0;
+
+  /// Bumped by [connectTo]/[disconnect] to invalidate in-flight
+  /// [_openAndSubscribe] attempts, so exactly one attempt can win.
+  int _attemptGen = 0;
 
   /// Load meta-backed state. Call once at bootstrap.
   Future<void> init() async {
@@ -75,13 +85,23 @@ class HeartRateService {
   Future<void> connectTo(BluetoothDevice device) async {
     _wantConnected = true;
     _device = device;
+    _attemptGen++;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _retryAttempt = 0;
     state.value = HrState.connecting;
     await _connSub?.cancel();
     _connSub = device.connectionState.listen((s) {
-      if (s == BluetoothConnectionState.disconnected && _wantConnected) {
+      // Note: FBP replays the current value (disconnected for a fresh
+      // device) to every new listener, so only treat this as a drop
+      // when we actually got connected first.
+      if (s == BluetoothConnectionState.disconnected &&
+          _wantConnected &&
+          state.value == HrState.connected) {
         // Unexpected drop (out of range): flag + retry until told to stop.
         state.value = HrState.reconnecting;
-        _retryLater();
+        lastBpm.value = null;
+        _scheduleRetry(attempt: _retryAttempt++);
       }
     });
     await _openAndSubscribe();
@@ -90,6 +110,7 @@ class HeartRateService {
   Future<void> _openAndSubscribe() async {
     final device = _device;
     if (device == null) return;
+    final gen = _attemptGen;
     try {
       if (!device.isConnected) {
         await device.connect(
@@ -97,32 +118,38 @@ class HeartRateService {
           timeout: const Duration(seconds: 15),
         );
       }
+      if (gen != _attemptGen || !_wantConnected) return;
       final services = await device.discoverServices();
+      if (gen != _attemptGen || !_wantConnected) return;
       final hr = services.firstWhere((s) => s.uuid == serviceHr);
       final measurement = hr.characteristics
           .firstWhere((c) => c.uuid == charHrMeasurement);
       await _valueSub?.cancel();
+      if (gen != _attemptGen || !_wantConnected) return;
       // Subscribe before enabling notifications so no packet is missed.
       _valueSub = measurement.onValueReceived.listen(_onData);
       await measurement.setNotifyValue(true);
+      if (gen != _attemptGen || !_wantConnected) return;
+      _retryAttempt = 0;
       state.value = HrState.connected;
     } catch (e) {
       debugPrint('HR connect failed: $e');
-      if (_wantConnected) {
-        state.value = HrState.reconnecting;
-        _retryLater();
-      }
+      if (gen != _attemptGen || !_wantConnected) return;
+      state.value = HrState.reconnecting;
+      _scheduleRetry(attempt: _retryAttempt++);
     }
   }
 
-  Future<void> _retryLater() async {
-    // Collapse concurrent retry chains (each drop event schedules one).
-    if (_retryPending) return;
-    _retryPending = true;
-    await Future<void>.delayed(const Duration(seconds: 3));
-    _retryPending = false;
-    if (!_wantConnected || state.value == HrState.connected) return;
-    await _openAndSubscribe();
+  /// Schedule a single reconnect attempt with exponential backoff:
+  /// 3s, 6s, 12s, 24s, then capped at 30s. Replaces any pending timer,
+  /// so exactly one retry is ever queued.
+  void _scheduleRetry({required int attempt}) {
+    _retryTimer?.cancel();
+    final delay = Duration(seconds: min(30, 3 << min(attempt, 4)));
+    _retryTimer = Timer(delay, () {
+      if (!_wantConnected || state.value == HrState.connected) return;
+      _openAndSubscribe();
+    });
   }
 
   void _onData(List<int> data) {
@@ -134,6 +161,10 @@ class HeartRateService {
 
   Future<void> disconnect() async {
     _wantConnected = false;
+    _attemptGen++;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _retryAttempt = 0;
     await _valueSub?.cancel();
     _valueSub = null;
     await _connSub?.cancel();

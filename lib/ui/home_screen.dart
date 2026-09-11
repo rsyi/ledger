@@ -17,7 +17,9 @@ import '../services/sync_scheduler.dart';
 import '../services/engine_schema_adapter.dart';
 import 'widgets/sync_status_button.dart';
 import 'integrations_screen.dart';
+import '../services/heart_rate_service.dart';
 import '../services/integrations/registry.dart';
+import '../services/integrations/whoop.dart';
 import '../services/integrations/withings.dart';
 import '../services/github_client.dart';
 import '../services/icon_resolver.dart';
@@ -128,6 +130,9 @@ class _HomeScreenState extends State<HomeScreen> {
       for (final v in views) {
         if (v.name == 'weight') weightView = v;
       }
+      final hrService = HeartRateService(repo: repo.repo);
+      HeartRateService.instance = hrService;
+      await hrService.init();
       IntegrationRegistry.init(integrations: [
         if (weightView != null)
           WithingsIntegration(
@@ -135,6 +140,7 @@ class _HomeScreenState extends State<HomeScreen> {
             repo: repo.repo,
             weightViewJson: viewSchemaToEngineJson(weightView),
           ),
+        WhoopIntegration(hr: hrService),
         ComingSoonIntegration('Macrofactor', '→ meals (via Health Connect)'),
       ]);
       await SyncScheduler.init(

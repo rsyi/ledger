@@ -41,6 +41,8 @@ class HrSession {
   /// Feed one BPM sample; returns the ladders whose threshold this
   /// sample crosses for the first time this session.
   List<TimerLadder> onSample(int bpm) {
+    // Straps emit 0 during warm-up / contact loss — not a real sample.
+    if (bpm <= 0) return const [];
     if (sessionMax == null || bpm > sessionMax!) sessionMax = bpm;
     final max = maxHr;
     if (max == null || max <= 0) return const [];

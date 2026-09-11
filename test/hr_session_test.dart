@@ -60,5 +60,20 @@ void main() {
       final s = HrSession(maxHr: 200, ladders: const [manual, z4]);
       expect(s.onSample(190).map((l) => l.target), ['zone4_reached']);
     });
+
+    test('bpm 0 (contact loss) is ignored entirely', () {
+      final s = HrSession(maxHr: 200, ladders: const [z4]);
+      expect(s.onSample(0), isEmpty);
+      expect(s.sessionMax, isNull);
+      s.onSample(120);
+      s.onSample(0);
+      expect(s.sessionMax, 120);
+    });
+
+    test('maxHr 0 never fires ladders but still tracks max', () {
+      final s = HrSession(maxHr: 0, ladders: const [z4, z5]);
+      expect(s.onSample(190), isEmpty);
+      expect(s.sessionMax, 190);
+    });
   });
 }

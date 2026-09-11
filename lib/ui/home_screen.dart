@@ -130,6 +130,9 @@ class _HomeScreenState extends State<HomeScreen> {
       for (final v in views) {
         if (v.name == 'weight') weightView = v;
       }
+      // _initialize() re-runs on schema reload; tear down the previous
+      // service's BLE connection + retry timer before replacing it.
+      await HeartRateService.instance?.disconnect();
       final hrService = HeartRateService(repo: repo.repo);
       HeartRateService.instance = hrService;
       await hrService.init();

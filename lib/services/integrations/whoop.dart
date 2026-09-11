@@ -57,9 +57,13 @@ class WhoopIntegration implements Integration {
     ].request();
     if (statuses.values.any((s) => !s.isGranted)) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Bluetooth permission is needed to find your '
-              'Whoop. Enable it in system Settings > Apps.'),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text(
+              'Bluetooth permission is needed to find your Whoop.'),
+          action: SnackBarAction(
+            label: 'Settings',
+            onPressed: openAppSettings,
+          ),
         ));
       }
       return;

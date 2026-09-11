@@ -2,8 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../models/view_schema.dart';
+import '../../services/heart_rate_service.dart';
+import '../../services/hr_session.dart';
+import 'hr_max_dialog.dart';
 
 /// Resolves an input.default value into an actual Dart value at form-creation
 /// time. Supports the strings 'now' (DateTime.now()) and 'today' (date only).
@@ -660,19 +664,70 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
 
   Timer? _ticker;
 
+  StreamSubscription<int>? _bpmSub;
+  HrSession? _hrSession;
+
+  /// True when this timer's schema declares any HR behavior — a ladder
+  /// with hr_pct or an hr_max_target. Gates all HR UI and subscriptions.
+  bool get _hrConfigured =>
+      widget.dim.input?.hrMaxTarget != null ||
+      (widget.dim.input?.ladders?.any((l) => l.hrPct != null) ?? false);
+
   static final _timeFmt = DateFormat('h:mm:ss a');
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.value?.toString() ?? '');
+    final hr = HeartRateService.instance;
+    if (_hrConfigured && hr != null) {
+      _bpmSub = hr.bpm.listen(_onBpm);
+      hr.state.addListener(_onHrChanged);
+      hr.maxHr.addListener(_onHrChanged);
+    }
   }
 
   @override
   void dispose() {
+    _bpmSub?.cancel();
+    HeartRateService.instance?.state.removeListener(_onHrChanged);
+    HeartRateService.instance?.maxHr.removeListener(_onHrChanged);
+    unawaited(WakelockPlus.disable());
     _ticker?.cancel();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onHrChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Live sample: track session max; auto-stamp any hr_pct ladder whose
+  /// threshold this sample crosses — same guard as a manual tap (only
+  /// blank targets), same write path (onLadderTap).
+  void _onBpm(int bpm) {
+    if (!mounted) return;
+    final running = _ticker != null && _startedAt != null && !_paused;
+    final session = _hrSession;
+    if (!running || session == null) {
+      setState(() {}); // badge refresh only
+      return;
+    }
+    final due = session.onSample(bpm);
+    for (final ladder in due) {
+      if (_isNonEmpty(widget.linkedValues[ladder.target])) continue;
+      final elapsed = _liveElapsed();
+      if (elapsed == null) continue;
+      final formatted = _formatElapsed(elapsed);
+      widget.onLadderTap?.call(ladder.target, formatted);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${ladder.label}: $formatted · auto (HR $bpm)'),
+          duration: const Duration(milliseconds: 1200),
+        ),
+      );
+    }
+    setState(() {});
   }
 
   /// Names of dims the timer writes to — ladder targets and every
@@ -685,6 +740,8 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
       for (final s
           in widget.dim.input?.stopTargets ?? const <TimerStopTarget>[])
         s.target,
+      if (widget.dim.input?.hrMaxTarget != null)
+        widget.dim.input!.hrMaxTarget!,
     };
     return [
       for (final t in targets)
@@ -739,11 +796,17 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
       _accumulated = Duration.zero;
       _paused = false;
       _stopped = false;
+      _hrSession = HrSession(
+        maxHr: HeartRateService.instance?.maxHr.value,
+        ladders: widget.dim.input?.ladders ?? const [],
+        hrMaxTarget: widget.dim.input?.hrMaxTarget,
+      );
       _ticker?.cancel();
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() {});
       });
     });
+    unawaited(WakelockPlus.enable());
   }
 
   /// Pause: freeze the elapsed counter but keep state. Resume picks up
@@ -789,6 +852,14 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
         ),
       );
     }
+    final hrTarget = widget.dim.input?.hrMaxTarget;
+    final sessionMax = _hrSession?.sessionMax;
+    if (hrTarget != null && sessionMax != null) {
+      // Highest BPM seen this session → e.g. max_hr. A later manual
+      // edit wins; it's a normal form field.
+      widget.onLadderTap?.call(hrTarget, sessionMax);
+    }
+    unawaited(WakelockPlus.disable());
     setState(() {
       _ticker?.cancel();
       _ticker = null;
@@ -938,6 +1009,14 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
             ),
             onChanged: (s) => widget.onChanged(s.isEmpty ? null : s),
           ),
+          if (_hrConfigured)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: _HrBadge(),
+              ),
+            ),
           if (elapsedNow != null)
             Padding(
               padding: const EdgeInsets.only(top: 8, left: 4),
@@ -1196,6 +1275,10 @@ class _FullscreenTimerDialogState extends State<_FullscreenTimerDialog> {
                     ),
                   ),
                   const Spacer(),
+                  if (widget.host._hrConfigured) ...[
+                    const _HrBadge(),
+                    const SizedBox(width: 8),
+                  ],
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
@@ -1461,6 +1544,89 @@ class _BigLadderRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Live BPM chip for HR-configured timers. Shows connection state, the
+/// current BPM colored by zone, a connect affordance when disconnected,
+/// and a "set max HR" prompt when unset. Zone colors are display-only
+/// approximations (80%/90% of max HR); stamping thresholds come from
+/// the schema's hr_pct values.
+class _HrBadge extends StatelessWidget {
+  const _HrBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final hr = HeartRateService.instance;
+    if (hr == null) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    return ValueListenableBuilder<HrState>(
+      valueListenable: hr.state,
+      builder: (context, state, _) {
+        switch (state) {
+          case HrState.disconnected:
+            return ActionChip(
+              avatar: Icon(Icons.favorite_border,
+                  size: 16, color: scheme.onSurfaceVariant),
+              label: const Text('Connect HR'),
+              onPressed: () async {
+                final ok = await hr.connectRemembered();
+                if (!ok && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text(
+                        'Pair your Whoop on the Integrations page first.'),
+                  ));
+                }
+              },
+            );
+          case HrState.connecting:
+            return const Chip(
+              avatar: SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              label: Text('Connecting…'),
+            );
+          case HrState.reconnecting:
+            return Chip(
+              avatar:
+                  Icon(Icons.sync_problem, size: 16, color: scheme.error),
+              label: const Text('Reconnecting…'),
+            );
+          case HrState.connected:
+            return ValueListenableBuilder<int?>(
+              valueListenable: hr.lastBpm,
+              builder: (context, bpm, _) {
+                final max = hr.maxHr.value;
+                if (max == null) {
+                  return ActionChip(
+                    avatar:
+                        Icon(Icons.favorite, size: 16, color: scheme.primary),
+                    label: Text(
+                        bpm == null ? '— bpm' : '$bpm bpm · set max HR'),
+                    onPressed: () => promptMaxHr(context, hr),
+                  );
+                }
+                var color = scheme.onSurfaceVariant;
+                if (bpm != null && bpm >= max * 0.9) {
+                  color = Colors.red;
+                } else if (bpm != null && bpm >= max * 0.8) {
+                  color = Colors.orange;
+                }
+                return Chip(
+                  avatar: Icon(Icons.favorite, size: 16, color: color),
+                  label: Text(
+                    bpm == null ? '— bpm' : '$bpm bpm',
+                    style:
+                        TextStyle(color: color, fontWeight: FontWeight.w700),
+                  ),
+                );
+              },
+            );
+        }
+      },
     );
   }
 }

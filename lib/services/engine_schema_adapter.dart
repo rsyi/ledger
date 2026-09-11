@@ -102,7 +102,11 @@ Map<String, dynamic> _inputSpecToJson(InputSpec s) => {
       'history': s.history,
       if (s.ladders != null)
         'ladders': s.ladders!
-            .map((l) => {'label': l.label, 'target': l.target})
+            .map((l) => {
+                  'label': l.label,
+                  'target': l.target,
+                  if (l.hrPct != null) 'hr_pct': l.hrPct,
+                })
             .toList(),
       if (s.stopTargets != null)
         'stop_targets': s.stopTargets!
@@ -111,6 +115,7 @@ Map<String, dynamic> _inputSpecToJson(InputSpec s) => {
                   'format': _stopFormatToJson(t.format),
                 })
             .toList(),
+      if (s.hrMaxTarget != null) 'hr_max_target': s.hrMaxTarget,
     };
 
 String _widgetToJson(WidgetType w) => switch (w) {
@@ -290,6 +295,7 @@ InputSpec? _inputSpec(Object? node) {
     history: (m['history'] as bool?) ?? false,
     ladders: _ladders(m['ladders']),
     stopTargets: _stopTargets(m['stop_targets']),
+    hrMaxTarget: m['hr_max_target'] as String?,
   );
 }
 
@@ -322,6 +328,7 @@ List<TimerLadder>? _ladders(Object? node) {
     return TimerLadder(
       label: m['label'] as String,
       target: m['target'] as String,
+      hrPct: (m['hr_pct'] as num?)?.toDouble(),
     );
   }).toList();
 }

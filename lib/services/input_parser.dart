@@ -271,6 +271,7 @@ bool _looksLikeFormSpec(YamlMap node) {
     'ladders',
     'stop_target',
     'stop_targets',
+    'hr_max_target',
   };
   return formKeys.any(node.containsKey);
 }
@@ -298,6 +299,7 @@ InputSpec _parseInput(YamlMap node) {
     history: (node['history'] as bool?) ?? false,
     ladders: _parseLadders(node['ladders']),
     stopTargets: _parseStopTargets(node),
+    hrMaxTarget: node['hr_max_target'] as String?,
   );
 }
 
@@ -359,6 +361,7 @@ List<TimerLadder>? _parseLadders(Object? node) {
     return TimerLadder(
       label: _requireString(entry, 'label'),
       target: _requireString(entry, 'target'),
+      hrPct: (entry['hr_pct'] as num?)?.toDouble(),
     );
   }).toList();
 }

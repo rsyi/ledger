@@ -301,6 +301,11 @@ class InputSpec {
   /// freezes the display.
   final List<TimerStopTarget>? stopTargets;
 
+  /// For `widget: timer` fields. Dim that receives the highest live BPM
+  /// observed while the timer ran (written as a number on Stop). Fed by
+  /// the BLE heart-rate service; null = no HR max capture.
+  final String? hrMaxTarget;
+
   InputSpec({
     required this.widget,
     this.required = false,
@@ -314,6 +319,7 @@ class InputSpec {
     this.history = false,
     this.ladders,
     this.stopTargets,
+    this.hrMaxTarget,
   });
 }
 
@@ -341,7 +347,13 @@ class TimerLadder {
   final String label;
   final String target;
 
-  const TimerLadder({required this.label, required this.target});
+  /// Auto-stamp threshold as percent of the user's max HR (ledger meta
+  /// `user_max_hr`). When set and a live BLE HR source is connected,
+  /// the ladder fires automatically the first time live BPM reaches
+  /// the threshold while the timer runs. Null = manual tap only.
+  final double? hrPct;
+
+  const TimerLadder({required this.label, required this.target, this.hrPct});
 }
 
 /// A small derived-field spec: take the value of dimension [from], pass it

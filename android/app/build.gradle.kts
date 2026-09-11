@@ -6,7 +6,9 @@ plugins {
 
 android {
     namespace = "com.robertyi.ledger"
-    compileSdk = 37
+    // permission_handler_android 14.x needs compileSdk >= 37; track
+    // Flutter's managed baseline once it catches up.
+    compileSdk = maxOf(flutter.compileSdkVersion, 37)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

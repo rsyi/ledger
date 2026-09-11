@@ -19,6 +19,9 @@ int? decodeHeartRate(List<int> data) {
 /// detection for ladders that declare `hr_pct`. Pure logic — the timer
 /// widget feeds it samples and decides what to do with the results
 /// (the caller still skips targets whose field already has a value).
+/// Once a ladder fires it is consumed for the session even if the
+/// caller skips the write (already-populated target) or the field is
+/// later cleared — no re-stamp until the next session.
 class HrSession {
   HrSession({
     required this.maxHr,
@@ -28,8 +31,10 @@ class HrSession {
             ladders.where((l) => l.hrPct != null).toList(growable: false);
 
   /// User's max heart rate (ledger meta `user_max_hr`). Null disables
-  /// zone detection; session max still tracks.
-  final int? maxHr;
+  /// zone detection; session max still tracks. Mutable: it can be
+  /// updated mid-session (the widget pushes changes from the service
+  /// notifier), which arms zone detection from that point on.
+  int? maxHr;
 
   /// Only the HR-driven ladders (hr_pct != null).
   final List<TimerLadder> ladders;

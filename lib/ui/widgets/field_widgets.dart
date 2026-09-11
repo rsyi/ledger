@@ -664,6 +664,10 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
 
   Timer? _ticker;
 
+  /// True while we hold the wakelock (Start → Stop/dispose). Guards
+  /// disable() so we never release a lock some other screen holds.
+  bool _wakelockHeld = false;
+
   StreamSubscription<int>? _bpmSub;
   HrSession? _hrSession;
 
@@ -682,24 +686,25 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
     final hr = HeartRateService.instance;
     if (_hrConfigured && hr != null) {
       _bpmSub = hr.bpm.listen(_onBpm);
-      hr.state.addListener(_onHrChanged);
-      hr.maxHr.addListener(_onHrChanged);
+      hr.maxHr.addListener(_onMaxHrChanged);
     }
   }
 
   @override
   void dispose() {
     _bpmSub?.cancel();
-    HeartRateService.instance?.state.removeListener(_onHrChanged);
-    HeartRateService.instance?.maxHr.removeListener(_onHrChanged);
-    unawaited(WakelockPlus.disable());
+    HeartRateService.instance?.maxHr.removeListener(_onMaxHrChanged);
+    if (_wakelockHeld) {
+      unawaited(WakelockPlus.disable());
+      _wakelockHeld = false;
+    }
     _ticker?.cancel();
     _controller.dispose();
     super.dispose();
   }
 
-  void _onHrChanged() {
-    if (mounted) setState(() {});
+  void _onMaxHrChanged() {
+    _hrSession?.maxHr = HeartRateService.instance?.maxHr.value;
   }
 
   /// Live sample: track session max; auto-stamp any hr_pct ladder whose
@@ -709,10 +714,7 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
     if (!mounted) return;
     final running = _ticker != null && _startedAt != null && !_paused;
     final session = _hrSession;
-    if (!running || session == null) {
-      setState(() {}); // badge refresh only
-      return;
-    }
+    if (!running || session == null) return;
     final due = session.onSample(bpm);
     for (final ladder in due) {
       if (_isNonEmpty(widget.linkedValues[ladder.target])) continue;
@@ -727,7 +729,6 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
         ),
       );
     }
-    setState(() {});
   }
 
   /// Names of dims the timer writes to — ladder targets and every
@@ -806,11 +807,13 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
         if (mounted) setState(() {});
       });
     });
+    _wakelockHeld = true;
     unawaited(WakelockPlus.enable());
   }
 
   /// Pause: freeze the elapsed counter but keep state. Resume picks up
   /// at the same total. Stop is the only way to RECORD the value.
+  /// The screen intentionally stays awake through pauses (rest intervals).
   void _pause() {
     if (_startedAt == null) return;
     setState(() {
@@ -859,7 +862,10 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
       // edit wins; it's a normal form field.
       widget.onLadderTap?.call(hrTarget, sessionMax);
     }
-    unawaited(WakelockPlus.disable());
+    if (_wakelockHeld) {
+      unawaited(WakelockPlus.disable());
+      _wakelockHeld = false;
+    }
     setState(() {
       _ticker?.cancel();
       _ticker = null;
@@ -1275,7 +1281,7 @@ class _FullscreenTimerDialogState extends State<_FullscreenTimerDialog> {
                     ),
                   ),
                   const Spacer(),
-                  if (widget.host._hrConfigured) ...[
+                  if (host._hrConfigured) ...[
                     const _HrBadge(),
                     const SizedBox(width: 8),
                   ],
@@ -1599,29 +1605,33 @@ class _HrBadge extends StatelessWidget {
             return ValueListenableBuilder<int?>(
               valueListenable: hr.lastBpm,
               builder: (context, bpm, _) {
-                final max = hr.maxHr.value;
-                if (max == null) {
-                  return ActionChip(
-                    avatar:
-                        Icon(Icons.favorite, size: 16, color: scheme.primary),
-                    label: Text(
-                        bpm == null ? '— bpm' : '$bpm bpm · set max HR'),
-                    onPressed: () => promptMaxHr(context, hr),
-                  );
-                }
-                var color = scheme.onSurfaceVariant;
-                if (bpm != null && bpm >= max * 0.9) {
-                  color = Colors.red;
-                } else if (bpm != null && bpm >= max * 0.8) {
-                  color = Colors.orange;
-                }
-                return Chip(
-                  avatar: Icon(Icons.favorite, size: 16, color: color),
-                  label: Text(
-                    bpm == null ? '— bpm' : '$bpm bpm',
-                    style:
-                        TextStyle(color: color, fontWeight: FontWeight.w700),
-                  ),
+                return ValueListenableBuilder<int?>(
+                  valueListenable: hr.maxHr,
+                  builder: (context, max, _) {
+                    if (max == null) {
+                      return ActionChip(
+                        avatar: Icon(Icons.favorite,
+                            size: 16, color: scheme.primary),
+                        label: Text(
+                            bpm == null ? '— bpm' : '$bpm bpm · set max HR'),
+                        onPressed: () => promptMaxHr(context, hr),
+                      );
+                    }
+                    var color = scheme.onSurfaceVariant;
+                    if (bpm != null && bpm >= max * 0.9) {
+                      color = Colors.red;
+                    } else if (bpm != null && bpm >= max * 0.8) {
+                      color = Colors.orange;
+                    }
+                    return Chip(
+                      avatar: Icon(Icons.favorite, size: 16, color: color),
+                      label: Text(
+                        bpm == null ? '— bpm' : '$bpm bpm',
+                        style: TextStyle(
+                            color: color, fontWeight: FontWeight.w700),
+                      ),
+                    );
+                  },
                 );
               },
             );

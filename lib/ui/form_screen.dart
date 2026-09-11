@@ -91,6 +91,8 @@ class _FormScreenState extends State<FormScreen> {
       for (final s in d.input?.stopTargets ?? const <TimerStopTarget>[]) {
         out.add(s.target);
       }
+      final hrMax = d.input?.hrMaxTarget;
+      if (hrMax != null) out.add(hrMax);
     }
     return out;
   })();
@@ -263,6 +265,8 @@ class _FormScreenState extends State<FormScreen> {
                 for (final s
                     in dim.input?.stopTargets ?? const <TimerStopTarget>[])
                   s.target: _shared[s.target],
+                if (dim.input?.hrMaxTarget != null)
+                  dim.input!.hrMaxTarget!: _shared[dim.input!.hrMaxTarget!],
               }
             : null,
         onShowHistory: () => showHistorySheet(

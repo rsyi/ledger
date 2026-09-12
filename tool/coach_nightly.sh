@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Nightly AI coach: dump ledger context -> headless Claude (Max plan)
-# -> apply draft rows + coach_log summary. Scheduled by launchd
+# -> post a plain-text briefing to the coach_chat tab. Scheduled by launchd
 # (com.robertyi.airledger-coach, 23:30 daily); safe to run manually.
 # Disable: launchctl unload ~/Library/LaunchAgents/com.robertyi.airledger-coach.plist
 set -euo pipefail
@@ -16,9 +16,17 @@ echo "=== coach run start $(date) ==="
 # Fresh goals/routine in case they were edited from another machine.
 git -C "$FIT" pull --ff-only || echo "warn: fitness pull failed, using local copy"
 
+# Idempotence: skip if a briefing was already posted for the planning target.
+TARGET=$(cd "$APP" && dart run tool/coach_dump.dart --days 1 --views coach_chat | awk '/^PLANNING TARGET:/ {print $3}')
+if (cd "$APP" && dart run tool/coach_msg.dart briefing-exists --date "$TARGET"); then
+  echo "briefing already posted for $TARGET"
+  exit 0
+fi
+
 DUMP="$(cd "$APP" && dart run tool/coach_dump.dart --days 28)"
 
 PROMPT="$(
+  printf 'MODE: BRIEFING\n\n'
   cat "$FIT/coach/PROMPT.md"
   printf '\n\n# goals.md\n\n';   cat "$FIT/coach/goals.md"
   printf '\n\n# routine.md\n\n'; cat "$FIT/coach/routine.md"
@@ -30,17 +38,9 @@ PROMPT="$(
   printf '\n\n# Ledger dump\n\n%s\n' "$DUMP"
 )"
 
-# Max-plan session via the claude CLI; sonnet is plenty for the strict
-# JSON contract and gentler on plan limits.
+# Max-plan session via the claude CLI; sonnet is plenty and gentler on
+# plan limits. Output is plain text — posted verbatim as the briefing.
 OUT="$(claude -p "$PROMPT" --model sonnet --output-format text)"
 
-# Tolerate accidental fences/preamble: keep first '{' .. last '}'.
-JSON="$(printf '%s' "$OUT" | python3 -c '
-import sys
-s = sys.stdin.read()
-a, b = s.find("{"), s.rfind("}")
-sys.exit(1) if a < 0 or b <= a else print(s[a:b+1])
-')"
-
-printf '%s' "$JSON" | (cd "$APP" && dart run tool/coach_apply.dart)
+printf '%s' "$OUT" | (cd "$APP" && dart run tool/coach_msg.dart post --role coach --kind briefing)
 echo "=== coach run done $(date) ==="

@@ -60,7 +60,12 @@ class _MaxHrDialogState extends State<_MaxHrDialog> {
         decoration: InputDecoration(
           labelText: 'BPM',
           helperText: 'Zone stamps fire at each ladder\'s % of this '
-              '(cardio: 80% / 90%).',
+              '(cardio: 80% / 90%).'
+              // No stored value yet — point at where Whoop shows it
+              // (fetching it would need Whoop API developer credentials).
+              '${widget.initial == null ? '\nWhoop shows yours under '
+                  'Profile → max heart rate.' : ''}',
+          helperMaxLines: 3,
           errorText: _errorText,
         ),
       ),

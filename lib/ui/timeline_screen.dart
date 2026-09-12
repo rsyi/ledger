@@ -664,6 +664,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
                                 (plannedRows[i] as _HeaderRow).totalCount,
                             doneCount:
                                 (plannedRows[i] as _HeaderRow).doneCount,
+                            onLogAll: () => _logAllTemplateGroup(
+                                (plannedRows[i] as _HeaderRow).name),
                             onDelete: () => _deleteTemplateGroup(
                                 (plannedRows[i] as _HeaderRow).name),
                           )
@@ -1051,6 +1053,35 @@ class _TimelineScreenState extends State<TimelineScreen> {
     await _deleteOptimistic(groupKeys);
   }
 
+  /// One-tap "Log all" for a template group: promotes every remaining
+  /// planned entry in the group through the same `_logNow` path as the
+  /// per-row circle — each stamped with the moment it's written, run
+  /// sequentially so the existing in-flight guards hold. No confirm;
+  /// a snackbar reports the count.
+  Future<void> _logAllTemplateGroup(String templateName) async {
+    final current = await _items;
+    final group = current
+        .where((it) =>
+            it.isPlanned && it.planned!.templateName == templateName)
+        .toList();
+    if (group.isEmpty) return;
+    var logged = 0;
+    for (final item in group) {
+      // Skip rows already mid-flight from a per-row tap.
+      if (_logNowInFlight.contains(item.planned!.localId)) continue;
+      await _logNow(item);
+      logged++;
+    }
+    if (!mounted || logged == 0) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content:
+            Text('Logged $logged ${logged == 1 ? 'entry' : 'entries'}'),
+        duration: const Duration(milliseconds: 1500),
+      ),
+    );
+  }
+
   /// Promotes a planned entry into a sheet row. The entry's start_time is
   /// stamped with now (unless the user already set one via edit), derives
   /// are applied, then it's written to the sheet and removed from local plan.
@@ -1393,12 +1424,14 @@ class _TemplateHeader extends StatelessWidget {
   final String name;
   final int totalCount;
   final int doneCount;
+  final VoidCallback onLogAll;
   final VoidCallback onDelete;
 
   const _TemplateHeader({
     required this.name,
     required this.totalCount,
     required this.doneCount,
+    required this.onLogAll,
     required this.onDelete,
   });
 
@@ -1432,6 +1465,16 @@ class _TemplateHeader extends StatelessWidget {
               ),
             ),
           ),
+          // One-tap "log the whole group now" — hidden once everything
+          // in the group is already logged.
+          if (doneCount < totalCount)
+            IconButton(
+              icon: const Icon(Icons.done_all, size: 20),
+              color: scheme.onSurfaceVariant,
+              visualDensity: VisualDensity.compact,
+              onPressed: onLogAll,
+              tooltip: 'Log all',
+            ),
           IconButton(
             icon: const Icon(Icons.delete_outline, size: 20),
             color: scheme.onSurfaceVariant,

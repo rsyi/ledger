@@ -21,6 +21,11 @@ abstract class Integration {
   /// 'Reconnect needed', 'Error: …'.
   Future<String> get statusLine;
 
+  /// Extra actions for the card's overflow menu (label → handler),
+  /// rendered before the built-in Full reconcile / Disconnect entries.
+  /// Most sources have none; Whoop uses it for "Set max HR".
+  Map<String, Future<void> Function(BuildContext)> get extraMenuActions;
+
   /// Run the interactive auth flow.
   Future<void> connect(BuildContext context);
 

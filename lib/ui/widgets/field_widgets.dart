@@ -1623,13 +1623,17 @@ class _HrBadge extends StatelessWidget {
                     } else if (bpm != null && bpm >= max * 0.8) {
                       color = Colors.orange;
                     }
-                    return Chip(
+                    // ActionChip (same visuals as the plain Chip it
+                    // replaced) so tapping the live BPM always reopens
+                    // the max-HR dialog — not just while max is unset.
+                    return ActionChip(
                       avatar: Icon(Icons.favorite, size: 16, color: color),
                       label: Text(
                         bpm == null ? '— bpm' : '$bpm bpm',
                         style: TextStyle(
                             color: color, fontWeight: FontWeight.w700),
                       ),
+                      onPressed: () => promptMaxHr(context, hr),
                     );
                   },
                 );

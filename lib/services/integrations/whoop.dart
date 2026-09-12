@@ -49,6 +49,12 @@ class WhoopIntegration implements Integration {
         : 'Paired · max HR $max';
   }
 
+  /// Max HR stays editable after pairing — the connect-time prompt is
+  /// otherwise the only chance to set it.
+  @override
+  Map<String, Future<void> Function(BuildContext)> get extraMenuActions =>
+      {'Set max HR': (ctx) => promptMaxHr(ctx, hr)};
+
   @override
   Future<void> connect(BuildContext context) async {
     final statuses = await [

@@ -102,6 +102,11 @@ class _IntegrationCardState extends State<_IntegrationCard> {
                             ),
                             PopupMenuButton<String>(
                               onSelected: (v) {
+                                final extra = it.extraMenuActions[v];
+                                if (extra != null) {
+                                  _run(() => extra(context));
+                                  return;
+                                }
                                 if (v == 'reconcile') {
                                   _run(() => it.pull(
                                       force: true, fullReconcile: true));
@@ -110,12 +115,18 @@ class _IntegrationCardState extends State<_IntegrationCard> {
                                   _confirmDisconnect();
                                 }
                               },
-                              itemBuilder: (_) => const [
-                                PopupMenuItem(
+                              itemBuilder: (_) => [
+                                for (final label
+                                    in it.extraMenuActions.keys)
+                                  PopupMenuItem(
+                                    value: label,
+                                    child: Text(label),
+                                  ),
+                                const PopupMenuItem(
                                   value: 'reconcile',
                                   child: Text('Full reconcile'),
                                 ),
-                                PopupMenuItem(
+                                const PopupMenuItem(
                                   value: 'disconnect',
                                   child: Text('Disconnect'),
                                 ),

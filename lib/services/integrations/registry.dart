@@ -46,6 +46,9 @@ class ComingSoonIntegration implements Integration {
   @override
   Future<String> get statusLine async => 'Coming soon';
   @override
+  Map<String, Future<void> Function(BuildContext)> get extraMenuActions =>
+      const {};
+  @override
   Future<void> connect(BuildContext context) async {}
   @override
   Future<void> disconnect() async {}

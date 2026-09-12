@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:airledger_engine/airledger_engine.dart'
+    show EngineLedgerRepository;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:package_info_plus/package_info_plus.dart';
@@ -32,8 +34,13 @@ import '../services/transient_retry.dart';
 import '../services/warehouse_connector.dart';
 import 'apps_screen.dart';
 import 'chat_screen.dart';
+import 'coach_chat_screen.dart';
 import 'timeline_screen.dart';
 import 'today_dashboard.dart';
+
+/// The synced view that backs the coach chat. Hidden from the normal
+/// tile list; surfaced only through the pinned Coach row + chat screen.
+const kCoachChatViewName = 'coach_chat';
 
 /// App entrypoint screen. Loads config + schemas, connects to the
 /// warehouse, and presents:
@@ -354,12 +361,26 @@ class _HomeScreenState extends State<HomeScreen> {
               final data = snap.data!;
               // Only show data-entry trackers (paired with .input.yml).
               // Analytics-only views still live in data.views for the
-              // chat / apps screen to query.
-              final entryViews =
-                  data.views.where((v) => v.hasInputOverlay).toList();
-              if (entryViews.isEmpty) {
+              // chat / apps screen to query. coach_chat is a chat, not
+              // a tracker — excluded here, rendered as the pinned Coach
+              // row instead.
+              final entryViews = data.views
+                  .where((v) =>
+                      v.hasInputOverlay && v.name != kCoachChatViewName)
+                  .toList();
+              ViewSchema? coachView;
+              for (final v in data.views) {
+                if (v.name == kCoachChatViewName) coachView = v;
+              }
+              if (entryViews.isEmpty && coachView == null) {
                 return const Center(child: Text('No views available.'));
               }
+              // Ledger meta access for the Coach row's unread marker.
+              // Null on non-local-first builds — unread simply tracks
+              // "any coach message exists".
+              final coachLedger = data.repository is EngineLedgerConnector
+                  ? (data.repository as EngineLedgerConnector).repo
+                  : null;
               return Column(
                 children: [
                   TodayDashboard(
@@ -368,6 +389,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     quickbooks: data.quickbooks,
                     qboService: data.qboService,
                   ),
+                  if (coachView != null)
+                    _CoachRow(
+                      view: coachView,
+                      repository: data.registry.forView(coachView),
+                      ledger: coachLedger,
+                    ),
                   Expanded(
                     child: ListView.separated(
                       itemCount: entryViews.length + 2,
@@ -500,6 +527,178 @@ class _Bootstrap {
     this.quickbooks,
     this.qboService,
   });
+}
+
+/// Pinned Coach row above the tracker tiles. Tinted (primaryContainer)
+/// so it reads as a different kind of row; shows a preview of the
+/// newest coach message + relative time, and an accent dot / stronger
+/// tint while unread (newest coach `ts` > device-local
+/// `coach_chat_last_read_ts` meta). Tap opens [CoachChatScreen];
+/// preview + unread refresh on return and when a background sync
+/// completes.
+class _CoachRow extends StatefulWidget {
+  final ViewSchema view;
+  final WarehouseConnector repository;
+  final EngineLedgerRepository? ledger;
+
+  const _CoachRow({
+    required this.view,
+    required this.repository,
+    this.ledger,
+  });
+
+  @override
+  State<_CoachRow> createState() => _CoachRowState();
+}
+
+class _CoachRowState extends State<_CoachRow> {
+  String? _preview;
+  String? _relTime;
+  bool _unread = false;
+  ValueNotifier<bool>? _syncing;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _syncing = SyncScheduler.instance?.syncing;
+    _syncing?.addListener(_onSyncStateChanged);
+  }
+
+  @override
+  void dispose() {
+    _syncing?.removeListener(_onSyncStateChanged);
+    super.dispose();
+  }
+
+  void _onSyncStateChanged() {
+    // Refresh when a sync completes — a fresh coach message may have
+    // just been pulled from the sheet.
+    if (_syncing?.value == false) _refresh();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final rows = await widget.repository.list(widget.view);
+      // Newest coach message by `ts` (ISO strings — lexicographic
+      // compare matches chronological).
+      Map<String, Object?>? newest;
+      String? newestTs;
+      for (final r in rows) {
+        if (r['role']?.toString() != 'coach') continue;
+        final ts = r['ts']?.toString();
+        if (ts == null || ts.isEmpty) continue;
+        if (newestTs == null || ts.compareTo(newestTs) > 0) {
+          newestTs = ts;
+          newest = r;
+        }
+      }
+      var unread = false;
+      if (newest != null) {
+        // Missing/unreadable meta → unread (a coach message exists the
+        // user has provably never opened on this device).
+        String? lastRead;
+        try {
+          lastRead = await widget.ledger?.metaGet(kCoachChatLastReadTsKey);
+        } catch (_) {/* treat as missing */}
+        unread = lastRead == null ||
+            lastRead.isEmpty ||
+            newestTs!.compareTo(lastRead) > 0;
+      }
+      if (!mounted) return;
+      setState(() {
+        _preview = newest == null
+            ? null
+            : _firstLine(newest['text']?.toString() ?? '');
+        _relTime = _relativeTime(newestTs);
+        _unread = unread;
+      });
+    } catch (_) {/* keep whatever the row currently shows */}
+  }
+
+  static String _firstLine(String text) {
+    final line = text.trimLeft().split('\n').first.trim();
+    return line.length > 80 ? '${line.substring(0, 80)}…' : line;
+  }
+
+  static String? _relativeTime(String? ts) {
+    final dt = ts == null ? null : DateTime.tryParse(ts);
+    if (dt == null) return null;
+    final diff = DateTime.now().difference(dt);
+    if (diff.inMinutes < 1) return 'now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays == 1) return 'yesterday';
+    return '${diff.inDays}d ago';
+  }
+
+  Future<void> _open() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => CoachChatScreen(
+          view: widget.view,
+          repository: widget.repository,
+          ledger: widget.ledger,
+        ),
+      ),
+    );
+    // The chat screen marks messages read (and the user may have sent
+    // one) — refresh the preview/unread state on return.
+    if (mounted) _refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final subtitle = _preview == null
+        ? null
+        : [_preview!, ?_relTime].join(' · ');
+    return Material(
+      color: scheme.primaryContainer
+          .withValues(alpha: _unread ? 1.0 : 0.45),
+      child: ListTile(
+        leading: IconResolver.resolve(
+          'bot',
+          size: 24,
+          color: scheme.onPrimaryContainer,
+        ),
+        title: Text(
+          'Coach',
+          style: TextStyle(
+            color: scheme.onPrimaryContainer,
+            fontWeight: _unread ? FontWeight.w600 : FontWeight.w500,
+          ),
+        ),
+        subtitle: subtitle == null
+            ? null
+            : Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: scheme.onPrimaryContainer.withValues(alpha: 0.8),
+                ),
+              ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_unread)
+              Container(
+                width: 10,
+                height: 10,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: scheme.primary,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            Icon(Icons.chevron_right, color: scheme.onPrimaryContainer),
+          ],
+        ),
+        onTap: _open,
+      ),
+    );
+  }
 }
 
 class _ErrorView extends StatelessWidget {

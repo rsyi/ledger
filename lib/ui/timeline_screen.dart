@@ -52,24 +52,17 @@ class _Item {
   /// selection survives.
   final String? batchKey;
 
-  /// The view's plannable spec, threaded in for logged rows so [isDraft]
-  /// can check the log_field. Null on non-plannable views (and on
-  /// planned/batch items, which can't be drafts).
-  final Plannable? _plannable;
-
-  _Item.logged(this.logged, [this._plannable])
+  _Item.logged(this.logged)
       : planned = null,
         batchRows = null,
         batchKey = null;
   _Item.planned(this.planned)
       : logged = null,
         batchRows = null,
-        batchKey = null,
-        _plannable = null;
+        batchKey = null;
   _Item.batch(this.batchRows, this.batchKey)
       : logged = null,
-        planned = null,
-        _plannable = null;
+        planned = null;
 
   /// True when the item is a multi-row batch.
   bool get isBatch => batchRows != null;
@@ -77,21 +70,6 @@ class _Item {
   /// True only for items that haven't been written to the sheet yet.
   bool get isPlanned =>
       planned != null && logged == null && batchRows == null;
-
-  /// True for a real ledger row on a plannable view whose log_field
-  /// (start_time) is still null/blank — e.g. the nightly coach appends
-  /// tomorrow's rows with start_time left empty. Still [isLogged];
-  /// stamping the log_field (Log now or manual edit) de-drafts it on
-  /// the next assemble. Only rows on today/future dates can be drafts:
-  /// `_assemble` withholds the plannable spec for past dates, since
-  /// historical data is full of timer-less rows that aren't drafts.
-  bool get isDraft {
-    final p = _plannable;
-    final r = logged;
-    if (p == null || r == null) return false;
-    final v = r[p.logField];
-    return v == null || v.toString().trim().isEmpty;
-  }
 
   /// True for batches and single logged rows — anything that's
   /// persisted in the sheet.
@@ -179,8 +157,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
   final Set<String> _selectedKeys = {};
   bool _bulkDeleting = false;
 
-  /// Planned-item localIds mid-`_logNow` (plus draft keyStrings
-  /// mid-`_logNowDraft`). Guards against double-tap
+  /// Planned-item localIds currently mid-`_logNow`. Guards against double-tap
   /// of the "log now" circle firing two concurrent writes for the same item,
   /// which has surfaced as "bad state: can't finalize a finalized request"
   /// in the auth client when the second request hits during a token refresh.
@@ -540,13 +517,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
     // group_key, fold contiguous-rows-sharing-a-group_key into single
     // _Item.batch entries. Rows missing/blank group_key stay singletons.
     final groupKey = widget.view.repeatGroup?.groupKey;
-    // Draft classification is gated to today/future dates: historical data
-    // has many timer-less rows (blank log_field) that were simply logged
-    // without a start time — they aren't actionable drafts. Withholding the
-    // plannable spec makes _Item.isDraft false for every row on a past
-    // date, so past dates never show drafts or draft log-circles.
-    final plannable =
-        _selectedDate.isBefore(_today()) ? null : widget.view.plannable;
     final loggedItems = <_Item>[];
     if (groupKey != null) {
       final byKey = <String, List<Record>>{};
@@ -554,7 +524,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
       for (final r in logged) {
         final k = r[groupKey]?.toString();
         if (k == null || k.isEmpty) {
-          loggedItems.add(_Item.logged(r, plannable));
+          loggedItems.add(_Item.logged(r));
           continue;
         }
         if (!byKey.containsKey(k)) {
@@ -567,7 +537,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
         loggedItems.add(_Item.batch(byKey[k]!, k));
       }
     } else {
-      loggedItems.addAll(logged.map((r) => _Item.logged(r, plannable)));
+      loggedItems.addAll(logged.map(_Item.logged));
     }
 
     return [
@@ -652,40 +622,15 @@ class _TimelineScreenState extends State<TimelineScreen> {
                   if (items.isEmpty) {
                     return const Center(child: Text('No entries.'));
                   }
-                  // Split into drafts vs logged vs planned. Drafts (synced
-                  // rows with a blank log_field, e.g. from the nightly
-                  // coach) get their own section at the top — they're
-                  // actionable, not done. Logged go in a compact,
-                  // collapsible "completed" section so the user can see
-                  // what's done at a glance without it crowding out the
-                  // planned items (which are the actionable ones).
-                  final drafts = items.where((it) => it.isDraft).toList();
-                  final logged = items
-                      .where((it) => it.isLogged && !it.isDraft)
-                      .toList();
+                  // Split into logged vs planned. Logged go in a compact,
+                  // collapsible "completed" section at the top so the user
+                  // can see what's done at a glance without it crowding out
+                  // the planned items (which are the actionable ones).
+                  final logged = items.where((it) => it.isLogged).toList();
                   final planned = items.where((it) => !it.isLogged).toList();
                   final plannedRows = _groupByTemplate(planned);
                   return ListView(
                     children: [
-                      if (drafts.isNotEmpty) ...[
-                        const _DraftHeader(),
-                        for (final item in drafts)
-                          _RecordTile(
-                            view: widget.view,
-                            item: item,
-                            selected:
-                                _selectedKeys.contains(item.keyString),
-                            selectionMode: _selectionMode,
-                            llmCache: widget.llmCache,
-                            repository: widget.repository,
-                            onTap: _selectionMode
-                                ? () => _toggleSelect(item)
-                                : () => _edit(item),
-                            onLongPress: () => _toggleSelect(item),
-                            onDelete: () => _delete(item),
-                            onLogNow: () => _logNowDraft(item),
-                          ),
-                      ],
                       if (logged.isNotEmpty)
                         _CompletedSection(
                           view: widget.view,
@@ -1106,33 +1051,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
     await _deleteOptimistic(groupKeys);
   }
 
-  /// Stamps the plannable log_field (start_time) on an existing draft row —
-  /// a synced ledger row whose log_field is still blank. Same update path
-  /// the edit form uses (`repository.update`); no new row, no PlanStore.
-  /// The row de-drafts on the reload because classification re-runs in
-  /// `_assemble`.
-  Future<void> _logNowDraft(_Item item) async {
-    final plannable = widget.view.plannable;
-    if (plannable == null || !item.isDraft) return;
-    if (!_logNowInFlight.add(item.keyString)) return;
-    try {
-      final updated = Map<String, Object?>.from(item.logged!);
-      updated[plannable.logField] = logNowValue(plannable.logFormat);
-      applyDerives(widget.view, updated);
-      await widget.repository.update(widget.view, updated);
-      if (!mounted) return;
-      _reload(fresh: true);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Log failed: $e — refreshing')),
-      );
-      _reload(fresh: true);
-    } finally {
-      _logNowInFlight.remove(item.keyString);
-    }
-  }
-
   /// Promotes a planned entry into a sheet row. The entry's start_time is
   /// stamped with now (unless the user already set one via edit), derives
   /// are applied, then it's written to the sheet and removed from local plan.
@@ -1522,59 +1440,6 @@ class _TemplateHeader extends StatelessWidget {
             tooltip: 'Remove group',
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// Section header above draft rows — synced ledger rows (e.g. the nightly
-/// coach's plan for tomorrow) whose log_field is still blank. Mirrors the
-/// `_TemplateHeader` styling, tinted tertiary to match the draft chip.
-class _DraftHeader extends StatelessWidget {
-  const _DraftHeader();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.only(left: 16, right: 16, top: 10, bottom: 6),
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        border: Border(
-          top: BorderSide(color: scheme.outline, width: 1),
-        ),
-      ),
-      child: Text(
-        'Draft',
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-          color: scheme.tertiary,
-        ),
-      ),
-    );
-  }
-}
-
-/// Subtle "draft" badge shown next to a draft row's title.
-class _DraftChip extends StatelessWidget {
-  const _DraftChip();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(
-        color: scheme.tertiaryContainer.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        'draft',
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.4,
-          color: scheme.tertiary,
-        ),
       ),
     );
   }
@@ -2001,24 +1866,14 @@ class _RecordTile extends StatelessWidget {
               size: 22,
               color: selected ? scheme.secondary : scheme.outlineVariant,
             )
-          // Drafts get the same tappable log-circle as planned rows —
-          // tap stamps the log_field on the existing row.
-          : (item.isPlanned || item.isDraft
+          : (item.isPlanned
               ? _LogCircle(onTap: onLogNow)
               : const Padding(
                   padding: EdgeInsets.all(11),
                   child: Icon(Icons.check_circle,
                       size: 22, color: Colors.green),
                 )),
-      title: item.isDraft
-          ? Row(
-              children: [
-                Flexible(child: Text(_titleFor(view, item.values))),
-                const SizedBox(width: 8),
-                const _DraftChip(),
-              ],
-            )
-          : Text(_titleFor(view, item.values)),
+      title: Text(_titleFor(view, item.values)),
       subtitle: (subtitle == null && llmResponse == null && !llmPending)
           ? null
           : Column(

@@ -46,6 +46,8 @@ class IconResolver {
     'droplets': LucideIcons.droplets,
     'flask-conical': LucideIcons.flaskConical,
     'test-tube': LucideIcons.testTube,
+    // Assistants
+    'bot': LucideIcons.bot,
     // General data / logs
     'list': LucideIcons.list,
     'list-checks': LucideIcons.listChecks,

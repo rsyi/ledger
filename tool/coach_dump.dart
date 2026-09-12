@@ -46,11 +46,11 @@ Future<void> main(List<String> args) async {
 
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
-  final tomorrow = today.add(const Duration(days: 1));
+  final target = planningTarget(now);
   final ymd = DateFormat('yyyy-MM-dd');
   print('TODAY: ${ymd.format(today)}');
-  print('TOMORROW: ${ymd.format(tomorrow)} '
-      '(${DateFormat('EEEE').format(tomorrow)})');
+  print('PLANNING TARGET: ${ymd.format(target)} '
+      '(${DateFormat('EEEE').format(target)})');
 
   final config = readConfig();
   final api = await sheetsApi(config.keyPath);
@@ -130,6 +130,13 @@ Future<void> main(List<String> args) async {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Planning target: the next training day. Before noon we're planning
+/// TODAY (a just-after-midnight or on-wake run); from noon on we're
+/// planning TOMORROW (the normal ~23:30 nightly run).
+DateTime planningTarget(DateTime now) =>
+    now.hour < 12 ? DateTime(now.year, now.month, now.day)
+                  : DateTime(now.year, now.month, now.day + 1);
 
 ({String spreadsheetId, String keyPath}) readConfig() {
   final lines = File(configPath).readAsLinesSync();

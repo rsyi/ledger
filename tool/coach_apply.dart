@@ -22,14 +22,15 @@ import 'package:uuid/uuid.dart';
 ///     "drafted": "cardio: Treadmill 4x4\nstrength: ...",
 ///     "plan": [
 ///       {"view": "cardio",
-///        "rows": [{"date": "<tomorrow>", "type": "treadmill", ...}]}
+///        "rows": [{"date": "<planning target>", "type": "treadmill", ...}]}
 ///     ]
 ///   }
 ///
 /// Validation is STRICT against the fitness-repo schemas: unknown view or
 /// unknown field name aborts (exit 1, nothing written); every plan row must
-/// carry date == tomorrow. Idempotence: if coach_log already has a row for
-/// tomorrow, exits 0 without writing. Draft rows get a fresh UUID id, a
+/// carry date == the planning target (see [planningTarget]). Idempotence: if
+/// coach_log already has a row for the target date, exits 0 without writing.
+/// Draft rows get a fresh UUID id, a
 /// derived day_of_week where the view has one, and a BLANK plannable
 /// log_field (drafts must be unlogged).
 final home = Platform.environment['HOME']!;
@@ -44,10 +45,9 @@ Future<void> main(List<String> args) async {
   }
 
   final now = DateTime.now();
-  final tomorrow = DateTime(now.year, now.month, now.day)
-      .add(const Duration(days: 1));
-  final tomorrowStr = DateFormat('yyyy-MM-dd').format(tomorrow);
-  final weekday = DateFormat('EEEE').format(tomorrow);
+  final target = planningTarget(now);
+  final targetStr = DateFormat('yyyy-MM-dd').format(target);
+  final weekday = DateFormat('EEEE').format(target);
 
   // -------------------------------------------------------------------------
   // 1. Parse + validate strictly against the schemas. Nothing is written
@@ -102,9 +102,9 @@ Future<void> main(List<String> args) async {
       }
       if (row['id'] != null) abort('$viewName row must not carry an id');
       final date = row['date'];
-      if (date != tomorrowStr) {
-        abort('$viewName row date "$date" != tomorrow ($tomorrowStr) — '
-            'plan rows must all be for tomorrow');
+      if (date != targetStr) {
+        abort('$viewName row date "$date" != planning target ($targetStr) — '
+            'plan rows must all be for the planning target');
       }
       planRows.putIfAbsent(viewName, () => []).add(row);
     }
@@ -114,7 +114,8 @@ Future<void> main(List<String> args) async {
   final api = await sheetsApi(config.keyPath);
 
   // -------------------------------------------------------------------------
-  // 2. Idempotence guard: bail if coach_log already has a row for tomorrow.
+  // 2. Idempotence guard: bail if coach_log already has a row for the
+  //    planning target.
   // -------------------------------------------------------------------------
   final logSpreadsheetId = coachLog.spreadsheetId ?? config.spreadsheetId;
   final existingLog = await readTab(api, logSpreadsheetId, coachLog.table);
@@ -126,9 +127,9 @@ Future<void> main(List<String> args) async {
         existingLog.skip(1).any(
               (r) =>
                   dateCol < r.length &&
-                  (r[dateCol]?.toString().trim() ?? '') == tomorrowStr,
+                  (r[dateCol]?.toString().trim() ?? '') == targetStr,
             )) {
-      print('already ran for $tomorrowStr');
+      print('already ran for $targetStr');
       exit(0);
     }
   }
@@ -164,7 +165,7 @@ Future<void> main(List<String> args) async {
   final logHeaders = await resolveHeaders(api, logSpreadsheetId, coachLog);
   final logRow = placeByHeader(coachLog, logHeaders, {
     'id': uuid.v4(),
-    'date': tomorrowStr,
+    'date': targetStr,
     'generated_at': DateTime.now().toIso8601String(),
     'summary': summary,
     'drafted': drafted,
@@ -195,7 +196,7 @@ Future<void> main(List<String> args) async {
       }
     }
     print('\nwould apply: $draftCount draft rows across '
-        '${planRows.length} views + coach_log for $tomorrowStr');
+        '${planRows.length} views + coach_log for $targetStr');
     exit(0);
   }
 
@@ -205,18 +206,24 @@ Future<void> main(List<String> args) async {
   for (final w in writes) {
     if (w.createTab) {
       print('creating tab ${w.view.table} ...');
-      await api.spreadsheets.batchUpdate(
-        gsheets.BatchUpdateSpreadsheetRequest(
-          requests: [
-            gsheets.Request(
-              addSheet: gsheets.AddSheetRequest(
-                properties: gsheets.SheetProperties(title: w.view.table),
+      try {
+        await api.spreadsheets.batchUpdate(
+          gsheets.BatchUpdateSpreadsheetRequest(
+            requests: [
+              gsheets.Request(
+                addSheet: gsheets.AddSheetRequest(
+                  properties: gsheets.SheetProperties(title: w.view.table),
+                ),
               ),
-            ),
-          ],
-        ),
-        w.spreadsheetId,
-      );
+            ],
+          ),
+          w.spreadsheetId,
+        );
+      } on gsheets.DetailedApiRequestError catch (e) {
+        // A manually created blank tab reaches here with createTab=true
+        // (it still needs its header row); tolerate "already exists".
+        if (e.status != 400) rethrow;
+      }
       await api.spreadsheets.values.update(
         gsheets.ValueRange(values: [w.headers]),
         w.spreadsheetId,
@@ -234,13 +241,20 @@ Future<void> main(List<String> args) async {
   }
 
   print('applied: $draftCount draft rows across ${planRows.length} views '
-      '+ coach_log for $tomorrowStr');
+      '+ coach_log for $targetStr');
   exit(0);
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Planning target: the next training day. Before noon we're planning
+/// TODAY (a just-after-midnight or on-wake run); from noon on we're
+/// planning TOMORROW (the normal ~23:30 nightly run).
+DateTime planningTarget(DateTime now) =>
+    now.hour < 12 ? DateTime(now.year, now.month, now.day)
+                  : DateTime(now.year, now.month, now.day + 1);
 
 class _TabWrite {
   final ViewSchema view;
@@ -328,9 +342,11 @@ Future<({List<String> headers, bool create})> resolveHeaders(
 ) async {
   final existing = await readTab(api, spreadsheetId, view.table);
   if (existing == null || existing.isEmpty) {
+    // Missing tab OR a manually created blank tab: both need the header
+    // row written before append.
     return (
       headers: view.dimensions.map((d) => d.expr).toList(),
-      create: existing == null,
+      create: true,
     );
   }
   return (

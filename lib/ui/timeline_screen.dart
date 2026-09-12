@@ -82,7 +82,9 @@ class _Item {
   /// (start_time) is still null/blank — e.g. the nightly coach appends
   /// tomorrow's rows with start_time left empty. Still [isLogged];
   /// stamping the log_field (Log now or manual edit) de-drafts it on
-  /// the next assemble.
+  /// the next assemble. Only rows on today/future dates can be drafts:
+  /// `_assemble` withholds the plannable spec for past dates, since
+  /// historical data is full of timer-less rows that aren't drafts.
   bool get isDraft {
     final p = _plannable;
     final r = logged;
@@ -538,7 +540,13 @@ class _TimelineScreenState extends State<TimelineScreen> {
     // group_key, fold contiguous-rows-sharing-a-group_key into single
     // _Item.batch entries. Rows missing/blank group_key stay singletons.
     final groupKey = widget.view.repeatGroup?.groupKey;
-    final plannable = widget.view.plannable;
+    // Draft classification is gated to today/future dates: historical data
+    // has many timer-less rows (blank log_field) that were simply logged
+    // without a start time — they aren't actionable drafts. Withholding the
+    // plannable spec makes _Item.isDraft false for every row on a past
+    // date, so past dates never show drafts or draft log-circles.
+    final plannable =
+        _selectedDate.isBefore(_today()) ? null : widget.view.plannable;
     final loggedItems = <_Item>[];
     if (groupKey != null) {
       final byKey = <String, List<Record>>{};

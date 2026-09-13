@@ -66,6 +66,11 @@ class _FormScreenState extends State<FormScreen> {
 
   bool _saving = false;
 
+  /// Field names (and repeat-block keys) that were blank when the user last
+  /// tapped Save. Cleared on success or when a field's value changes.
+  /// Shared fields use `dim.name`; repeat-block fields use `'block-$i-$name'`.
+  final Set<String> _missingRequired = {};
+
   /// Recent rows for this view, fetched once on init. Drives autocomplete
   /// autofill. Null until the fetch resolves; empty when the fetch fails.
   List<Record>? _recentRows;
@@ -77,6 +82,28 @@ class _FormScreenState extends State<FormScreen> {
 
   RepeatGroup? get _rg => widget.view.repeatGroup;
   Set<String> get _repeatFields => _rg?.fields.toSet() ?? const {};
+
+  /// Wraps [child] in a red left-border container when [missingKey] is in
+  /// [_missingRequired]. Gives an unmissable but non-invasive highlight that
+  /// avoids touching the individual widget classes.
+  Widget _maybeHighlight(String missingKey, Widget child) {
+    if (!_missingRequired.contains(missingKey)) return child;
+    final errorColor = Theme.of(context).colorScheme.error;
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(color: errorColor, width: 4),
+        ),
+        color: errorColor.withValues(alpha: 0.05),
+        borderRadius: const BorderRadius.only(
+          topRight: Radius.circular(4),
+          bottomRight: Radius.circular(4),
+        ),
+      ),
+      padding: const EdgeInsets.only(left: 8),
+      child: child,
+    );
+  }
 
   /// Field names that a timer widget on this view writes into — every
   /// ladder.target + every stop_target across editable dims that use
@@ -249,43 +276,47 @@ class _FormScreenState extends State<FormScreen> {
         continue;
       }
       if (!dim.isVisibleGiven(_shared, widget.view.groups)) continue;
-      children.add(buildFieldWidget(
-        key: ValueKey(dim.name),
-        dim: dim,
-        value: _shared[dim.name],
-        adHocSuggestions: _adHocCache[dim.name],
-        isTimerLinked: _timerLinkedFields.contains(dim.name),
-        // Snapshot of current values for every dim this timer writes
-        // into. Lets the widget show a "this will clear X, Y" dialog
-        // before restarting.
-        timerLinkedValues: dim.input?.widget == WidgetType.timer
-            ? {
-                for (final l in dim.input?.ladders ?? const <TimerLadder>[])
-                  l.target: _shared[l.target],
-                for (final s
-                    in dim.input?.stopTargets ?? const <TimerStopTarget>[])
-                  s.target: _shared[s.target],
-                if (dim.input?.hrMaxTarget != null)
-                  dim.input!.hrMaxTarget!: _shared[dim.input!.hrMaxTarget!],
-              }
-            : null,
-        onShowHistory: () => showHistorySheet(
-          context: context,
-          view: widget.view,
+      children.add(_maybeHighlight(
+        dim.name,
+        buildFieldWidget(
+          key: ValueKey(dim.name),
           dim: dim,
           value: _shared[dim.name],
-          repository: widget.repository,
+          adHocSuggestions: _adHocCache[dim.name],
+          isTimerLinked: _timerLinkedFields.contains(dim.name),
+          // Snapshot of current values for every dim this timer writes
+          // into. Lets the widget show a "this will clear X, Y" dialog
+          // before restarting.
+          timerLinkedValues: dim.input?.widget == WidgetType.timer
+              ? {
+                  for (final l in dim.input?.ladders ?? const <TimerLadder>[])
+                    l.target: _shared[l.target],
+                  for (final s
+                      in dim.input?.stopTargets ?? const <TimerStopTarget>[])
+                    s.target: _shared[s.target],
+                  if (dim.input?.hrMaxTarget != null)
+                    dim.input!.hrMaxTarget!: _shared[dim.input!.hrMaxTarget!],
+                }
+              : null,
+          onShowHistory: () => showHistorySheet(
+            context: context,
+            view: widget.view,
+            dim: dim,
+            value: _shared[dim.name],
+            repository: widget.repository,
+          ),
+          onChanged: (v) => setState(() {
+            _shared[dim.name] = v;
+            _missingRequired.remove(dim.name);
+            if (dim.input?.widget == WidgetType.autocomplete) {
+              _autofillFromHistory(dim, v);
+            }
+          }),
+          // For timer widgets: ladder taps write into other shared fields
+          // (zone4_reached, zone5_reached, ...). Targets are by dim name.
+          onLadderTap: (target, value) =>
+              setState(() => _shared[target] = value),
         ),
-        onChanged: (v) => setState(() {
-          _shared[dim.name] = v;
-          if (dim.input?.widget == WidgetType.autocomplete) {
-            _autofillFromHistory(dim, v);
-          }
-        }),
-        // For timer widgets: ladder taps write into other shared fields
-        // (zone4_reached, zone5_reached, ...). Targets are by dim name.
-        onLadderTap: (target, value) =>
-            setState(() => _shared[target] = value),
       ));
       children.add(const SizedBox(height: 12));
     }
@@ -349,24 +380,28 @@ class _FormScreenState extends State<FormScreen> {
             ),
           ),
           for (final dim in blockDims) ...[
-            buildFieldWidget(
-              key: ValueKey('repeat-${i}-${dim.name}'),
-              dim: dim,
-              value: _repeats[i][dim.name],
-              adHocSuggestions: _adHocCache[dim.name],
-              onShowHistory: () => showHistorySheet(
-                context: context,
-                view: widget.view,
+            _maybeHighlight(
+              'block-$i-${dim.name}',
+              buildFieldWidget(
+                key: ValueKey('repeat-$i-${dim.name}'),
                 dim: dim,
                 value: _repeats[i][dim.name],
-                repository: widget.repository,
+                adHocSuggestions: _adHocCache[dim.name],
+                onShowHistory: () => showHistorySheet(
+                  context: context,
+                  view: widget.view,
+                  dim: dim,
+                  value: _repeats[i][dim.name],
+                  repository: widget.repository,
+                ),
+                onChanged: (v) => setState(() {
+                  _repeats[i][dim.name] = v;
+                  _missingRequired.remove('block-$i-${dim.name}');
+                  if (dim.input?.widget == WidgetType.autocomplete) {
+                    _autofillFromHistory(dim, v, blockIdx: i);
+                  }
+                }),
               ),
-              onChanged: (v) => setState(() {
-                _repeats[i][dim.name] = v;
-                if (dim.input?.widget == WidgetType.autocomplete) {
-                  _autofillFromHistory(dim, v, blockIdx: i);
-                }
-              }),
             ),
             const SizedBox(height: 12),
           ],
@@ -405,26 +440,49 @@ class _FormScreenState extends State<FormScreen> {
     }
 
     // Required-field check across shared + each block.
+    // Blank strings count as missing — null OR ''.trim().isEmpty.
+    bool isMissing(Object? v) =>
+        v == null || v.toString().trim().isEmpty;
+
     final missing = <String>{};
+    final newMissingRequired = <String>{};
     for (final dim in widget.view.editableDimensions) {
       if (dim.input?.required != true) continue;
       if (_repeatFields.contains(dim.name)) {
         for (var i = 0; i < _repeats.length; i++) {
-          if (_repeats[i][dim.name] == null) {
+          if (isMissing(_repeats[i][dim.name])) {
             missing.add('${rg!.label} #${i + 1}: ${dim.name}');
+            newMissingRequired.add('block-$i-${dim.name}');
           }
         }
       } else {
         if (!dim.isVisibleGiven(_shared, widget.view.groups)) continue;
-        if (_shared[dim.name] == null) missing.add(dim.name);
+        if (isMissing(_shared[dim.name])) {
+          missing.add(dim.name);
+          newMissingRequired.add(dim.name);
+        }
       }
     }
     if (missing.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Required: ${missing.join(", ")}')),
-      );
+      setState(() => _missingRequired
+        ..clear()
+        ..addAll(newMissingRequired));
+      final cs = Theme.of(context).colorScheme;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: cs.error,
+            content: Text(
+              'Missing required: ${missing.join(", ")}',
+              style: TextStyle(color: cs.onError),
+            ),
+          ),
+        );
       return;
     }
+    setState(() => _missingRequired.clear());
 
     setState(() => _saving = true);
     try {

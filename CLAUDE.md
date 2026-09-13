@@ -37,7 +37,10 @@ patterns, design specs + plans): `~/repos/airledger/CLAUDE.md` → docs/.
 ```sh
 dart run tool/brand.dart --config ~/repos/airledger-fitness/ledger.yaml
 ```
-— syncs schemas→assets, builds, installs, launches. Manual:
+— syncs schemas→assets, builds, installs, launches. Note: brand.dart
+applies ledger.yaml's app_name transiently and reverts strings.xml
+after building; the repo default in strings.xml is also "Ledger" now,
+so plain `flutter build apk` carries the right label too. Manual:
 `flutter analyze` (baseline ~32 infos, all pre-existing) →
 `flutter build apk --release` → `adb -s 66260DLKX00010 install -r
 build/app/outputs/flutter-apk/app-release.apk`. `flutter test`: 7 known

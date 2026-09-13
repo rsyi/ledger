@@ -3,8 +3,9 @@
 /// OAuth2 (in-app WebView consent intercepting the custom-scheme
 /// callback airledger://oauth/withings), tokens in secure storage,
 /// `getmeas` pulls transformed to engine ingest batches, and a
-/// rolling-window deletion reconcile backed by the engine's
-/// provenance table.
+/// rolling-window reconcile — backed by the engine's provenance
+/// table — that both unwinds deletions and re-ingests the window's
+/// values so revised measurements land.
 library;
 
 import 'dart:convert';
@@ -270,7 +271,9 @@ class WithingsIntegration implements Integration {
         await repo.metaSet(_kDays, jsonEncode(days.toList()..sort()));
       }
 
-      // 2. Deletion reconcile over the window (or all history).
+      // 2. Reconcile over the window (or all history): re-ingest the
+      //    window's values so self-correction can revise the source's
+      //    own measurements, and unwind days Withings no longer has.
       final now = DateTime.now();
       final windowStart = fullReconcile
           ? DateTime.fromMillisecondsSinceEpoch(0)
@@ -279,7 +282,9 @@ class WithingsIntegration implements Integration {
         'startdate': '${windowStart.millisecondsSinceEpoch ~/ 1000}',
         'enddate': '${now.millisecondsSinceEpoch ~/ 1000}',
       });
-      final currentDays = withingsGroupsToRecords(windowGrps)
+      final windowRecords = withingsGroupsToRecords(
+          windowGrps.where((g) => (g as Map)['deleted'] != true).toList());
+      final currentDays = windowRecords
           .map((r) => ((r['date'] as Map)['value']) as String)
           .toSet();
       final knownDays = _decodeDays(await repo.metaGet(_kDays));
@@ -292,11 +297,15 @@ class WithingsIntegration implements Integration {
         windowDaysWithData: currentDays,
         provenanceDays: inWindow,
       );
-      if (deleted.isNotEmpty) {
+      if (windowRecords.isNotEmpty || deleted.isNotEmpty) {
         await repo.ingest(weightViewJson, {
           'source': 'withings',
+          'owned_fields': ['body_fat_withing'],
+          'fill_if_blank_fields': ['weight_lbs', 'time'],
+          'records': windowRecords,
           'deleted_dates': deleted,
         });
+        knownDays.addAll(currentDays);
         knownDays.removeAll(deleted);
         await repo.metaSet(_kDays, jsonEncode(knownDays.toList()..sort()));
       }

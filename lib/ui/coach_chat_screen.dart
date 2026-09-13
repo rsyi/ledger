@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/view_schema.dart';
+import '../services/coach_brain.dart';
 import '../services/sheets_repository.dart' show Record;
 import '../services/sync_scheduler.dart';
 import '../services/warehouse_connector.dart';
@@ -16,12 +17,14 @@ import '../services/warehouse_connector.dart';
 /// for its unread state; written here whenever a coach message renders.
 const kCoachChatLastReadTsKey = 'coach_chat_last_read_ts';
 
-/// Chat surface over the synced `coach_chat` view. Coach messages
-/// (written by the Mac-side relay) render left; user messages right.
-/// Sending appends a `role=user, kind=user` row via the normal
-/// repository create and triggers a manual sync; replies arrive via the
-/// relay within a couple of minutes, picked up by the sync listener +
-/// a 30 s poll while the screen is open.
+/// Chat surface over the synced `coach_chat` view. Coach messages render
+/// left; user messages right. Sending appends a `role=user, kind=user`
+/// row via the normal repository create, triggers a manual sync, and —
+/// when [brain] is available — asks the in-app [CoachBrain] for a reply
+/// (LlmClient over API credits), appending it as `role=coach,
+/// kind=reply`. The nightly Mac-side briefing still arrives through
+/// sync, picked up by the sync listener + a 30 s poll while the screen
+/// is open.
 class CoachChatScreen extends StatefulWidget {
   final ViewSchema view;
   final WarehouseConnector repository;
@@ -30,11 +33,17 @@ class CoachChatScreen extends StatefulWidget {
   /// local-first — mark-read becomes a no-op.
   final EngineLedgerRepository? ledger;
 
+  /// In-app reply generator. Null when the build has LLM disabled
+  /// (`disable_post_log:`) or no Anthropic model configured — sends
+  /// still work, they just don't get an in-app reply.
+  final CoachBrain? brain;
+
   const CoachChatScreen({
     super.key,
     required this.view,
     required this.repository,
     this.ledger,
+    this.brain,
   });
 
   @override
@@ -47,6 +56,11 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
   bool _loaded = false;
   String? _error;
   bool _sending = false;
+
+  /// One in-flight coach reply at a time. A send while a reply is being
+  /// generated just lands in history — the in-flight call sees it if it
+  /// hasn't dispatched yet; otherwise the user can send again.
+  bool _replying = false;
 
   Timer? _poll;
   ValueListenable<bool>? _syncing;
@@ -161,9 +175,11 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
     });
     try {
       await widget.repository.create(widget.view, record);
-      // Push the message toward the Mac relay right away (bypasses the
-      // wifi-only gate — explicit user intent).
+      // Sync the message out right away (bypasses the wifi-only gate —
+      // explicit user intent) …
       unawaited(SyncScheduler.instance?.maybeSync(manual: true));
+      // … and generate the coach's reply in-app.
+      unawaited(_requestReply());
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -173,6 +189,38 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
           _messages.where((m) => !identical(m, record)).toList());
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// Generates and appends the coach's reply for the current history.
+  /// No-op without a brain (LLM disabled) or while a reply is already
+  /// in flight. Errors surface as a snackbar; the user message stays.
+  Future<void> _requestReply() async {
+    final brain = widget.brain;
+    if (brain == null || _replying) return;
+    setState(() => _replying = true);
+    try {
+      final text = await brain.reply(List.of(_messages));
+      final now = DateTime.now();
+      final record = <String, Object?>{
+        'id': const Uuid().v4(),
+        'date': DateTime(now.year, now.month, now.day),
+        'ts': now.toIso8601String(),
+        'role': 'coach',
+        'kind': 'reply',
+        'text': text,
+      };
+      await widget.repository.create(widget.view, record);
+      await _load();
+      // Push the reply toward the sheet so it shows up everywhere else.
+      unawaited(SyncScheduler.instance?.maybeSync(manual: true));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Coach reply failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _replying = false);
     }
   }
 
@@ -196,11 +244,34 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
       body: Column(
         children: [
           Expanded(child: _buildBody()),
-          if (_awaitingReply)
+          if (_replying)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 1.5),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'coach is thinking…',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontStyle: FontStyle.italic,
+                        ),
+                  ),
+                ],
+              ),
+            )
+          else if (_awaitingReply && widget.brain == null)
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Text(
-                'coach replies in a minute or two (Mac relay)',
+                'in-app coach replies need LLM enabled',
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                       fontStyle: FontStyle.italic,

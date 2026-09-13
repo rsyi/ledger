@@ -23,6 +23,7 @@ import '../services/heart_rate_service.dart';
 import '../services/integrations/registry.dart';
 import '../services/integrations/whoop.dart';
 import '../services/integrations/withings.dart';
+import '../services/coach_brain.dart';
 import '../services/github_client.dart';
 import '../services/icon_resolver.dart';
 import '../services/llm_client.dart';
@@ -381,6 +382,18 @@ class _HomeScreenState extends State<HomeScreen> {
               final coachLedger = data.repository is EngineLedgerConnector
                   ? (data.repository as EngineLedgerConnector).repo
                   : null;
+              // In-app coach replies ride the same LLM plumbing as the
+              // chat: same disable_post_log gate, same default Anthropic
+              // model. Null → sends still work, no in-app reply.
+              final coachBrain = data.llm == null || chatModel == null
+                  ? null
+                  : CoachBrain(
+                      llm: data.llm!,
+                      modelName: chatModel.name,
+                      repository: data.repository,
+                      views: {for (final v in data.views) v.name: v},
+                      fetchDoc: CoachBrain.githubFetcher(github),
+                    );
               return Column(
                 children: [
                   TodayDashboard(
@@ -394,6 +407,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       view: coachView,
                       repository: data.registry.forView(coachView),
                       ledger: coachLedger,
+                      brain: coachBrain,
                     ),
                   Expanded(
                     child: ListView.separated(
@@ -540,11 +554,13 @@ class _CoachRow extends StatefulWidget {
   final ViewSchema view;
   final WarehouseConnector repository;
   final EngineLedgerRepository? ledger;
+  final CoachBrain? brain;
 
   const _CoachRow({
     required this.view,
     required this.repository,
     this.ledger,
+    this.brain,
   });
 
   @override
@@ -639,6 +655,7 @@ class _CoachRowState extends State<_CoachRow> {
           view: widget.view,
           repository: widget.repository,
           ledger: widget.ledger,
+          brain: widget.brain,
         ),
       ),
     );

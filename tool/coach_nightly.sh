@@ -5,7 +5,7 @@
 # Disable: launchctl unload ~/Library/LaunchAgents/com.robertyi.airledger-coach.plist
 set -euo pipefail
 
-APP="$HOME/repos/airledger-archive"
+APP="$HOME/repos/ledger"
 FIT="$HOME/repos/airledger-fitness"
 LOGDIR="$HOME/.config/airledger/coach/logs"
 mkdir -p "$LOGDIR"

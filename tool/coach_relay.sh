@@ -5,7 +5,7 @@
 # often (launchd/cron); exits silently when there's nothing pending.
 set -euo pipefail
 
-APP="$HOME/repos/airledger-archive"
+APP="$HOME/repos/ledger"
 FIT="$HOME/repos/airledger-fitness"
 LOGDIR="$HOME/.config/airledger/coach/logs"
 mkdir -p "$LOGDIR"

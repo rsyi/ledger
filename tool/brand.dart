@@ -34,7 +34,7 @@ import 'package:yaml/yaml.dart';
 import 'build_config.dart';
 
 const _defaultConfig = '~/repos/airledger-fitness/ledger.yaml';
-const _airledgerRepo = '~/repos/airledger-archive';
+const _airledgerRepo = '~/repos/ledger';
 const _defaultPackage = 'com.robertyi.ledger';
 
 Future<int> main(List<String> argv) async {

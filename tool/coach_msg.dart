@@ -13,16 +13,18 @@ import 'package:uuid/uuid.dart';
 
 /// Coach chat message tool — posts and inspects the `coach_chat` tab.
 ///
-///   echo 'text' | dart run tool/coach_msg.dart post --role coach --kind reply
+///   echo 'text' | dart run tool/coach_msg.dart post --role coach --kind reply [--thread <id>]
 ///   dart run tool/coach_msg.dart pending
 ///   dart run tool/coach_msg.dart briefing-exists --date YYYY-MM-DD
 ///
 /// `post` appends one row (id=UUID, date=today, ts=now ISO, role, kind,
-/// text from stdin), creating the tab with headers if missing.
+/// thread, text from stdin), creating the tab with headers if missing.
+/// --thread defaults to "general" (blank in the sheet = general).
 /// `pending` prints the full chat history and exits 0 when the newest
 /// message is from the user (i.e. a reply is owed); otherwise exits 3.
 /// `briefing-exists` exits 0 if a coach briefing row exists for the given
-/// date, else 3.
+/// date in the "briefings" thread (blank thread = general, not briefings),
+/// else 3.
 final home = Platform.environment['HOME']!;
 final viewsDir = '$home/repos/airledger-fitness/views';
 final configPath = '$home/.config/airledger/config.yaml';
@@ -51,12 +53,15 @@ Future<void> main(List<String> args) async {
 Future<void> post(List<String> args) async {
   String? role;
   String? kind;
+  String thread = 'general';
   for (var i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--role':
         role = args[++i];
       case '--kind':
         kind = args[++i];
+      case '--thread':
+        thread = args[++i];
       default:
         abort('unknown arg: ${args[i]}');
     }
@@ -79,12 +84,15 @@ Future<void> post(List<String> args) async {
 
   final now = DateTime.now();
   final resolved = await resolveHeaders(api, spreadsheetId, view);
+  // Write thread as blank for 'general' (schema convention: blank = general).
+  final threadValue = thread == 'general' ? '' : thread;
   final row = placeByHeader(view, resolved, {
     'id': uuid.v4(),
     'date': DateFormat('yyyy-MM-dd').format(now),
     'ts': now.toIso8601String(),
     'role': role,
     'kind': kind,
+    'thread': threadValue,
     'text': text,
   }, 'coach_chat');
 
@@ -149,8 +157,9 @@ Future<void> briefingExists(List<String> args) async {
     abort('briefing-exists requires --date YYYY-MM-DD');
   }
   final messages = await readMessages();
+  // Only briefings posted to the 'briefings' thread count; blank thread = general.
   final found = messages.any(
-    (m) => m.role == 'coach' && m.kind == 'briefing' && m.date == date,
+    (m) => m.role == 'coach' && m.kind == 'briefing' && m.date == date && m.thread == 'briefings',
   );
   exit(found ? 0 : 3);
 }
@@ -160,8 +169,8 @@ Future<void> briefingExists(List<String> args) async {
 // ---------------------------------------------------------------------------
 
 class Msg {
-  final String date, ts, role, kind, text;
-  Msg(this.date, this.ts, this.role, this.kind, this.text);
+  final String date, ts, role, kind, thread, text;
+  Msg(this.date, this.ts, this.role, this.kind, this.thread, this.text);
 }
 
 /// Reads all coach_chat rows sorted by ts. Missing/empty tab → empty list.
@@ -180,6 +189,9 @@ Future<List<Msg>> readMessages() async {
   final tsCol = col('ts');
   final roleCol = col('role');
   final kindCol = col('kind');
+  // thread column is optional: may not exist in older tabs yet.
+  final threadDim = view.dimensionByName('thread');
+  final threadCol = threadDim != null ? headers.indexOf(threadDim.expr) : -1;
   final textCol = col('text');
 
   final messages = <Msg>[];
@@ -192,6 +204,7 @@ Future<List<Msg>> readMessages() async {
       ts,
       role,
       cellAt(row, kindCol),
+      cellAt(row, threadCol), // blank if column absent = general
       cellAt(row, textCol),
     ));
   }
@@ -263,6 +276,11 @@ Future<List<List<Object?>>?> readTab(
 
 /// (headers, create): the actual header row of the tab, or the schema's
 /// exprs when the tab is missing and will be created.
+///
+/// If the tab exists but is missing schema headers (e.g. "thread" was added
+/// later), the missing headers are appended to the live header row in place
+/// so subsequent writes land in the right columns. Existing columns are never
+/// reordered.
 Future<({List<String> headers, bool create})> resolveHeaders(
   gsheets.SheetsApi api,
   String spreadsheetId,
@@ -277,10 +295,37 @@ Future<({List<String> headers, bool create})> resolveHeaders(
       create: true,
     );
   }
-  return (
-    headers: existing.first.map((e) => e.toString()).toList(),
-    create: false,
-  );
+  final liveHeaders = existing.first.map((e) => e.toString()).toList();
+  final liveSet = liveHeaders.toSet();
+  final schemaExprs = view.dimensions.map((d) => d.expr).toList();
+  final missing = schemaExprs.where((expr) => !liveSet.contains(expr)).toList();
+  if (missing.isNotEmpty) {
+    final updated = [...liveHeaders, ...missing];
+    // Determine which column letter the new headers start at (1-indexed → A1 notation).
+    final startCol = _colLetter(liveHeaders.length + 1);
+    final endCol = _colLetter(updated.length);
+    final range = "'${view.table}'!${startCol}1:${endCol}1";
+    await api.spreadsheets.values.update(
+      gsheets.ValueRange(values: [missing]),
+      spreadsheetId,
+      range,
+      valueInputOption: 'RAW',
+    );
+    return (headers: updated, create: false);
+  }
+  return (headers: liveHeaders, create: false);
+}
+
+/// Convert a 1-based column number to A1 column letters (A, B, …, Z, AA, …).
+String _colLetter(int col) {
+  var result = '';
+  var n = col;
+  while (n > 0) {
+    n--; // make 0-based
+    result = String.fromCharCode(65 + (n % 26)) + result;
+    n = n ~/ 26;
+  }
+  return result;
 }
 
 String cellAt(List<Object?> row, int i) =>

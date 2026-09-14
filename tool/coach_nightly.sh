@@ -42,5 +42,5 @@ PROMPT="$(
 # plan limits. Output is plain text — posted verbatim as the briefing.
 OUT="$(claude -p "$PROMPT" --model sonnet --output-format text)"
 
-printf '%s' "$OUT" | (cd "$APP" && dart run tool/coach_msg.dart post --role coach --kind briefing)
+printf '%s' "$OUT" | (cd "$APP" && dart run tool/coach_msg.dart post --role coach --kind briefing --thread briefings)
 echo "=== coach run done $(date) ==="

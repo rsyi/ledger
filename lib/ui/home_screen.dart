@@ -36,6 +36,7 @@ import '../services/warehouse_connector.dart';
 import 'apps_screen.dart';
 import 'chat_screen.dart';
 import 'coach_chat_screen.dart';
+import 'coach_threads_screen.dart';
 import 'timeline_screen.dart';
 import 'today_dashboard.dart';
 
@@ -545,11 +546,11 @@ class _Bootstrap {
 
 /// Pinned Coach row above the tracker tiles. Tinted (primaryContainer)
 /// so it reads as a different kind of row; shows a preview of the
-/// newest coach message + relative time, and an accent dot / stronger
-/// tint while unread (newest coach `ts` > device-local
-/// `coach_chat_last_read_ts` meta). Tap opens [CoachChatScreen];
-/// preview + unread refresh on return and when a background sync
-/// completes.
+/// newest coach message across all threads + relative time, and an
+/// accent dot / stronger tint while ANY thread is unread (per-thread
+/// newest coach `ts` vs its device-local read marker, with the legacy
+/// fallback for `general`). Tap opens [CoachThreadsScreen]; preview +
+/// unread refresh on return and when a background sync completes.
 class _CoachRow extends StatefulWidget {
   final ViewSchema view;
   final WarehouseConnector repository;
@@ -596,10 +597,12 @@ class _CoachRowState extends State<_CoachRow> {
   Future<void> _refresh() async {
     try {
       final rows = await widget.repository.list(widget.view);
-      // Newest coach message by `ts` (ISO strings — lexicographic
-      // compare matches chronological).
+      // Newest coach message overall (preview) + newest coach `ts` per
+      // thread (unread). ISO strings — lexicographic compare matches
+      // chronological.
       Map<String, Object?>? newest;
       String? newestTs;
+      final newestByThread = <String, String>{};
       for (final r in rows) {
         if (r['role']?.toString() != 'coach') continue;
         final ts = r['ts']?.toString();
@@ -608,18 +611,29 @@ class _CoachRowState extends State<_CoachRow> {
           newestTs = ts;
           newest = r;
         }
+        final thread = coachThreadOf(r);
+        final prev = newestByThread[thread];
+        if (prev == null || ts.compareTo(prev) > 0) {
+          newestByThread[thread] = ts;
+        }
       }
+      // Unread when ANY thread's newest coach message postdates its
+      // read marker. Missing/unreadable meta → unread (a coach message
+      // exists the user has provably never opened on this device).
       var unread = false;
-      if (newest != null) {
-        // Missing/unreadable meta → unread (a coach message exists the
-        // user has provably never opened on this device).
+      for (final e in newestByThread.entries) {
         String? lastRead;
-        try {
-          lastRead = await widget.ledger?.metaGet(kCoachChatLastReadTsKey);
-        } catch (_) {/* treat as missing */}
-        unread = lastRead == null ||
+        if (widget.ledger != null) {
+          try {
+            lastRead = await coachThreadLastRead(widget.ledger!, e.key);
+          } catch (_) {/* treat as missing */}
+        }
+        if (lastRead == null ||
             lastRead.isEmpty ||
-            newestTs!.compareTo(lastRead) > 0;
+            e.value.compareTo(lastRead) > 0) {
+          unread = true;
+          break;
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -651,7 +665,7 @@ class _CoachRowState extends State<_CoachRow> {
   Future<void> _open() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => CoachChatScreen(
+        builder: (_) => CoachThreadsScreen(
           view: widget.view,
           repository: widget.repository,
           ledger: widget.ledger,
@@ -659,8 +673,8 @@ class _CoachRowState extends State<_CoachRow> {
         ),
       ),
     );
-    // The chat screen marks messages read (and the user may have sent
-    // one) — refresh the preview/unread state on return.
+    // The chat screens mark their threads read (and the user may have
+    // sent messages) — refresh the preview/unread state on return.
     if (mounted) _refresh();
   }
 

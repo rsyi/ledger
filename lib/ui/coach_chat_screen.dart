@@ -12,22 +12,61 @@ import '../services/sheets_repository.dart' show Record;
 import '../services/sync_scheduler.dart';
 import '../services/warehouse_connector.dart';
 
-/// Ledger meta key: `ts` of the newest coach message the user has seen.
-/// Device-local (meta never syncs). Read by the home screen's Coach row
-/// for its unread state; written here whenever a coach message renders.
+/// Legacy (pre-threads) meta key: `ts` of the newest coach message the
+/// user has seen. Still consulted as the fallback for the `general`
+/// thread so upgrades don't resurface old messages as unread.
 const kCoachChatLastReadTsKey = 'coach_chat_last_read_ts';
 
-/// Chat surface over the synced `coach_chat` view. Coach messages render
-/// left; user messages right. Sending appends a `role=user, kind=user`
-/// row via the normal repository create, triggers a manual sync, and —
-/// when [brain] is available — asks the in-app [CoachBrain] for a reply
-/// (LlmClient over API credits), appending it as `role=coach,
-/// kind=reply`. The nightly Mac-side briefing still arrives through
-/// sync, picked up by the sync listener + a 30 s poll while the screen
-/// is open.
+/// Thread id rows with a blank `thread` dimension belong to (the
+/// pre-threads history).
+const kCoachThreadGeneral = 'general';
+
+/// Fixed thread id the nightly briefings post into.
+const kCoachThreadBriefings = 'briefings';
+
+/// A row's thread id — blank/missing `thread` counts as [kCoachThreadGeneral].
+String coachThreadOf(Record r) {
+  final t = r['thread']?.toString().trim();
+  return (t == null || t.isEmpty) ? kCoachThreadGeneral : t;
+}
+
+/// Per-thread read-marker meta key (device-local; meta never syncs).
+String coachThreadReadKey(String threadId) => 'coach_chat_last_read_$threadId';
+
+/// Reads a thread's read marker. For `general`, falls back to the
+/// legacy single-chat key when the per-thread key is absent, so the
+/// upgrade doesn't flag already-seen history as unread. Null/empty →
+/// never read on this device.
+Future<String?> coachThreadLastRead(
+    EngineLedgerRepository ledger, String threadId) async {
+  final v = await ledger.metaGet(coachThreadReadKey(threadId));
+  if (v != null && v.isNotEmpty) return v;
+  if (threadId == kCoachThreadGeneral) {
+    return ledger.metaGet(kCoachChatLastReadTsKey);
+  }
+  return null;
+}
+
+/// Chat surface over one thread of the synced `coach_chat` view. Coach
+/// messages render left; user messages right. Sending appends a
+/// `role=user, kind=user` row (carrying [threadId]) via the normal
+/// repository create, triggers a manual sync, and — when [brain] is
+/// available — asks the in-app [CoachBrain] for a reply (LlmClient over
+/// API credits), appending it as `role=coach, kind=reply` in the same
+/// thread. The nightly Mac-side briefing still arrives through sync,
+/// picked up by the sync listener + a 30 s poll while the screen is
+/// open.
 class CoachChatScreen extends StatefulWidget {
   final ViewSchema view;
   final WarehouseConnector repository;
+
+  /// Thread this screen shows; rows are filtered to it (blank `thread`
+  /// counts as `general`) and new rows are stamped with it.
+  final String threadId;
+
+  /// App-bar title — the thread's display title, derived by the
+  /// threads list (or "New thread" before the first message).
+  final String title;
 
   /// Ledger meta access for the read marker. Null when the build isn't
   /// local-first — mark-read becomes a no-op.
@@ -42,6 +81,8 @@ class CoachChatScreen extends StatefulWidget {
     super.key,
     required this.view,
     required this.repository,
+    required this.threadId,
+    required this.title,
     this.ledger,
     this.brain,
   });
@@ -106,7 +147,9 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
 
   Future<void> _load() async {
     try {
-      final rows = await widget.repository.list(widget.view);
+      final all = await widget.repository.list(widget.view);
+      final rows =
+          all.where((r) => coachThreadOf(r) == widget.threadId).toList();
       rows.sort((a, b) {
         final ta = _tsOf(a);
         final tb = _tsOf(b);
@@ -132,8 +175,8 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
     }
   }
 
-  /// Writes the newest rendered coach `ts` to ledger meta so the home
-  /// row's unread accent clears. Best-effort + deduped.
+  /// Writes the newest rendered coach `ts` to this thread's read-marker
+  /// meta so unread accents clear. Best-effort + deduped.
   Future<void> _markRead() async {
     final ledger = widget.ledger;
     if (ledger == null) return;
@@ -146,7 +189,7 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
     }
     if (newest == null || newest == _markedReadTs) return;
     try {
-      await ledger.metaSet(kCoachChatLastReadTsKey, newest);
+      await ledger.metaSet(coachThreadReadKey(widget.threadId), newest);
       _markedReadTs = newest;
     } catch (_) {/* retried on the next load */}
   }
@@ -164,6 +207,7 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
       'ts': now.toIso8601String(),
       'role': 'user',
       'kind': 'user',
+      'thread': widget.threadId,
       'text': text,
     };
     // Optimistic: show the bubble immediately; the ledger create is
@@ -208,6 +252,7 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
         'ts': now.toIso8601String(),
         'role': 'coach',
         'kind': 'reply',
+        'thread': widget.threadId,
         'text': text,
       };
       await widget.repository.create(widget.view, record);
@@ -232,7 +277,7 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Coach'),
+        title: Text(widget.title),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),

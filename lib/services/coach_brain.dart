@@ -14,9 +14,9 @@ typedef CoachDocFetcher = Future<String?> Function(String path);
 /// ([LlmClient]) — no Mac relay involved. The nightly briefing still
 /// arrives through the synced `coach_chat` view; this class only handles
 /// the interactive turn: assemble context (coach docs from GitHub, a
-/// recent-ledger dump, the chat history), send one prompt, return the
-/// reply text. The caller appends the reply as a `role=coach,
-/// kind=reply` row.
+/// recent-ledger dump, the current thread's chat history), send one
+/// prompt, return the reply text. The caller appends the reply as a
+/// `role=coach, kind=reply` row in the same thread.
 class CoachBrain {
   /// Coach docs pulled from the schemas repo. Order matters — it's the
   /// order they appear in the prompt.
@@ -83,9 +83,10 @@ class CoachBrain {
     return (path) async => (await client.readFile(path))?.content;
   }
 
-  /// One full reply turn: assemble the prompt for [history] (all
-  /// coach_chat rows, any order) and ask the model. Throws on API
-  /// failure — the caller surfaces the error.
+  /// One full reply turn: assemble the prompt for [history] (the
+  /// current thread's coach_chat rows only, any order — the caller
+  /// filters; the [maxHistoryMessages] cap still applies) and ask the
+  /// model. Throws on API failure — the caller surfaces the error.
   Future<String> reply(List<Record> history) async {
     final prompt = await buildPrompt(history);
     return llm.complete(modelName, prompt);

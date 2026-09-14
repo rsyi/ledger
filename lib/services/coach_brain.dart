@@ -1,3 +1,4 @@
+import '../models/coach_proposal.dart';
 import '../models/github_config.dart';
 import '../models/model_config.dart';
 import '../models/view_schema.dart';
@@ -12,13 +13,15 @@ import 'warehouse_connector.dart';
 /// treated the same as null (doc unavailable).
 typedef CoachDocFetcher = Future<String?> Function(String path);
 
-/// Produces in-app coach replies via the API-credit LLM plumbing
-/// ([LlmClient]) — no Mac relay involved. The nightly briefing still
-/// arrives through the synced `coach_chat` view; this class only handles
-/// the interactive turn: assemble context (coach docs from GitHub, a
-/// recent-ledger dump, the current thread's chat history), send one
-/// prompt, return the reply text. The caller appends the reply as a
-/// `role=coach, kind=reply` row in the same thread.
+/// Produces in-app coach replies via the ChatRunner tool loop over API
+/// credits — no Mac relay involved. Context assembly: coach docs from
+/// GitHub (1 h cache), a 28-day local ledger dump, and the current
+/// thread's chat history (up to 40 messages). Available tools:
+/// list_templates / read_template / propose_schedule. The caller persists
+/// the returned text as a `role=coach, kind=reply` row; proposal rows are
+/// persisted by the [ProposalSink] callback (onProposal) during the loop.
+/// The nightly briefing still arrives through the synced `coach_chat`
+/// view.
 class CoachBrain {
   /// Coach docs pulled from the schemas repo. Order matters — it's the
   /// order they appear in the prompt.
@@ -89,6 +92,10 @@ class CoachBrain {
   /// propose_schedule — the caller persists the proposal row. Returns
   /// the assistant's text (all text blocks, tool-turn preambles
   /// included). Throws on API failure — the caller surfaces the error.
+  ///
+  /// Note: a proposal row may have been persisted (via [onProposal]) even
+  /// if a later API call in the same turn fails — this partial side-effect
+  /// is accepted.
   Future<String> reply(
     List<Record> history, {
     required ProposalSink onProposal,
@@ -111,6 +118,9 @@ class CoachBrain {
           if (turn.role != 'assistant') continue;
           final t = turn.text;
           if (t.isNotEmpty) texts.add(t);
+        }
+        if (ev.truncated) {
+          texts.add('(reply cut short — tool loop hit its iteration cap)');
         }
       }
     }
@@ -253,7 +263,9 @@ Claude session — you cannot edit files from here.''';
   }
 
   /// Renders chat history as `[role] text` lines, sorted by `ts`
-  /// ascending, capped to the most recent [maxMessages].
+  /// ascending, capped to the most recent [maxMessages]. Proposal rows
+  /// (`kind == 'proposal'`) are rendered compactly; malformed payloads
+  /// fall back to the raw text.
   static String renderHistory(
     List<Record> history, {
     int maxMessages = maxHistoryMessages,
@@ -265,10 +277,21 @@ Claude session — you cannot edit files from here.''';
         ? sorted.sublist(sorted.length - maxMessages)
         : sorted;
     if (kept.isEmpty) return '(no messages)';
-    return kept
-        .map((r) =>
-            '[${r['role']?.toString() ?? '?'}] ${r['text']?.toString() ?? ''}')
-        .join('\n');
+    return kept.map((r) {
+      final role = r['role']?.toString() ?? '?';
+      final text = r['text']?.toString() ?? '';
+      if (r['kind']?.toString() == 'proposal') {
+        final p = CoachProposal.tryParse(text);
+        if (p != null) {
+          final dateStr = _fmtDate(p.date);
+          final detail = p.summary.isEmpty
+              ? '${p.entries.length} entries'
+              : p.summary;
+          return '[$role] (proposed ${p.view} plan for $dateStr: $detail)';
+        }
+      }
+      return '[$role] $text';
+    }).join('\n');
   }
 
   static DateTime? _dateOf(Object? v) {

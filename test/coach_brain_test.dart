@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:airledger/models/coach_proposal.dart';
 import 'package:airledger/models/database_config.dart';
 import 'package:airledger/models/model_config.dart';
 import 'package:airledger/models/view_schema.dart';
@@ -155,5 +156,53 @@ void main() {
     ]);
     expect(full, contains('## Chat history'));
     expect(full, contains('[user] hi'));
+  });
+
+  test('renderHistory renders proposal rows compactly (no raw JSON)', () {
+    final proposal = CoachProposal(
+      view: 'strength',
+      date: DateTime(2026, 9, 15),
+      summary: 'Heavy squat day',
+      entries: [
+        {'exercise': 'squat', 'sets': 5, 'reps': 5},
+        {'exercise': 'rdl', 'sets': 3, 'reps': 8},
+      ],
+    );
+    final rows = <Record>[
+      {
+        'ts': '2026-09-13T09:00:00',
+        'role': 'coach',
+        'kind': 'proposal',
+        'text': proposal.encode(),
+      },
+      {
+        'ts': '2026-09-13T09:01:00',
+        'role': 'user',
+        'kind': 'user',
+        'text': 'Looks good!',
+      },
+    ];
+    final out = CoachBrain.renderHistory(rows);
+    // Proposal line should not contain raw JSON markers.
+    expect(out, isNot(contains('{"v":1')));
+    expect(out, isNot(contains('"view"')));
+    // Should render compactly with view, date, and summary.
+    expect(out, contains('[coach] (proposed strength plan for 2026-09-15: Heavy squat day)'));
+    // Normal user row unchanged.
+    expect(out, contains('[user] Looks good!'));
+  });
+
+  test('renderHistory falls back to raw text for malformed proposal rows', () {
+    final rows = <Record>[
+      {
+        'ts': '2026-09-13T10:00:00',
+        'role': 'coach',
+        'kind': 'proposal',
+        'text': 'not valid json {{{',
+      },
+    ];
+    final out = CoachBrain.renderHistory(rows);
+    // Should fall back to the raw text, not crash.
+    expect(out, contains('[coach] not valid json {{{'));
   });
 }

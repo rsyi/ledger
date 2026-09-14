@@ -69,10 +69,10 @@ String stripMarkdownPreview(String text) {
 /// messages render left; user messages right. Sending appends a
 /// `role=user, kind=user` row (carrying [threadId]) via the normal
 /// repository create, triggers a manual sync, and — when [brain] is
-/// available — asks the in-app [CoachBrain] for a reply (LlmClient over
-/// API credits), appending it as `role=coach, kind=reply` in the same
-/// thread. The nightly Mac-side briefing still arrives through sync,
-/// picked up by the sync listener + a 30 s poll while the screen is
+/// available — asks the in-app [CoachBrain] for a reply (CoachBrain tool
+/// loop over API credits), appending it as `role=coach, kind=reply` in
+/// the same thread. The nightly Mac-side briefing still arrives through
+/// sync, picked up by the sync listener + a 30 s poll while the screen is
 /// open.
 class CoachChatScreen extends StatefulWidget {
   final ViewSchema view;
@@ -266,6 +266,9 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
         List.of(_messages),
         onProposal: _postProposal,
       );
+      // A proposal row may already have been persisted by the tool; an
+      // empty text reply (tool-only turn) is fine — skip creating a row.
+      if (text.trim().isEmpty) return;
       final now = DateTime.now();
       final record = <String, Object?>{
         'id': const Uuid().v4(),

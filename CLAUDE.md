@@ -138,5 +138,6 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   fullscreen timer swallows auto-stamp snackbars.
 - Whoop API integration (needs user dev-app registration).
 - Macrofactor via Health Connect → meals: still queued.
-- MCP worker's workers.dev subdomain is `airledger-mcp` (account-wide,
-  cosmetic; renameable in CF dash but changes the connector URL).
+- MCP worker's workers.dev subdomain is `ryime` (renamed from
+  `airledger-mcp` 2026-09-13; old URLs are dead). Connector URL:
+  `https://ledger-mcp.ryime.workers.dev/mcp/<token>`.

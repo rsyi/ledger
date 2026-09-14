@@ -19,6 +19,9 @@ class CoachToolset {
 
   final Map<String, ViewSchema> views;
   final ProposalSink onProposal;
+
+  /// Clock override for testing. Reserved for a future guard that
+  /// rejects proposals placed too far in the past. Not yet consumed.
   final DateTime Function() now;
 
   CoachToolset({
@@ -68,6 +71,7 @@ class CoachToolset {
                   .map((v) => {
                         'name': v.name,
                         'type': v.type.name,
+                        if (v.label != v.name) 'label': v.label,
                         if (v.defaultValue != null) 'default': v.defaultValue,
                       })
                   .toList(),
@@ -109,6 +113,7 @@ class CoachToolset {
               .map((v) => {
                     'name': v.name,
                     'type': v.type.name,
+                    if (v.label != v.name) 'label': v.label,
                     if (v.defaultValue != null) 'default': v.defaultValue,
                   })
               .toList(),

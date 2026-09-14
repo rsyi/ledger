@@ -114,6 +114,14 @@ class TimelineScreen extends StatefulWidget {
   /// failed to load.
   final AnalyticsEngine? analytics;
 
+  /// Initially selected date (defaults to today). Set when arriving
+  /// from a coach proposal so the plan's day is already showing.
+  final DateTime? initialDate;
+
+  /// Planned-entry localIds to accent on arrival (coach "Schedule"
+  /// hand-off). The accent fades a few seconds after first build.
+  final Set<String> highlightKeys;
+
   /// True for fleet-deploy / single-purpose builds (Poke House). Suppresses
   /// app-bar chrome that doesn't belong in a kiosk context: the chat icon
   /// is hidden regardless of [chatModel], and the back button is gone
@@ -136,6 +144,8 @@ class TimelineScreen extends StatefulWidget {
     this.chatModel,
     this.github,
     this.analytics,
+    this.initialDate,
+    this.highlightKeys = const {},
     this.kioskMode = false,
     this.qboSpec,
     this.qboService,
@@ -146,8 +156,13 @@ class TimelineScreen extends StatefulWidget {
 }
 
 class _TimelineScreenState extends State<TimelineScreen> {
-  DateTime _selectedDate = _today();
+  late DateTime _selectedDate = widget.initialDate ?? _today();
   late Future<List<_Item>> _items;
+
+  /// Live highlight set — starts as widget.highlightKeys, cleared by a
+  /// one-shot timer so the accent reads as "here's what just landed".
+  late final Set<String> _highlightKeys = {...widget.highlightKeys};
+  Timer? _highlightTimer;
   // date_keys with an in-flight background revalidation, so rapid date
   // toggling doesn't stack redundant network reads.
   final Set<String> _revalidating = {};
@@ -219,6 +234,11 @@ class _TimelineScreenState extends State<TimelineScreen> {
     _loadTemplates();
     _loadQboStatuses();
     widget.llmCache?.addListener(_onLlmUpdate);
+    if (_highlightKeys.isNotEmpty) {
+      _highlightTimer = Timer(const Duration(seconds: 4), () {
+        if (mounted) setState(_highlightKeys.clear);
+      });
+    }
   }
 
   /// Refreshes [_qboStatus] for the logged rows currently in [_items].
@@ -446,6 +466,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
   @override
   void dispose() {
     widget.llmCache?.removeListener(_onLlmUpdate);
+    _highlightTimer?.cancel();
     super.dispose();
   }
 
@@ -695,6 +716,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
                               onLongPress: () => _toggleSelect(item),
                               onDelete: () => _delete(item),
                               onLogNow: () => _logNow(item),
+                              highlighted:
+                                  _highlightKeys.contains(item.keyString),
                             );
                           }),
                       ],
@@ -1785,6 +1808,11 @@ class _RecordTile extends StatelessWidget {
   final QboPushRecord? qboStatus;
   final VoidCallback? onQboRetry;
 
+  /// True while this entry is in the coach hand-off highlight set.
+  /// The parent screen clears the set after a few seconds, causing
+  /// [AnimatedContainer] to fade the tint back to transparent.
+  final bool highlighted;
+
   const _RecordTile({
     required this.view,
     required this.item,
@@ -1798,6 +1826,7 @@ class _RecordTile extends StatelessWidget {
     this.llmCache,
     this.qboStatus,
     this.onQboRetry,
+    this.highlighted = false,
   });
 
   /// First dimension on the view opted-in to `input.history: true` whose
@@ -1889,7 +1918,7 @@ class _RecordTile extends StatelessWidget {
         rowId == null ? null : llmCache?.get(rowId);
     final llmPending =
         rowId == null ? false : (llmCache?.isPending(rowId) ?? false);
-    final tile = ListTile(
+    Widget tile = ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
       minLeadingWidth: 0,
       horizontalTitleGap: 14,
@@ -1954,6 +1983,15 @@ class _RecordTile extends StatelessWidget {
       trailing: _buildTrailing(context),
       onTap: onTap,
       onLongPress: onLongPress,
+    );
+    // Coach hand-off accent: tinted while highlighted, animating back
+    // to transparent when the screen clears the highlight set.
+    tile = AnimatedContainer(
+      duration: const Duration(milliseconds: 600),
+      color: highlighted
+          ? scheme.tertiaryContainer.withValues(alpha: 0.55)
+          : Colors.transparent,
+      child: tile,
     );
     // Swipe-to-delete is disabled in selection mode — too easy to fire
     // accidentally while scrolling through a long selection.

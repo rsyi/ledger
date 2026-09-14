@@ -31,12 +31,17 @@ class CoachThreadsScreen extends StatefulWidget {
   /// Passed through to the chat screen for in-app replies.
   final CoachBrain? brain;
 
+  /// Passed through to the chat screen so proposal cards can open a
+  /// timeline after scheduling. Null → Schedule shows a snackbar.
+  final CoachTimelineOpener? openTimeline;
+
   const CoachThreadsScreen({
     super.key,
     required this.view,
     required this.repository,
     this.ledger,
     this.brain,
+    this.openTimeline,
   });
 
   @override
@@ -196,6 +201,7 @@ class _CoachThreadsScreenState extends State<CoachThreadsScreen> {
           title: title,
           ledger: widget.ledger,
           brain: widget.brain,
+          openTimeline: widget.openTimeline,
         ),
       ),
     );

@@ -8,11 +8,15 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/coach_proposal.dart';
+import '../models/planned_entry.dart';
 import '../models/view_schema.dart';
 import '../services/coach_brain.dart';
+import '../services/coach_proposal_store.dart';
+import '../services/plan_store.dart';
 import '../services/sheets_repository.dart' show Record;
 import '../services/sync_scheduler.dart';
 import '../services/warehouse_connector.dart';
+import 'widgets/coach_proposal_card.dart';
 
 /// Legacy (pre-threads) meta key: `ts` of the newest coach message the
 /// user has seen. Still consulted as the fallback for the `general`
@@ -65,6 +69,16 @@ String stripMarkdownPreview(String text) {
   return s.trim();
 }
 
+/// Opens a timeline for [viewName] on [date] with [highlightKeys]
+/// planned-entry localIds accented. Built by HomeScreen, which owns the
+/// TimelineScreen dependency set. Null → Schedule buttons are disabled.
+typedef CoachTimelineOpener = void Function(
+  BuildContext context,
+  String viewName,
+  DateTime date,
+  Set<String> highlightKeys,
+);
+
 /// Chat surface over one thread of the synced `coach_chat` view. Coach
 /// messages render left; user messages right. Sending appends a
 /// `role=user, kind=user` row (carrying [threadId]) via the normal
@@ -95,6 +109,10 @@ class CoachChatScreen extends StatefulWidget {
   /// still work, they just don't get an in-app reply.
   final CoachBrain? brain;
 
+  /// Opens the timeline for a view+date with planned entries highlighted.
+  /// Null → Schedule buttons show a "unavailable" snackbar instead.
+  final CoachTimelineOpener? openTimeline;
+
   const CoachChatScreen({
     super.key,
     required this.view,
@@ -103,6 +121,7 @@ class CoachChatScreen extends StatefulWidget {
     required this.title,
     this.ledger,
     this.brain,
+    this.openTimeline,
   });
 
   @override
@@ -127,6 +146,13 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
   /// Last value written to the read marker — avoids redundant meta
   /// writes on every poll tick.
   String? _markedReadTs;
+
+  /// Proposal state per kind=proposal row id (null = pending). Loaded
+  /// alongside messages so cards render the right footer.
+  final Map<String, CoachProposalState?> _proposalStates = {};
+
+  /// Proposal row ids with a schedule/undo write in flight.
+  final Set<String> _proposalBusy = {};
 
   @override
   void initState() {
@@ -176,6 +202,12 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
         if (tb == null) return 1;
         return ta.compareTo(tb);
       });
+      for (final r in rows) {
+        if (r['kind']?.toString() != 'proposal') continue;
+        final id = r['id']?.toString();
+        if (id == null) continue;
+        _proposalStates[id] = await CoachProposalStore.load(id);
+      }
       if (!mounted) return;
       setState(() {
         _messages = rows;
@@ -306,6 +338,7 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
       'thread': widget.threadId,
       'text': p.encode(),
     });
+    await _load();
   }
 
   bool get _awaitingReply =>
@@ -416,8 +449,118 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
       itemCount: _messages.length,
       separatorBuilder: (_, _) => const SizedBox(height: 8),
       itemBuilder: (_, i) =>
-          _ChatBubble(msg: _messages[_messages.length - 1 - i]),
+          _bubbleFor(_messages[_messages.length - 1 - i]),
     );
+  }
+
+  Widget _bubbleFor(Record msg) {
+    if (msg['kind']?.toString() == 'proposal') {
+      final p = CoachProposal.tryParse(msg['text']?.toString() ?? '');
+      if (p != null) return _proposalBubble(msg, p);
+      // Malformed payload → plain bubble fallback.
+    }
+    return _ChatBubble(msg: msg);
+  }
+
+  Widget _proposalBubble(Record msg, CoachProposal p) {
+    final rowId = msg['id']?.toString() ?? '';
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.85,
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (p.summary.isNotEmpty)
+                Text(p.summary,
+                    style: TextStyle(color: scheme.onSurface)),
+              CoachProposalCard(
+                proposal: p,
+                status: _proposalStates[rowId]?.status,
+                busy: _proposalBusy.contains(rowId),
+                onSchedule: () => _scheduleProposal(rowId, p),
+                onUndo: () => _undoProposal(rowId, p),
+                onDismiss: () => _dismissProposal(rowId),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _scheduleProposal(String rowId, CoachProposal p) async {
+    final view = widget.brain?.views[p.view];
+    if (view == null || widget.openTimeline == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Scheduling unavailable in this build')));
+      return;
+    }
+    setState(() => _proposalBusy.add(rowId));
+    try {
+      final entries = [
+        for (final e in p.entries)
+          PlannedEntry.create(
+            view: view,
+            date: p.date,
+            values: Map<String, Object?>.of(e),
+            templateName: p.template,
+          ),
+      ];
+      await PlanStore.addAll(view, entries);
+      final ids = [for (final e in entries) e.localId];
+      final st = CoachProposalState(
+          status: CoachProposalStatus.scheduled, localIds: ids);
+      await CoachProposalStore.save(rowId, st);
+      if (!mounted) return;
+      setState(() => _proposalStates[rowId] = st);
+      widget.openTimeline!(context, p.view, p.date, ids.toSet());
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Schedule failed: $e')));
+    } finally {
+      if (mounted) setState(() => _proposalBusy.remove(rowId));
+    }
+  }
+
+  Future<void> _undoProposal(String rowId, CoachProposal p) async {
+    final view = widget.brain?.views[p.view];
+    final prior = _proposalStates[rowId];
+    if (view == null || prior == null) return;
+    setState(() => _proposalBusy.add(rowId));
+    try {
+      for (final localId in prior.localIds) {
+        await PlanStore.remove(view, localId);
+      }
+      const st = CoachProposalState(
+          status: CoachProposalStatus.undone, localIds: []);
+      await CoachProposalStore.save(rowId, st);
+      if (!mounted) return;
+      setState(() => _proposalStates[rowId] = st);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Undo failed: $e')));
+    } finally {
+      if (mounted) setState(() => _proposalBusy.remove(rowId));
+    }
+  }
+
+  Future<void> _dismissProposal(String rowId) async {
+    const st = CoachProposalState(
+        status: CoachProposalStatus.dismissed, localIds: []);
+    await CoachProposalStore.save(rowId, st);
+    if (mounted) setState(() => _proposalStates[rowId] = st);
   }
 
   Widget _buildComposer() {

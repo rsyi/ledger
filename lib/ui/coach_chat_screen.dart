@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:airledger_engine/airledger_engine.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
@@ -45,6 +46,22 @@ Future<String?> coachThreadLastRead(
     return ledger.metaGet(kCoachChatLastReadTsKey);
   }
   return null;
+}
+
+/// Strips lightweight markdown syntax from a one-line preview string so
+/// raw `**bold**`, `*em*`, `### Header`, and `- list` markers don't
+/// appear as literal punctuation in thread-list tiles and the home row.
+/// Not a full parser — just enough to clean the common LLM patterns.
+String stripMarkdownPreview(String text) {
+  var s = text;
+  // Remove leading heading markers (#+ followed by space)
+  s = s.replaceAll(RegExp(r'^#{1,6}\s+', multiLine: true), '');
+  // Remove leading list marker ("- " or "* " at start)
+  s = s.replaceAll(RegExp(r'^[*-]\s+', multiLine: true), '');
+  // Remove bold/italic markers (**word**, *word*, __word__, _word_)
+  s = s.replaceAll(RegExp(r'\*{1,2}([^*]+)\*{1,2}'), r'$1');
+  s = s.replaceAll(RegExp(r'_{1,2}([^_]+)_{1,2}'), r'$1');
+  return s.trim();
 }
 
 /// Chat surface over one thread of the synced `coach_chat` view. Coach
@@ -427,8 +444,8 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
 }
 
 /// One message bubble. Coach → left, surface-variant; user → right,
-/// primary-tinted. Plain selectable text + a small time label — no
-/// markdown, by design (keep the widget lean).
+/// primary-tinted. Coach messages render markdown via MarkdownBody;
+/// user messages stay plain SelectableText.
 class _ChatBubble extends StatelessWidget {
   final Record msg;
   const _ChatBubble({required this.msg});
@@ -452,6 +469,10 @@ class _ChatBubble extends StatelessWidget {
     final isUser = msg['role']?.toString() == 'user';
     final text = msg['text']?.toString() ?? '';
     final time = _timeLabel(msg);
+    final bubbleColor =
+        isUser ? scheme.primaryContainer : scheme.surfaceContainerHigh;
+    final textColor =
+        isUser ? scheme.onPrimaryContainer : scheme.onSurface;
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
@@ -461,15 +482,54 @@ class _ChatBubble extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color:
-                isUser ? scheme.primaryContainer : scheme.surfaceContainerHigh,
+            color: bubbleColor,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
             crossAxisAlignment:
                 isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
-              SelectableText(text),
+              if (isUser)
+                SelectableText(
+                  text,
+                  style: TextStyle(color: textColor),
+                )
+              else
+                MarkdownBody(
+                  data: text,
+                  selectable: true,
+                  styleSheet:
+                      MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                    p: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(color: textColor),
+                    strong: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: textColor,
+                          fontWeight: FontWeight.bold,
+                        ),
+                    em: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: textColor,
+                          fontStyle: FontStyle.italic,
+                        ),
+                    listBullet: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(color: textColor),
+                    h1: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: textColor,
+                          fontWeight: FontWeight.bold,
+                        ),
+                    h2: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: textColor,
+                          fontWeight: FontWeight.bold,
+                        ),
+                    h3: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: textColor,
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                ),
               if (time.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),

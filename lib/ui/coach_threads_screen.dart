@@ -91,7 +91,8 @@ class _CoachThreadsScreenState extends State<CoachThreadsScreen> {
   }
 
   static String _firstLine(String text, {int max = 80}) {
-    final line = text.trimLeft().split('\n').first.trim();
+    final stripped = stripMarkdownPreview(text);
+    final line = stripped.trimLeft().split('\n').first.trim();
     return line.length > max ? '${line.substring(0, max)}…' : line;
   }
 

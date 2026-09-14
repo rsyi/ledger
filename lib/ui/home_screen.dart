@@ -647,7 +647,8 @@ class _CoachRowState extends State<_CoachRow> {
   }
 
   static String _firstLine(String text) {
-    final line = text.trimLeft().split('\n').first.trim();
+    final stripped = stripMarkdownPreview(text);
+    final line = stripped.trimLeft().split('\n').first.trim();
     return line.length > 80 ? '${line.substring(0, 80)}…' : line;
   }
 

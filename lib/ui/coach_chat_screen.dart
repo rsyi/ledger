@@ -71,7 +71,7 @@ String stripMarkdownPreview(String text) {
 
 /// Opens a timeline for [viewName] on [date] with [highlightKeys]
 /// planned-entry localIds accented. Built by HomeScreen, which owns the
-/// TimelineScreen dependency set. Null → Schedule buttons are disabled.
+/// TimelineScreen dependency set. Null → Schedule shows an 'unavailable' snackbar.
 typedef CoachTimelineOpener = void Function(
   BuildContext context,
   String viewName,
@@ -205,7 +205,7 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
       for (final r in rows) {
         if (r['kind']?.toString() != 'proposal') continue;
         final id = r['id']?.toString();
-        if (id == null) continue;
+        if (id == null || _proposalBusy.contains(id)) continue;
         _proposalStates[id] = await CoachProposalStore.load(id);
       }
       if (!mounted) return;
@@ -499,6 +499,7 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
   }
 
   Future<void> _scheduleProposal(String rowId, CoachProposal p) async {
+    if (_proposalBusy.contains(rowId)) return;
     final view = widget.brain?.views[p.view];
     if (view == null || widget.openTimeline == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -506,6 +507,7 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
       return;
     }
     setState(() => _proposalBusy.add(rowId));
+    CoachProposalState? saved;
     try {
       final entries = [
         for (final e in p.entries)
@@ -518,12 +520,11 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
       ];
       await PlanStore.addAll(view, entries);
       final ids = [for (final e in entries) e.localId];
-      final st = CoachProposalState(
+      saved = CoachProposalState(
           status: CoachProposalStatus.scheduled, localIds: ids);
-      await CoachProposalStore.save(rowId, st);
+      await CoachProposalStore.save(rowId, saved);
       if (!mounted) return;
-      setState(() => _proposalStates[rowId] = st);
-      widget.openTimeline!(context, p.view, p.date, ids.toSet());
+      setState(() => _proposalStates[rowId] = saved);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -531,9 +532,13 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
     } finally {
       if (mounted) setState(() => _proposalBusy.remove(rowId));
     }
+    if (saved != null && mounted) {
+      widget.openTimeline!(context, p.view, p.date, saved.localIds.toSet());
+    }
   }
 
   Future<void> _undoProposal(String rowId, CoachProposal p) async {
+    if (_proposalBusy.contains(rowId)) return;
     final view = widget.brain?.views[p.view];
     final prior = _proposalStates[rowId];
     if (view == null || prior == null) return;
@@ -559,8 +564,14 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
   Future<void> _dismissProposal(String rowId) async {
     const st = CoachProposalState(
         status: CoachProposalStatus.dismissed, localIds: []);
-    await CoachProposalStore.save(rowId, st);
-    if (mounted) setState(() => _proposalStates[rowId] = st);
+    try {
+      await CoachProposalStore.save(rowId, st);
+      if (mounted) setState(() => _proposalStates[rowId] = st);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Dismiss failed: $e')));
+    }
   }
 
   Widget _buildComposer() {

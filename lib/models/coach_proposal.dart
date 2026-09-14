@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:intl/intl.dart';
+
 /// A schedule proposal the coach made in chat. Serialized into the
 /// `text` of a `role=coach, kind=proposal` coach_chat row — no schema
 /// change, so no engine work. `tryParse` returning null is the
@@ -34,7 +36,7 @@ class CoachProposal {
   String encode() => jsonEncode({
         'v': version,
         'view': view,
-        'date': _fmtDate(date),
+        'date': DateFormat('yyyy-MM-dd').format(date),
         if (template != null) 'template': template,
         'summary': summary,
         'entries': entries,
@@ -71,9 +73,4 @@ class CoachProposal {
       entries: entries,
     );
   }
-
-  static String _fmtDate(DateTime d) =>
-      '${d.year.toString().padLeft(4, '0')}-'
-      '${d.month.toString().padLeft(2, '0')}-'
-      '${d.day.toString().padLeft(2, '0')}';
 }

@@ -83,11 +83,18 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   - `coach_chat` synced view rendered ONLY as chat: pinned tinted
     Coach row (unread accent via meta `coach_chat_last_read_ts`) +
     `coach_chat_screen.dart`.
-  - **Interactive replies: IN-APP via API credits** —
-    `lib/services/coach_brain.dart` (LlmClient `sonnet` from
-    assets/config.yaml; context = coach/*.md from GitHub (1h cache) +
-    28-day local ledger dump + last 40 chat messages). Note:
-    LlmClient hardcodes max_tokens 512.
+  - **Interactive replies: IN-APP via API credits** — CoachBrain on the
+    ChatRunner tool loop (streaming Anthropic, max_tokens 4096; context
+    = coach/*.md from GitHub (1h cache) + 28-day local ledger dump +
+    last 40 thread messages). Tools: list_templates / read_template /
+    propose_schedule. Proposals land as `kind=proposal` coach_chat rows
+    (JSON in `text`, no schema change); the chat renders a card —
+    Schedule writes PlanStore + opens the timeline with the entries
+    highlighted (initialDate/highlightKeys params), Undo removes them;
+    status + localIds are device-local (`coach_proposal:<rowId>`).
+    routine.md carries the Monday press anchor + skipped-lift carryover
+    rule + deficit consequences (2026-09-13). Note: LlmClient (post-log
+    hooks) still hardcodes max_tokens 512; the coach no longer uses it.
   - **Nightly briefing 23:30**: Mac launchd `com.robertyi.airledger-coach`
     → `tool/coach_nightly.sh` → `claude -p` (user's Max plan) →
     `tool/coach_msg.dart post`. Idempotent per planning target

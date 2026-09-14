@@ -408,6 +408,34 @@ class _HomeScreenState extends State<HomeScreen> {
                       repository: data.registry.forView(coachView),
                       ledger: coachLedger,
                       brain: coachBrain,
+                      openTimeline: (ctx, viewName, date, highlight) {
+                        final view = data.views
+                            .where((v) => v.name == viewName)
+                            .firstOrNull;
+                        if (view == null) return;
+                        Navigator.of(ctx).push(
+                          MaterialPageRoute(
+                            builder: (_) => TimelineScreen(
+                              view: view,
+                              repository: data.registry.forView(view),
+                              llm: data.llm,
+                              llmCache: data.llmCache,
+                              chatModel: chatModel,
+                              github: github == null
+                                  ? null
+                                  : GithubClient(github),
+                              analytics: data.analytics,
+                              qboSpec: data.quickbooks?.specFor(view.name),
+                              qboService:
+                                  data.quickbooks?.specFor(view.name) == null
+                                      ? null
+                                      : data.qboService,
+                              initialDate: date,
+                              highlightKeys: highlight,
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   Expanded(
                     child: ListView.separated(
@@ -555,12 +583,14 @@ class _CoachRow extends StatefulWidget {
   final WarehouseConnector repository;
   final EngineLedgerRepository? ledger;
   final CoachBrain? brain;
+  final CoachTimelineOpener? openTimeline;
 
   const _CoachRow({
     required this.view,
     required this.repository,
     this.ledger,
     this.brain,
+    this.openTimeline,
   });
 
   @override
@@ -670,6 +700,7 @@ class _CoachRowState extends State<_CoachRow> {
           repository: widget.repository,
           ledger: widget.ledger,
           brain: widget.brain,
+          openTimeline: widget.openTimeline,
         ),
       ),
     );

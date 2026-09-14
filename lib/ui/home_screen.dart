@@ -389,8 +389,7 @@ class _HomeScreenState extends State<HomeScreen> {
               final coachBrain = data.llm == null || chatModel == null
                   ? null
                   : CoachBrain(
-                      llm: data.llm!,
-                      modelName: chatModel.name,
+                      model: chatModel,
                       repository: data.repository,
                       views: {for (final v in data.views) v.name: v},
                       fetchDoc: CoachBrain.githubFetcher(github),

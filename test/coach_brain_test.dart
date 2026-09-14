@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/models/database_config.dart';
+import 'package:airledger/models/model_config.dart';
 import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/coach_brain.dart';
-import 'package:airledger/services/llm_client.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
 
@@ -51,8 +51,13 @@ void main() {
     CoachDocFetcher? fetchDoc,
   }) =>
       CoachBrain(
-        llm: LlmClient(const []),
-        modelName: 'sonnet',
+        model: ModelConfig(
+          name: 'sonnet',
+          vendor: ModelVendor.anthropic,
+          modelRef: 'claude-sonnet-4-6',
+          apiKey: 'test-key',
+          apiUrl: 'https://api.anthropic.com/v1',
+        ),
         repository: _FakeRepo(rows),
         views: views ?? {'weight': _view('weight', ['id', 'date', 'weight'])},
         fetchDoc: fetchDoc ?? (path) async => '$path contents',
@@ -136,5 +141,19 @@ void main() {
     // Second build serves docs from the 1h cache.
     await b.buildPrompt(const []);
     expect(fetches, CoachBrain.docPaths.length);
+  });
+
+  test('buildSystemPrompt has docs+dump but no chat history; buildPrompt '
+      'still appends history', () async {
+    final b = brain();
+    final system = await b.buildSystemPrompt(today);
+    expect(system, contains('## Coach docs'));
+    expect(system, contains('## Ledger data'));
+    expect(system, isNot(contains('## Chat history')));
+    final full = await b.buildPrompt([
+      {'role': 'user', 'ts': '2026-09-13T10:00:00', 'text': 'hi'},
+    ]);
+    expect(full, contains('## Chat history'));
+    expect(full, contains('[user] hi'));
   });
 }

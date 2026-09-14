@@ -7,6 +7,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/coach_proposal.dart';
 import '../models/view_schema.dart';
 import '../services/coach_brain.dart';
 import '../services/sheets_repository.dart' show Record;
@@ -261,7 +262,10 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
     if (brain == null || _replying) return;
     setState(() => _replying = true);
     try {
-      final text = await brain.reply(List.of(_messages));
+      final text = await brain.reply(
+        List.of(_messages),
+        onProposal: _postProposal,
+      );
       final now = DateTime.now();
       final record = <String, Object?>{
         'id': const Uuid().v4(),
@@ -284,6 +288,21 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
     } finally {
       if (mounted) setState(() => _replying = false);
     }
+  }
+
+  /// Persists a propose_schedule result as a kind=proposal row in this
+  /// thread — same shape as a reply row, JSON payload in `text`.
+  Future<void> _postProposal(CoachProposal p) async {
+    final now = DateTime.now();
+    await widget.repository.create(widget.view, <String, Object?>{
+      'id': const Uuid().v4(),
+      'date': DateTime(now.year, now.month, now.day),
+      'ts': now.toIso8601String(),
+      'role': 'coach',
+      'kind': 'proposal',
+      'thread': widget.threadId,
+      'text': p.encode(),
+    });
   }
 
   bool get _awaitingReply =>

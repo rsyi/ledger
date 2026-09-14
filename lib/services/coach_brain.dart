@@ -1,7 +1,9 @@
 import '../models/github_config.dart';
+import '../models/model_config.dart';
 import '../models/view_schema.dart';
+import 'chat_runner.dart';
+import 'coach_tools.dart';
 import 'github_client.dart';
-import 'llm_client.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 
@@ -47,11 +49,9 @@ class CoachBrain {
   /// Test hook — the doc cache is process-global.
   static void clearDocCache() => _docCache.clear();
 
-  final LlmClient llm;
-
-  /// Logical model name passed to [LlmClient.complete] — same default
-  /// the chat screen uses (first Anthropic entry in config.yml models:).
-  final String modelName;
+  /// Anthropic model the reply turn runs on (ChatRunner requires
+  /// anthropic vendor — home_screen's _chatModel already selects one).
+  final ModelConfig model;
 
   /// Local-first ledger connector — [dumpViews] are listed through it.
   final WarehouseConnector repository;
@@ -66,8 +66,7 @@ class CoachBrain {
   final DateTime Function() now;
 
   CoachBrain({
-    required this.llm,
-    required this.modelName,
+    required this.model,
     required this.repository,
     required this.views,
     required this.fetchDoc,
@@ -83,13 +82,39 @@ class CoachBrain {
     return (path) async => (await client.readFile(path))?.content;
   }
 
-  /// One full reply turn: assemble the prompt for [history] (the
-  /// current thread's coach_chat rows only, any order — the caller
-  /// filters; the [maxHistoryMessages] cap still applies) and ask the
-  /// model. Throws on API failure — the caller surfaces the error.
-  Future<String> reply(List<Record> history) async {
-    final prompt = await buildPrompt(history);
-    return llm.complete(modelName, prompt);
+  /// One full reply turn on the ChatRunner tool loop: system prompt =
+  /// docs + ledger dump; the thread history rides in a single user
+  /// turn (keeps Anthropic's user-first/alternation rules trivially
+  /// satisfied). [onProposal] fires when the model calls
+  /// propose_schedule — the caller persists the proposal row. Returns
+  /// the assistant's text (all text blocks, tool-turn preambles
+  /// included). Throws on API failure — the caller surfaces the error.
+  Future<String> reply(
+    List<Record> history, {
+    required ProposalSink onProposal,
+  }) async {
+    final system = await buildSystemPrompt(now());
+    final userTurn = '## Chat history (oldest first)\n\n'
+        '${renderHistory(history)}\n\n'
+        'Reply to the newest user message(s) now.';
+    final tools =
+        CoachToolset(views: views, onProposal: onProposal, now: now).build();
+    final runner = ChatRunner(model);
+    final texts = <String>[];
+    await for (final ev in runner.runStream(
+      systemPrompt: system,
+      initialConversation: [ChatTurn(role: 'user', content: userTurn)],
+      tools: tools,
+    )) {
+      if (ev is TurnComplete) {
+        for (final turn in ev.conversation) {
+          if (turn.role != 'assistant') continue;
+          final t = turn.text;
+          if (t.isNotEmpty) texts.add(t);
+        }
+      }
+    }
+    return texts.join('\n\n').trim();
   }
 
   /// Adapted from the schemas repo's coach/PROMPT.md, MODE: REPLY.
@@ -105,15 +130,21 @@ conversationally as his coach, grounded in the ledger data, routine
 rules, and metric definitions.
 
 Plain text, concise (this renders as a chat bubble on a phone). Light
-markdown is fine — short lines, a few bullets. Do NOT output JSON. If he
-asks to change goals or routine, describe the change you'd make and note
-that editing coach/*.md happens in a desktop Claude session — you cannot
-edit files from here.''';
+markdown is fine — short lines, a few bullets. Do NOT output JSON in
+your text.
 
-  /// Assembles the full prompt: system instructions, TODAY header, coach
-  /// docs, ledger dump, chat history. Public for tests.
-  Future<String> buildPrompt(List<Record> history) async {
-    final today = now();
+You have tools. When he asks to plan or schedule a workout (or agrees
+to a plan you suggested), use list_templates / read_template to ground
+the plan in a template, fill in concrete numbers from the ledger data,
+and call propose_schedule — it shows him a card with Schedule / Not
+now buttons. Never claim something is scheduled; the card handles
+confirmation. Follow routine.md's carryover rule and state your
+reasoning in one line. If he asks to change goals or routine, describe
+the change and note that editing coach/*.md happens in a desktop
+Claude session — you cannot edit files from here.''';
+
+  /// System-prompt half: instructions, TODAY, coach docs, ledger dump.
+  Future<String> buildSystemPrompt(DateTime today) async {
     final docs = await _docsSection();
     final dump = await _ledgerDump(today);
     return [
@@ -121,6 +152,15 @@ edit files from here.''';
       'TODAY: ${_fmtDate(today)}',
       '## Coach docs\n\n$docs',
       '## Ledger data (last ${dumpWindow.inDays} days + planned)\n\n$dump',
+    ].join('\n\n');
+  }
+
+  /// Full single-string prompt (system half + history). Kept for tests
+  /// and prompt inspection; [reply] sends the halves separately.
+  Future<String> buildPrompt(List<Record> history) async {
+    final system = await buildSystemPrompt(now());
+    return [
+      system,
       '## Chat history (oldest first)\n\n${renderHistory(history)}',
       'Reply to the newest user message(s) now.',
     ].join('\n\n');

@@ -156,6 +156,8 @@ class TimelineScreen extends StatefulWidget {
 }
 
 class _TimelineScreenState extends State<TimelineScreen> {
+  // Intentionally not updated in didUpdateWidget — the screen is always
+  // pushed fresh, so initialDate can't change under a live state.
   late DateTime _selectedDate = widget.initialDate ?? _today();
   late Future<List<_Item>> _items;
 
@@ -235,8 +237,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
     _loadQboStatuses();
     widget.llmCache?.addListener(_onLlmUpdate);
     if (_highlightKeys.isNotEmpty) {
+      // Fade only after the tiles are actually visible — the 4 s window
+      // should start from render, not from a possibly-slow load.
       _highlightTimer = Timer(const Duration(seconds: 4), () {
-        if (mounted) setState(_highlightKeys.clear);
+        _items.then((_) {
+          if (mounted) setState(_highlightKeys.clear);
+        });
       });
     }
   }
@@ -699,6 +705,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
                                 ? item.values['id']?.toString()
                                 : null;
                             return _RecordTile(
+                              key: ValueKey(item.keyString),
                               view: widget.view,
                               item: item,
                               selected: selected,
@@ -1814,6 +1821,7 @@ class _RecordTile extends StatelessWidget {
   final bool highlighted;
 
   const _RecordTile({
+    super.key,
     required this.view,
     required this.item,
     required this.selected,

@@ -69,9 +69,13 @@ class _HomeScreenState extends State<HomeScreen> {
   /// while the app is live. Null until the first bootstrap wires it up.
   Timer? _syncTimer;
 
-  /// Signature of the schema state currently applied. The poller compares
-  /// the repo's signature against this to decide whether to re-sync.
-  String? _knownSig;
+  /// Signature of the cache state the CURRENT UI was built from (recorded
+  /// by [_initialize]). Distinct from the cache's own signature on disk: a
+  /// poller refresh can land while the user is mid-form, leaving the cache
+  /// newer than the UI. The poller compares the two and rebuilds once the
+  /// user is back on the home screen — conflating them used to strand the
+  /// UI on a stale view list until a manual sync.
+  String? _appliedSig;
 
   /// Reentrancy guard so overlapping ticks (slow network) don't stack.
   bool _polling = false;
@@ -93,17 +97,19 @@ class _HomeScreenState extends State<HomeScreen> {
     final packageInfo = await PackageInfo.fromPlatform();
 
     // Start the background poller once (guarded — _initialize re-runs on
-    // every sync/reload). Seed _knownSig from the cache so a freshly
-    // launched app that's already current doesn't immediately re-sync.
+    // every sync/reload).
     final github = assetConfig.github;
     if (_syncTimer == null && github != null && github.pollSeconds > 0) {
-      _knownSig = await SchemaSync.cachedSignature();
       _syncTimer = Timer.periodic(
         Duration(seconds: github.pollSeconds),
         (_) => _pollGithub(github),
       );
     }
 
+    // Record the cache state this build reads from BEFORE loading: if a
+    // refresh swaps the cache mid-load we'd rather re-render once too
+    // often than record a signature newer than the views we show.
+    _appliedSig = await SchemaSync.cachedSignature();
     final views = await SchemaLoader.loadAll();
     final keyJson =
         await rootBundle.loadString('assets/service-account.json');
@@ -200,29 +206,22 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// One poll tick: cheaply check whether the repo's schema state differs
-  /// from what's applied, and if so pull + rebuild. Silent (no snackbars)
-  /// — this runs unattended in kiosk mode. Skips entirely when the user
-  /// has anything pushed on top of the home/timeline (a form, dialog,
-  /// chat, app viewer): rebuilding then would tear down their in-progress
-  /// work. We simply retry on the next tick.
+  /// One poll tick, two independent catch-ups. (1) Cache vs remote:
+  /// [SchemaSync.ensureFresh] re-pulls when the repo changed — safe even
+  /// while the user is mid-task, it only touches the disk cache. (2) UI vs
+  /// cache: rebuild when the current UI was built from an older cache
+  /// state, deferred (not dropped) while anything is pushed on top of the
+  /// home screen — rebuilding then would tear down in-progress work, so we
+  /// retry on the next tick until the user is back. Silent (no snackbars);
+  /// this runs unattended in kiosk mode.
   Future<void> _pollGithub(GithubConfig cfg) async {
     if (_polling || !mounted) return;
-    if (Navigator.of(context).canPop()) return; // user is mid-task; defer
     _polling = true;
     try {
-      final sync = SchemaSync(GithubClient(cfg));
-      final remote = await sync.remoteSignature();
-      if (remote == null) return; // network/API hiccup — try next tick
-      if (remote == _knownSig) return; // nothing changed
-      final result = await sync.refresh();
-      if (!result.ok) return;
-      _knownSig = result.signature;
+      final cached = await SchemaSync(GithubClient(cfg)).ensureFresh();
+      if (cached == null || cached == _appliedSig) return; // UI is current
       if (!mounted) return;
-      // Re-check before rebuilding: the user may have opened a form during
-      // the fetch. If so, the cache is already updated and the new schema
-      // applies on the next natural rebuild; don't yank the UI now.
-      if (Navigator.of(context).canPop()) return;
+      if (Navigator.of(context).canPop()) return; // mid-task; retry later
       setState(() => _bootstrap = _initialize());
     } finally {
       _polling = false;
@@ -249,7 +248,6 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         return;
       }
-      _knownSig = result.signature;
       messenger.showSnackBar(
         SnackBar(
           content: Text(

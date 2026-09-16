@@ -20,6 +20,11 @@ class SchemaSync {
   final GithubClient github;
   static const _cacheDirName = 'synced_schemas';
 
+  /// Resolves the platform's app docs dir. Swappable so unit tests (which
+  /// have no plugin registry) can point the cache at a temp dir.
+  static Future<Directory> Function() docsDir =
+      getApplicationDocumentsDirectory;
+
   /// Name of the marker file (inside the cache dir) holding the signature
   /// of the last successful sync. Not a `.yml`, so the loaders skip it.
   static const _sigFileName = '.sig';
@@ -63,7 +68,7 @@ class SchemaSync {
   /// environments). Always-creates the dir on a hit.
   static Future<Directory?> cacheDir() async {
     try {
-      final base = await getApplicationDocumentsDirectory();
+      final base = await docsDir();
       final d = Directory(p.join(base.path, _cacheDirName));
       if (!d.existsSync()) d.createSync(recursive: true);
       return d;
@@ -83,13 +88,31 @@ class SchemaSync {
     return views.isNotEmpty;
   }
 
+  /// The refresh currently in flight, if any. Concurrent callers (the
+  /// background poller, the manual sync button, a double-tap of it) share
+  /// one fetch instead of racing over the tmp dir — two interleaved
+  /// refreshes used to wipe each other's half-written tmp dir and could
+  /// swap in a cache missing files while recording a complete signature,
+  /// which made the poller believe it was current forever.
+  static Future<SchemaSyncResult>? _inFlight;
+
   /// Pulls every .yml file under viewsPath from the configured repo at
   /// default_branch, writes to the cache dir, and returns a small summary
-  /// (counts + first error if any). Atomic-ish: writes go to a tmp dir
-  /// first, then swap with the real cache dir, so a half-fetched state
-  /// can't poison the cache.
-  Future<SchemaSyncResult> refresh() async {
-    final base = await getApplicationDocumentsDirectory();
+  /// (counts + first error if any). Atomic: writes go to a tmp dir first
+  /// and the swap only happens when EVERY listed file was fetched — on any
+  /// failure the previous cache (and its signature) survives untouched. A
+  /// stale complete cache beats a fresh partial one; the poller retries on
+  /// the next tick. If a refresh is already in flight, returns its future.
+  Future<SchemaSyncResult> refresh() {
+    final pending = _inFlight;
+    if (pending != null) return pending;
+    final run = _refresh().whenComplete(() => _inFlight = null);
+    _inFlight = run;
+    return run;
+  }
+
+  Future<SchemaSyncResult> _refresh() async {
+    final base = await docsDir();
     final finalDir = Directory(p.join(base.path, _cacheDirName));
     final tmpDir = Directory(p.join(base.path, '${_cacheDirName}_tmp'));
     if (tmpDir.existsSync()) tmpDir.deleteSync(recursive: true);
@@ -109,8 +132,11 @@ class SchemaSync {
         }
         final file = await github.readFile(e.path);
         if (file == null) {
-          skipped++;
-          continue;
+          // Listed but 404 on read — a push raced this refresh (file
+          // renamed/deleted) or an API blip. Swapping in a cache missing
+          // this file would silently drop its view from the app, so treat
+          // it as a failed refresh and keep the old cache.
+          throw StateError('${e.path} listed but not readable (404)');
         }
         final out = File(p.join(tmpDir.path, e.name));
         out.writeAsStringSync(file.content);
@@ -119,7 +145,7 @@ class SchemaSync {
       }
     } catch (e) {
       error = e.toString();
-      tmpDir.deleteSync(recursive: true);
+      if (tmpDir.existsSync()) tmpDir.deleteSync(recursive: true);
       return SchemaSyncResult(
         fetched: 0,
         skipped: skipped,
@@ -145,6 +171,21 @@ class SchemaSync {
       when: DateTime.now(),
       signature: signature,
     );
+  }
+
+  /// Brings the cache up to date with the remote (refreshing only when
+  /// their signatures differ) and returns the signature of whatever the
+  /// cache holds afterwards. Falls back to the current cached signature
+  /// when the remote is unreachable or the refresh fails — the caller can
+  /// still compare it against what the UI was built from and catch up to
+  /// the cache without the network. Null only when the cache has never
+  /// been written and no refresh succeeded.
+  Future<String?> ensureFresh() async {
+    final cached = await cachedSignature();
+    final remote = await remoteSignature();
+    if (remote == null || remote == cached) return cached;
+    final result = await refresh();
+    return result.ok ? result.signature : cached;
   }
 
   /// Drops the cache (forces loaders to read bundled assets again).

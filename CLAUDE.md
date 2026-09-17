@@ -53,7 +53,10 @@ anything else is a regression.
    && ./scripts/build-android.sh`, then rebuild the APK. The app parses
    schemas THROUGH the bundled dylib (`useEngine = true`); a stale .so
    silently drops new schema keys. Sanity: `strings
-   .../jniLibs/arm64-v8a/libairledger_engine.so | grep <new_key>`.
+   ~/repos/airledger/sdk-dart/build/jniLibs/arm64-v8a/
+   libairledger_engine.so | grep <new_key>` — that path is what
+   gradle bundles (jniLibs.srcDirs); the copies under this repo's
+   build/ are stale intermediates and check the WRONG file.
 2. **Push airledger-fitness after schema edits** — SchemaSync pulls
    `views/` from GitHub every ~5 min and PREFERS the synced copy; an
    unpushed edit gets reverted on device.
@@ -62,13 +65,34 @@ Schema additions go in BOTH places: Rust (`src/schema/`, `src/parse/`,
 round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 `lib/services/input_parser.dart`, `lib/services/engine_schema_adapter.dart`).
 
-## Current feature state (all live on device as of 2026-09-13)
+## Current feature state (all live on device as of 2026-09-17)
 
 - **Sync/store**: engine SQLite is source of truth; Sheets is the
-  mirror. Ingest primitive: match-by-date, owned vs fill-if-blank
-  (fill-if-blank SELF-CORRECTS the source's own unedited values via
-  provenance — 2026-09-13), provenance merge on update, deleted_dates
-  unwind. Main workbook 1C1rS…; cardio tab is literally named `4x4`.
+  mirror. Ingest primitive: match-by-date OR match-by-dimension
+  (`match_field` + `deleted_ids`, 2026-09-16 — row-grained sources
+  like Kaya ascents; unknown match_field errors loudly), owned vs
+  fill-if-blank (fill-if-blank SELF-CORRECTS the source's own
+  unedited values via provenance — 2026-09-13), provenance merge on
+  update, deleted_dates unwind. Main workbook 1C1rS…; cardio tab is
+  literally named `4x4`. SchemaSync refresh is atomic + coalesced;
+  the home poller tracks applied-vs-cached signatures separately
+  (2026-09-16 — trackers used to vanish until a manual sync).
+- **Kaya → climbing** (2026-09-17): per-ascent rows via Kaya's
+  UNOFFICIAL GraphQL API (email/password login in-app; tokens in
+  secure storage; browser-spoofed Origin/Referer required). Every
+  pull walks the FULL logbook (ascents + sessions for outdoor
+  destinations; no cursor — API sort order unverified, upserts by
+  kaya_id are idempotent) then reconciles by raw-id diff. Deletion
+  safety is triple-guarded: GraphQL shape drift throws (missing/null
+  data field), fetchedIds come from RAW wire ids (never transform
+  output), and an empty fetch against a non-empty baseline refuses
+  to diff unless the card's Full reconcile is run. gym/location and
+  lead ship explicit {'kind':'null'} so cross-boundary revisions
+  clear stale owned values; other fields stay omit-don't-clear.
+  Known-ids baseline in meta `integration_kaya_ids`. NOTE: `date`
+  trusts the Z-suffixed string's date portion as gym wall-clock —
+  verify an evening session lands on the right day; a wrong
+  assumption self-corrects on the next walk after a kayaDay fix.
 - **Withings → weight**: OAuth in-app WebView only (Custom Tabs break
   custom-scheme redirects). Reconcile re-ingests window values +
   day-set deletions. Known data issue: user should run one Full

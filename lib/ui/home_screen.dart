@@ -20,6 +20,7 @@ import '../services/engine_schema_adapter.dart';
 import 'widgets/sync_status_button.dart';
 import 'integrations_screen.dart';
 import '../services/heart_rate_service.dart';
+import '../services/integrations/kaya.dart';
 import '../services/integrations/registry.dart';
 import '../services/integrations/whoop.dart';
 import '../services/integrations/withings.dart';
@@ -142,8 +143,10 @@ class _HomeScreenState extends State<HomeScreen> {
       // Integrations first: the scheduler's app-start sync pulls due
       // sources before pushing the ledger.
       ViewSchema? weightView;
+      ViewSchema? climbingView;
       for (final v in views) {
         if (v.name == 'weight') weightView = v;
+        if (v.name == 'climbing') climbingView = v;
       }
       // _initialize() re-runs on schema reload; tear down the previous
       // service's BLE connection + retry timer before replacing it.
@@ -157,6 +160,11 @@ class _HomeScreenState extends State<HomeScreen> {
             config: assetConfig.withings,
             repo: repo.repo,
             weightViewJson: viewSchemaToEngineJson(weightView),
+          ),
+        if (climbingView != null)
+          KayaIntegration(
+            repo: repo.repo,
+            climbingViewJson: viewSchemaToEngineJson(climbingView),
           ),
         WhoopIntegration(hr: hrService),
         ComingSoonIntegration('Macrofactor', '→ meals (via Health Connect)'),

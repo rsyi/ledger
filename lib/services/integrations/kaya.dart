@@ -96,12 +96,30 @@ List<Map<String, dynamic>> kayaAscentsToRecords(
         if (gradeNameRaw is String) rec['grade'] = _str(gradeNameRaw);
       }
 
-      // lead: only emit for non-boulder rows. The wire value is false on
-      // boulders (not null), so we must gate on type, not null-check.
+      // lead: always emitted so the engine can clear stale values when an
+      // ascent is revised from route→boulder or vice-versa. Boulders and rows
+      // where climb_type is unknown or lead is wrong-typed always get
+      // {'kind':'null'}; non-boulder rows with a valid bool wire value get
+      // {'kind':'bool','value':…}.
+      //
+      // NOTE: grade/climb_name/attempts/climb_type/ascent_type/notes are NOT
+      // extended here — for those fields, absence-on-drift must stay
+      // omit-don't-clear (they have no exclusive-pair semantics and their
+      // drift scenarios don't require active clearing).
       if (isBoulder == false) {
         final leadRaw = climb['lead'];
-        if (leadRaw is bool) rec['lead'] = {'kind': 'bool', 'value': leadRaw};
+        rec['lead'] = leadRaw is bool
+            ? {'kind': 'bool', 'value': leadRaw}
+            : {'kind': 'null'};
+      } else {
+        // Boulder (isBoulder == true) or unknown type (isBoulder == null):
+        // emit null-kind so any stale route lead is cleared on update.
+        rec['lead'] = {'kind': 'null'};
       }
+    } else {
+      // No climb map: unknown type → emit null-kind for lead so the engine
+      // can clear any stale value from a previous, more-complete record.
+      rec['lead'] = {'kind': 'null'};
     }
 
     // Ascent-type: lowercase the name (e.g. 'Flash' → 'flash').
@@ -117,8 +135,17 @@ List<Map<String, dynamic>> kayaAscentsToRecords(
       rec['attempts'] = {'kind': 'int', 'value': attempts.toInt()};
     }
 
-    // Gym name: prefer ascent-level gym, fall back to climb.gym.name.
-    // If neither, and the session has a destination, emit location instead.
+    // Gym / location: always emit BOTH so the engine clears the stale member
+    // when an ascent is revised across the gym↔outdoor boundary.
+    //
+    // gym: prefer ascent-level gym, fall back to climb.gym.name; null-kind
+    //   when neither is available.
+    // location: the session destination name when no gym is present AND the
+    //   session maps to an outdoor destination; null-kind otherwise.
+    //
+    // NOTE: grade/climb_name/attempts/climb_type/ascent_type/notes are NOT
+    // extended here — absence-on-drift must stay omit-don't-clear for those
+    // fields (no exclusive-pair semantics).
     final ascentGymRaw = raw['gym'];
     final ascentGymMap = ascentGymRaw is Map ? ascentGymRaw : null;
     final ascentGymNameRaw = ascentGymMap?['name'];
@@ -131,11 +158,13 @@ List<Map<String, dynamic>> kayaAscentsToRecords(
 
     final gymName = ascentGymName ?? climbGymName;
 
-    if (gymName != null) {
-      rec['gym'] = _str(gymName);
-    } else if (sessionId != null) {
+    rec['gym'] = gymName != null ? _str(gymName) : {'kind': 'null'};
+
+    if (gymName == null && sessionId != null) {
       final dest = destinationBySession[sessionId];
-      if (dest != null) rec['location'] = _str(dest);
+      rec['location'] = dest != null ? _str(dest) : {'kind': 'null'};
+    } else {
+      rec['location'] = {'kind': 'null'};
     }
 
     // Notes from comment, only when non-empty.

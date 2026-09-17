@@ -90,7 +90,7 @@ void main() {
   // -------------------------------------------------------------------------
 
   test('gym boulder: kind-tags exact, climb_type from climb_type_group, '
-      'no lead key, no location, gym from ascent', () {
+      'lead null-kind, location null-kind, gym from ascent', () {
     final ascents = [_gymAscent()];
     final recs = kayaAscentsToRecords(ascents);
 
@@ -107,10 +107,10 @@ void main() {
     expect(r['gym'], {'kind': 'string', 'value': 'Movement RiNo'});
     expect(r['notes'], {'kind': 'string', 'value': 'Felt great'});
 
-    // Boulder → no lead key at all.
-    expect(r.containsKey('lead'), isFalse);
-    // No outdoor destination → no location key.
-    expect(r.containsKey('location'), isFalse);
+    // Boulder → lead always emitted as null-kind (not bool).
+    expect(r['lead'], {'kind': 'null'});
+    // Gym ascent → location always emitted as null-kind (not string).
+    expect(r['location'], {'kind': 'null'});
   });
 
   // -------------------------------------------------------------------------
@@ -118,7 +118,7 @@ void main() {
   // -------------------------------------------------------------------------
 
   test('outdoor route: climb_type route, lead true emitted, '
-      'location from destinationBySession, no gym key', () {
+      'location from destinationBySession, gym null-kind', () {
     final ascents = [_outdoorRoute()];
     final destMap = {'s2': 'Red Rock Canyon'};
     final recs = kayaAscentsToRecords(ascents, destinationBySession: destMap);
@@ -129,8 +129,8 @@ void main() {
     expect(r['climb_type'], {'kind': 'string', 'value': 'route'});
     expect(r['lead'], {'kind': 'bool', 'value': true});
     expect(r['location'], {'kind': 'string', 'value': 'Red Rock Canyon'});
-    // No gym on ascent or climb, and has destination → location, not gym.
-    expect(r.containsKey('gym'), isFalse);
+    // No gym on ascent or climb → gym always emitted as null-kind.
+    expect(r['gym'], {'kind': 'null'});
     // Empty comment → no notes key.
     expect(r.containsKey('notes'), isFalse);
   });
@@ -150,14 +150,14 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
-  // 4a. Boulder with lead:false → no lead key emitted.
+  // 4a. Boulder → lead always null-kind (even when wire says false).
   // -------------------------------------------------------------------------
 
-  test('boulder with lead:false → no lead key', () {
+  test('boulder with lead:false → lead null-kind', () {
     final a = _gymAscent(climbTypeGroup: 'boulder', lead: false);
     final recs = kayaAscentsToRecords([a]);
 
-    expect(recs.first.containsKey('lead'), isFalse);
+    expect(recs.first['lead'], {'kind': 'null'});
   });
 
   // -------------------------------------------------------------------------
@@ -293,6 +293,8 @@ void main() {
     expect(recs.first['date'], {'kind': 'date', 'value': '2026-09-01'});
     // gym from ascent-level gym
     expect(recs.first['gym'], {'kind': 'string', 'value': 'Local Gym'});
+    // No outdoor destination → location always emitted as null-kind.
+    expect(recs.first['location'], {'kind': 'null'});
   });
 
   // -------------------------------------------------------------------------
@@ -377,21 +379,24 @@ void main() {
     expect(recs.first['gym'], {'kind': 'string', 'value': 'Climb Gym'});
   });
 
-  test('wrong-typed ascent.gym and no climb.gym → gym field absent', () {
-    // Both ascent.gym and climb.gym are non-Map → no gym key emitted.
+  test('wrong-typed ascent.gym and no climb.gym → gym null-kind', () {
+    // Both ascent.gym and climb.gym are non-Map → gym emitted as null-kind
+    // (no gym name available, and exclusive-pair must always be emitted).
     final a = _gymAscent(ascentGymName: null, climbGymName: null);
     a['gym'] = 'not-a-map';
     final recs = kayaAscentsToRecords([a]);
     expect(recs, hasLength(1));
-    expect(recs.first.containsKey('gym'), isFalse);
+    expect(recs.first['gym'], {'kind': 'null'});
   });
 
-  test('wrong-typed lead (not a bool) → lead field skipped', () {
+  test('wrong-typed lead (not a bool) on route → lead null-kind', () {
+    // Wrong-typed lead on a route → can't emit a bool value; emit null-kind
+    // so the engine can clear any stale lead value on update.
     final a = _outdoorRoute();
     (a['climb'] as Map)['lead'] = 'yes';
     final recs = kayaAscentsToRecords([a], destinationBySession: {'s2': 'Dest'});
     expect(recs, hasLength(1));
-    expect(recs.first.containsKey('lead'), isFalse);
+    expect(recs.first['lead'], {'kind': 'null'});
   });
 
   test('wrong-typed climb (not a Map) → record produced without climb fields', () {
@@ -486,5 +491,64 @@ void main() {
     final recs = kayaAscentsToRecords([a]);
     expect(recs, hasLength(1));
     expect(recs.first['kaya_id'], {'kind': 'string', 'value': '12345'});
+  });
+
+  // -------------------------------------------------------------------------
+  // 14. gym→outdoor revision: gym null-kind + location set.
+  // -------------------------------------------------------------------------
+
+  test('gym→outdoor revision: no gym on ascent or climb, session has destination '
+      '→ gym null-kind + location string', () {
+    // Simulates an ascent that was originally at a gym but is now revised to
+    // an outdoor session. The engine must receive gym={'kind':'null'} so it
+    // clears the stale gym value rather than leaving it intact.
+    final a = _outdoorRoute(id: 'rev1', sessionId: 's_rev');
+    final recs = kayaAscentsToRecords(
+      [a],
+      destinationBySession: {'s_rev': 'Eldorado Canyon'},
+    );
+    expect(recs, hasLength(1));
+    final r = recs.first;
+    expect(r['gym'], {'kind': 'null'});
+    expect(r['location'], {'kind': 'string', 'value': 'Eldorado Canyon'});
+  });
+
+  // -------------------------------------------------------------------------
+  // 15. outdoor→gym revision: location null-kind + gym set.
+  // -------------------------------------------------------------------------
+
+  test('outdoor→gym revision: ascent has gym, no matching session destination '
+      '→ gym string + location null-kind', () {
+    // Simulates an ascent that was outdoor but revised to gym. The engine must
+    // receive location={'kind':'null'} so it clears the stale location value.
+    final a = _gymAscent(id: 'rev2', sessionId: 's_gym');
+    final recs = kayaAscentsToRecords(
+      [a],
+      // Session exists but is not outdoor (no destination key) — so no location.
+      destinationBySession: {},
+    );
+    expect(recs, hasLength(1));
+    final r = recs.first;
+    expect(r['gym'], {'kind': 'string', 'value': 'Movement RiNo'});
+    expect(r['location'], {'kind': 'null'});
+  });
+
+  // -------------------------------------------------------------------------
+  // 16. route→boulder revision: lead null-kind for boulders.
+  // -------------------------------------------------------------------------
+
+  test('route→boulder revision: climb_type_group boulder → lead null-kind', () {
+    // A climb previously categorised as a route (with lead=true stored in the
+    // engine) is now a boulder. lead must be null-kind so the engine clears
+    // the stale value; emitting nothing would leave the old lead intact.
+    final a = _gymAscent(
+      id: 'rev3',
+      climbTypeGroup: 'boulder',
+      climbTypeName: 'Boulders',
+      lead: false, // wire always sends false for boulders
+    );
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    expect(recs.first['lead'], {'kind': 'null'});
   });
 }

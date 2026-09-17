@@ -11,20 +11,15 @@
 /// transform functions it depends on.
 library;
 
-// No flutter imports needed: pure Dart transform functions only.
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /// Transform a raw list of Kaya ascent maps (from `ascentsForUser`) into
 /// engine ingest records tagged with kind metadata.
 ///
 /// [destinationBySession] maps session_id → destination name for outdoor
 /// sessions; build it with [kayaDestinationsBySession] before calling this.
 ///
-/// Malformed ascents (non-map, missing/null id, unparseable date) are silently
-/// dropped — caller should log the count if needed.
+/// Malformed ascents (non-map, missing/null/empty id, unparseable date) are
+/// silently dropped — caller should log the count if needed. Wrong-typed
+/// fields within an otherwise-valid ascent are omitted rather than crashing.
 List<Map<String, dynamic>> kayaAscentsToRecords(
   List<dynamic> ascents, {
   Map<String, String> destinationBySession = const {},
@@ -34,11 +29,13 @@ List<Map<String, dynamic>> kayaAscentsToRecords(
     if (raw is! Map) continue;
     final id = raw['id'];
     if (id == null) continue;
+    final idStr = id.toString();
+    if (idStr.isEmpty) continue;
     final day = kayaDay(raw['date']);
     if (day == null) continue;
 
     final rec = <String, dynamic>{
-      'kaya_id': _str(id.toString()),
+      'kaya_id': _str(idStr),
       'date': {'kind': 'date', 'value': day},
     };
 
@@ -46,53 +43,81 @@ List<Map<String, dynamic>> kayaAscentsToRecords(
     // number on the wire so coerce to string.
     final sessionId = raw['session_id']?.toString();
 
-    final climb = raw['climb'] as Map?;
+    final climbRaw = raw['climb'];
+    final climb = climbRaw is Map ? climbRaw : null;
 
-    // Climb-level fields (only when climb is present).
+    // Climb-level fields (only when climb is a Map).
     if (climb != null) {
       final climbName = climb['name'];
-      if (climbName != null) rec['climb_name'] = _str(climbName as String);
+      if (climbName is String) rec['climb_name'] = _str(climbName);
 
       // Derive boulder/route from climb_type_group first; fall back to
       // lowercased climb_type.name prefix match ('boulder…' → boulder, else
       // route). The API returns PLURAL names ("Boulders", "Routes") so the
       // simple startsWith works correctly.
-      final grade = climb['grade'] as Map?;
-      final ctGroup = grade?['climb_type_group'] as String?;
+      //
+      // Omit climb_type entirely when no usable signal is available.
+      final gradeRaw = climb['grade'];
+      final grade = gradeRaw is Map ? gradeRaw : null;
+      final ctGroupRaw = grade?['climb_type_group'];
+      final ctGroup = ctGroupRaw is String ? ctGroupRaw : null;
+      final climbTypeRaw = climb['climb_type'];
+      final climbTypeMap = climbTypeRaw is Map ? climbTypeRaw : null;
+      final climbTypeNameRaw = climbTypeMap?['name'];
       final climbTypeName =
-          ((climb['climb_type'] as Map?)?['name'] as String? ?? '').toLowerCase();
-      final isBoulder = ctGroup != null
-          ? ctGroup == 'boulder'
-          : climbTypeName.startsWith('boulder');
-      rec['climb_type'] = _str(isBoulder ? 'boulder' : 'route');
+          climbTypeNameRaw is String ? climbTypeNameRaw.toLowerCase() : '';
+
+      final bool? isBoulder;
+      if (ctGroup != null) {
+        isBoulder = ctGroup == 'boulder';
+      } else if (climbTypeName.isNotEmpty) {
+        isBoulder = climbTypeName.startsWith('boulder');
+      } else {
+        isBoulder = null;
+      }
+
+      if (isBoulder != null) {
+        rec['climb_type'] = _str(isBoulder ? 'boulder' : 'route');
+      }
 
       if (grade != null) {
-        final gradeName = grade['name'] as String?;
-        if (gradeName != null) rec['grade'] = _str(gradeName);
+        final gradeNameRaw = grade['name'];
+        if (gradeNameRaw is String) rec['grade'] = _str(gradeNameRaw);
       }
 
       // lead: only emit for non-boulder rows. The wire value is false on
       // boulders (not null), so we must gate on type, not null-check.
-      if (!isBoulder) {
-        final lead = climb['lead'];
-        if (lead != null) rec['lead'] = {'kind': 'bool', 'value': lead as bool};
+      if (isBoulder == false) {
+        final leadRaw = climb['lead'];
+        if (leadRaw is bool) rec['lead'] = {'kind': 'bool', 'value': leadRaw};
       }
     }
 
     // Ascent-type: lowercase the name (e.g. 'Flash' → 'flash').
-    final ascentType = (raw['ascent_type'] as Map?)?['name'] as String?;
-    if (ascentType != null) rec['ascent_type'] = _str(ascentType.toLowerCase());
+    final ascentTypeRaw = raw['ascent_type'];
+    if (ascentTypeRaw is Map) {
+      final nameRaw = ascentTypeRaw['name'];
+      if (nameRaw is String) rec['ascent_type'] = _str(nameRaw.toLowerCase());
+    }
 
     // Attempts.
     final attempts = raw['attempts'];
-    if (attempts != null) {
-      rec['attempts'] = {'kind': 'int', 'value': (attempts as num).toInt()};
+    if (attempts is num) {
+      rec['attempts'] = {'kind': 'int', 'value': attempts.toInt()};
     }
 
     // Gym name: prefer ascent-level gym, fall back to climb.gym.name.
     // If neither, and the session has a destination, emit location instead.
-    final ascentGymName = (raw['gym'] as Map?)?['name'] as String?;
-    final climbGymName = (climb?['gym'] as Map?)?['name'] as String?;
+    final ascentGymRaw = raw['gym'];
+    final ascentGymMap = ascentGymRaw is Map ? ascentGymRaw : null;
+    final ascentGymNameRaw = ascentGymMap?['name'];
+    final ascentGymName = ascentGymNameRaw is String ? ascentGymNameRaw : null;
+
+    final climbGymRaw = climb?['gym'];
+    final climbGymMap = climbGymRaw is Map ? climbGymRaw : null;
+    final climbGymNameRaw = climbGymMap?['name'];
+    final climbGymName = climbGymNameRaw is String ? climbGymNameRaw : null;
+
     final gymName = ascentGymName ?? climbGymName;
 
     if (gymName != null) {
@@ -103,10 +128,29 @@ List<Map<String, dynamic>> kayaAscentsToRecords(
     }
 
     // Notes from comment, only when non-empty.
-    final comment = raw['comment'] as String?;
-    if (comment != null && comment.isNotEmpty) rec['notes'] = _str(comment);
+    final commentRaw = raw['comment'];
+    if (commentRaw is String && commentRaw.isNotEmpty) {
+      rec['notes'] = _str(commentRaw);
+    }
 
     result.add(rec);
+  }
+  return result;
+}
+
+/// Ids of every ascent Kaya RETURNED, independent of whether the
+/// transform could produce a record for it. The reconcile diff must use
+/// this — never the transformed records — so a parse regression reads
+/// as "row not updated", never "row deleted".
+Set<String> kayaFetchedIds(List<dynamic> ascents) {
+  final result = <String>{};
+  for (final raw in ascents) {
+    if (raw is! Map) continue;
+    final id = raw['id'];
+    if (id == null) continue;
+    final idStr = id.toString();
+    if (idStr.isEmpty) continue;
+    result.add(idStr);
   }
   return result;
 }
@@ -177,10 +221,6 @@ List<String> kayaDeletedIds({
   return (knownIds.difference(fetchedIds).toList())..sort();
 }
 
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
 // Month-name → 1-based month number for JS Date.toString() parsing.
 const _kMonths = {
   'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
@@ -210,8 +250,12 @@ String? _parseJsDateString(String v) {
 Map<String, dynamic> _str(String v) => {'kind': 'string', 'value': v};
 
 String _fmtDate(DateTime dt) {
-  // UTC is the right frame: dates on Kaya are stamped at the gym timezone but
-  // transmitted as UTC ISO strings; we trust the date portion as-is.
+  // Assumption: Kaya Z-suffixed timestamps carry the wall-clock date in the
+  // gym's local timezone, transmitted as fake-UTC. The date portion is trusted
+  // as-is without conversion. This assumption should be verified on-device
+  // during rollout: an evening session must land on the correct calendar day.
+  // A wrong assumption self-corrects on the next full walk because date is an
+  // owned field keyed by kaya_id.
   final d = dt.isUtc ? dt : dt.toUtc();
   return '${d.year.toString().padLeft(4, '0')}-'
       '${d.month.toString().padLeft(2, '0')}-'

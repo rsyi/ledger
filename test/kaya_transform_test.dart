@@ -337,4 +337,154 @@ void main() {
     final recs = kayaAscentsToRecords([a]);
     expect(recs.first['gym'], {'kind': 'string', 'value': 'Climb Gym'});
   });
+
+  // -------------------------------------------------------------------------
+  // 9. is-guards: wrong-typed fields skip gracefully instead of throwing.
+  // -------------------------------------------------------------------------
+
+  test('wrong-typed climb.name (int) → record produced without climb_name', () {
+    final a = _gymAscent();
+    // Overwrite climb.name with a non-String to trigger the guard.
+    (a['climb'] as Map)['name'] = 123;
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    expect(recs.first.containsKey('climb_name'), isFalse);
+  });
+
+  test("wrong-typed attempts ('two') → record produced without attempts", () {
+    final a = _gymAscent();
+    a['attempts'] = 'two';
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    expect(recs.first.containsKey('attempts'), isFalse);
+  });
+
+  test('wrong-typed ascent_type (not a Map) → record produced without ascent_type', () {
+    final a = _gymAscent();
+    a['ascent_type'] = 'Flash';
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    expect(recs.first.containsKey('ascent_type'), isFalse);
+  });
+
+  test('wrong-typed ascent.gym (not a Map) falls through to climb.gym', () {
+    // When ascent.gym is not a Map it is skipped; climb.gym.name is the fallback.
+    final a = _gymAscent(ascentGymName: 'Ascent Gym', climbGymName: 'Climb Gym');
+    a['gym'] = 'not-a-map';
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    // ascent.gym is malformed → falls back to climb.gym
+    expect(recs.first['gym'], {'kind': 'string', 'value': 'Climb Gym'});
+  });
+
+  test('wrong-typed ascent.gym and no climb.gym → gym field absent', () {
+    // Both ascent.gym and climb.gym are non-Map → no gym key emitted.
+    final a = _gymAscent(ascentGymName: null, climbGymName: null);
+    a['gym'] = 'not-a-map';
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    expect(recs.first.containsKey('gym'), isFalse);
+  });
+
+  test('wrong-typed lead (not a bool) → lead field skipped', () {
+    final a = _outdoorRoute();
+    (a['climb'] as Map)['lead'] = 'yes';
+    final recs = kayaAscentsToRecords([a], destinationBySession: {'s2': 'Dest'});
+    expect(recs, hasLength(1));
+    expect(recs.first.containsKey('lead'), isFalse);
+  });
+
+  test('wrong-typed climb (not a Map) → record produced without climb fields', () {
+    final a = _gymAscent();
+    a['climb'] = 'not a map';
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    expect(recs.first.containsKey('climb_name'), isFalse);
+    expect(recs.first.containsKey('climb_type'), isFalse);
+    expect(recs.first.containsKey('grade'), isFalse);
+  });
+
+  test('wrong-typed comment (not a String) → notes field skipped', () {
+    final a = _gymAscent();
+    a['comment'] = 42;
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    expect(recs.first.containsKey('notes'), isFalse);
+  });
+
+  // -------------------------------------------------------------------------
+  // 10. kayaFetchedIds: extracts ids from the raw list.
+  // -------------------------------------------------------------------------
+
+  test('kayaFetchedIds: returns id of each valid ascent map', () {
+    final ascents = [
+      _gymAscent(id: 'a1'),
+      _outdoorRoute(id: 'a2'),
+    ];
+    final ids = kayaFetchedIds(ascents);
+    expect(ids, {'a1', 'a2'});
+  });
+
+  test('kayaFetchedIds: numeric ids coerced to string', () {
+    final ascents = [
+      {'id': 12345, 'date': '2026-09-14T00:00:00.000Z'},
+    ];
+    final ids = kayaFetchedIds(ascents);
+    expect(ids, {'12345'});
+  });
+
+  test('kayaFetchedIds: mixed junk list → only real ids', () {
+    final ascents = [
+      'not a map', // non-map: skipped
+      {'date': '2026-09-01T00:00:00.000Z'}, // no id: skipped
+      {'id': null, 'date': '2026-09-01T00:00:00.000Z'}, // null id: skipped
+      {'id': '', 'date': '2026-09-01T00:00:00.000Z'}, // empty id: skipped
+      {'id': 'real', 'date': '2026-09-01T00:00:00.000Z'},
+    ];
+    final ids = kayaFetchedIds(ascents);
+    expect(ids, {'real'});
+  });
+
+  test('kayaFetchedIds: ascent with unparseable date still contributes its id', () {
+    final ascents = [
+      {'id': 'bad-date', 'date': 'garbage'},
+    ];
+    // Transform would drop this ascent, but kayaFetchedIds must still return it.
+    final ids = kayaFetchedIds(ascents);
+    expect(ids, {'bad-date'});
+  });
+
+  // -------------------------------------------------------------------------
+  // 11. Empty-string id → ascent dropped in transform.
+  // -------------------------------------------------------------------------
+
+  test('ascent with empty-string id is dropped by transform', () {
+    final a = _gymAscent();
+    a['id'] = '';
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, isEmpty);
+  });
+
+  // -------------------------------------------------------------------------
+  // 12. No climb_type when climb present but no usable type signal.
+  // -------------------------------------------------------------------------
+
+  test('climb present but no grade.climb_type_group and no climb_type.name → no climb_type key', () {
+    final a = _gymAscent(climbTypeGroup: null, climbTypeName: '');
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    expect(recs.first.containsKey('climb_type'), isFalse);
+  });
+
+  // -------------------------------------------------------------------------
+  // 13. Numeric ascent id coercion in transform.
+  // -------------------------------------------------------------------------
+
+  test('numeric ascent id coerced to string kaya_id', () {
+    final a = Map<String, dynamic>.from(_gymAscent());
+    a['id'] = 12345;
+    final recs = kayaAscentsToRecords([a]);
+    expect(recs, hasLength(1));
+    expect(recs.first['kaya_id'], {'kind': 'string', 'value': '12345'});
+  });
 }

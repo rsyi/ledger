@@ -218,4 +218,86 @@ void main() {
       throwsA(isA<StateError>()),
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // kayaRetryDelay — cap Retry-After to 60 s
+  // ---------------------------------------------------------------------------
+
+  test('kayaRetryDelay: header "0" → Duration.zero', () {
+    expect(kayaRetryDelay('0', 0), Duration.zero);
+  });
+
+  test('kayaRetryDelay: header "7" → 7 seconds', () {
+    expect(kayaRetryDelay('7', 0), const Duration(seconds: 7));
+  });
+
+  test('kayaRetryDelay: header "604800" (1 week) is capped to 60 s', () {
+    expect(kayaRetryDelay('604800', 0), const Duration(seconds: 60));
+  });
+
+  test('kayaRetryDelay: null header → exponential fallback 5<<attempt', () {
+    expect(kayaRetryDelay(null, 0), const Duration(seconds: 5));
+    expect(kayaRetryDelay(null, 1), const Duration(seconds: 10));
+    expect(kayaRetryDelay(null, 2), const Duration(seconds: 20));
+  });
+
+  test('kayaRetryDelay: negative header "-3" falls back to 5<<attempt', () {
+    expect(kayaRetryDelay('-3', 1), const Duration(seconds: 10));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Shape drift: missing queryName in data → StateError (not empty list)
+  // ---------------------------------------------------------------------------
+
+  test('200 with data:{} (missing queryName) throws StateError', () async {
+    final client = MockClient((_) async => http.Response(
+          jsonEncode({'data': <String, dynamic>{}}),
+          200,
+        ));
+    final api = KayaApi(client: client);
+
+    expect(
+      () => api.ascentsPage(token: 'tok', userId: '1', offset: 0),
+      throwsA(isA<StateError>()),
+    );
+  });
+
+  test('200 with data:{ascentsForUser:[]} returns empty list (not error)',
+      () async {
+    final client = MockClient((_) async => http.Response(
+          jsonEncode({'data': {'ascentsForUser': <dynamic>[]}}),
+          200,
+        ));
+    final api = KayaApi(client: client);
+
+    final result =
+        await api.ascentsPage(token: 'tok', userId: '1', offset: 0);
+    expect(result, isEmpty);
+  });
+
+  // ---------------------------------------------------------------------------
+  // refresh 401 → KayaAuthException; refresh 500 → StateError
+  // ---------------------------------------------------------------------------
+
+  test('refresh with 401 throws KayaAuthException', () async {
+    final client = MockClient(
+        (_) async => http.Response('{"message":"Unauthorized"}', 401));
+    final api = KayaApi(client: client);
+
+    expect(
+      () => api.refresh('bad-refresh-token'),
+      throwsA(isA<KayaAuthException>()),
+    );
+  });
+
+  test('refresh with 500 throws StateError', () async {
+    final client = MockClient(
+        (_) async => http.Response('{"message":"Server Error"}', 500));
+    final api = KayaApi(client: client);
+
+    expect(
+      () => api.refresh('some-refresh-token'),
+      throwsA(isA<StateError>()),
+    );
+  });
 }

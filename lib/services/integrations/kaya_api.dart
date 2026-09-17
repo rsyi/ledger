@@ -14,6 +14,27 @@ import 'package:http/http.dart' as http;
 // Public query constants (consumers use these to avoid typos).
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Package-visible helper — testable Retry-After parser
+// ---------------------------------------------------------------------------
+
+/// Compute the delay to wait before retrying a 429 response.
+///
+/// If [retryAfterHeader] is present and parses as a non-negative integer, it
+/// is used — but capped to 60 s so a hostile or buggy server header cannot
+/// stall a pull for hours. Negative values and parse failures fall back to
+/// exponential back-off: 5 × 2^[attempt] seconds.
+Duration kayaRetryDelay(String? retryAfterHeader, int attempt) {
+  if (retryAfterHeader != null) {
+    final secs = int.tryParse(retryAfterHeader.trim());
+    if (secs != null && secs >= 0) {
+      // Cap to 60 s: a hostile/buggy header must not stall a pull for hours.
+      return Duration(seconds: secs.clamp(0, 60));
+    }
+  }
+  return Duration(seconds: 5 << attempt);
+}
+
 const kAscentsQuery =
     'query ascentsForUser(\$user_id: ID!, \$offset: Int!, \$count: Int!) '
     '{ ascentsForUser(user_id: \$user_id, offset: \$offset, count: \$count) '
@@ -121,6 +142,11 @@ class KayaApi {
       body: jsonEncode({'refresh_token': refreshToken}),
     );
 
+    if (res.statusCode == 401) {
+      // A rejected refresh token means re-auth is required; throw the typed
+      // exception so callers' error-handling taxonomy composes cleanly.
+      throw const KayaAuthException('Kaya refresh token rejected');
+    }
     if (res.statusCode != 200) {
       throw StateError('Kaya refresh failed (${res.statusCode})');
     }
@@ -205,8 +231,8 @@ class KayaApi {
 
       if (res.statusCode == 429) {
         if (attempt >= 3) break; // exhausted retries → fall through
-        final retryAfter = _parseRetryAfter(res.headers['retry-after'],
-            fallback: 5 << attempt);
+        final retryAfter =
+            kayaRetryDelay(res.headers['retry-after'], attempt);
         if (retryAfter > Duration.zero) {
           await Future<void>.delayed(retryAfter);
         }
@@ -227,7 +253,12 @@ class KayaApi {
       }
 
       final data = json['data'] as Map<String, dynamic>?;
-      final rows = data?[queryName];
+      // The caller diffs known-vs-fetched ids to compute deletions; shape
+      // drift reading as an empty logbook would mass-delete rows.
+      if (data == null || !data.containsKey(queryName)) {
+        throw StateError('Kaya graphql: missing $queryName in response');
+      }
+      final rows = data[queryName];
       if (rows == null) return const [];
       return (rows as List).cast<Map<String, dynamic>>();
     }
@@ -235,11 +266,4 @@ class KayaApi {
     throw StateError('Kaya GraphQL: rate-limited after 3 retries');
   }
 
-  Duration _parseRetryAfter(String? header, {required int fallback}) {
-    if (header != null) {
-      final secs = int.tryParse(header.trim());
-      if (secs != null) return Duration(seconds: secs);
-    }
-    return Duration(seconds: fallback);
-  }
 }

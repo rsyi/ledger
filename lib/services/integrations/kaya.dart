@@ -1,4 +1,5 @@
-/// Kaya climbing-app → ledger integration: transform + reconcile-diff.
+/// Kaya climbing-app → ledger integration: transform, reconcile-diff, and
+/// the Integration class that drives the full pull loop.
 ///
 /// Design: no cursor. Every pull fetches ALL ascents for the user (the Kaya
 /// GraphQL endpoint supports offset+count paging but has no updatedat filter).
@@ -6,10 +7,20 @@
 /// independent and all upserts are idempotent by kaya_id — re-running with the
 /// same data is a no-op at the engine layer. Deletions are computed as
 /// (knownIds - fetchedIds), matching the full-walk reconcile pattern used by
-/// Withings. A KayaIntegration class (next task) drives the pull loop and
-/// plugs into the integration registry; this file contains only the pure
-/// transform functions it depends on.
+/// Withings. [KayaIntegration] drives the pull loop and plugs into the
+/// integration registry; the pure transform functions it depends on are below.
 library;
+
+import 'dart:convert';
+
+import 'package:airledger_engine/airledger_engine.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+import 'integration.dart';
+import 'kaya_api.dart';
+
+export 'kaya_api.dart' show KayaAuthException;
 
 /// Transform a raw list of Kaya ascent maps (from `ascentsForUser`) into
 /// engine ingest records tagged with kind metadata.
@@ -260,4 +271,418 @@ String _fmtDate(DateTime dt) {
   return '${d.year.toString().padLeft(4, '0')}-'
       '${d.month.toString().padLeft(2, '0')}-'
       '${d.day.toString().padLeft(2, '0')}';
+}
+
+// ---------------------------------------------------------------------------
+// Pull-loop constants
+// ---------------------------------------------------------------------------
+
+const _kMinPullInterval = Duration(hours: 6);
+const _kPageDelay = Duration(seconds: 2);
+const _kPageSize = 100;
+const _kMaxOffset = 20000; // runaway guard
+
+// ---------------------------------------------------------------------------
+// kayaWalk — extracted pagination loop (package-visible for unit tests)
+// ---------------------------------------------------------------------------
+
+/// Fetch all rows from a Kaya paginated endpoint by calling [page] repeatedly
+/// starting at offset 0 and incrementing by [pageSize] until a short page
+/// (fewer than [pageSize] rows) is received or [maxOffset] is reached.
+///
+/// A [pageDelay] is inserted BETWEEN pages (not before the first) to avoid
+/// hammering the server. The default matches the production constant
+/// [_kPageDelay]; tests pass [Duration.zero].
+///
+/// Propagates [KayaAuthException] directly — the Integration layer handles
+/// re-auth above this helper.
+Future<List<Map<String, dynamic>>> kayaWalk(
+  Future<List<Map<String, dynamic>>> Function(int offset) page, {
+  Duration pageDelay = _kPageDelay,
+  int pageSize = _kPageSize,
+  int maxOffset = _kMaxOffset,
+}) async {
+  final all = <Map<String, dynamic>>[];
+  var offset = 0;
+  var first = true;
+  while (offset < maxOffset) {
+    if (!first) await Future<void>.delayed(pageDelay);
+    first = false;
+    final rows = await page(offset);
+    all.addAll(rows);
+    if (rows.length < pageSize) break; // short page → done
+    offset += pageSize;
+  }
+  return all;
+}
+
+// ---------------------------------------------------------------------------
+// KayaIntegration
+// ---------------------------------------------------------------------------
+
+class KayaIntegration implements Integration {
+  /// Kaya uses email/password authentication with no app-level credentials
+  /// (no client_id or client_secret). The only secret is the user's own
+  /// refresh token, which we store in secure storage after a successful login.
+  /// Because there are no build-time app secrets, [isConfigured] is always
+  /// true — the card is always live.
+  KayaIntegration({
+    required this.repo,
+    required this.climbingViewJson,
+    KayaApi? api,
+  }) : api = api ?? KayaApi();
+
+  final EngineLedgerRepository repo;
+
+  /// Engine JSON of the climbing view (with date_field applied).
+  final Map<String, dynamic> climbingViewJson;
+
+  final KayaApi api;
+
+  static const _storage = FlutterSecureStorage();
+  static const _kToken = 'kaya_token';
+  static const _kRefresh = 'kaya_refresh';
+  static const _kUserId = 'kaya_user_id';
+
+  // Ledger-meta keys (shared source of truth with the card).
+  static const _kLastPull = 'integration_kaya_last_pull';
+  static const _kStatus = 'integration_kaya_status';
+  static const _kError = 'integration_kaya_error';
+  static const _kIds = 'integration_kaya_ids';
+
+  @override
+  String get id => 'kaya';
+  @override
+  String get displayName => 'Kaya';
+  @override
+  String get targetDescription => '→ climbing';
+  @override
+  bool get isConfigured => true; // no app secrets; always live
+
+  @override
+  Future<bool> get isConnected async =>
+      (await _storage.read(key: _kRefresh)) != null;
+
+  @override
+  Future<String> get statusLine async {
+    if (!await isConnected) return 'Not connected';
+    final status = await repo.metaGet(_kStatus);
+    if (status == 'reconnect') return 'Reconnect needed';
+    if (status == 'error') {
+      final e = await repo.metaGet(_kError) ?? 'unknown';
+      return 'Error: $e';
+    }
+    final last = await repo.metaGet(_kLastPull);
+    final ids = _decodeIds(await repo.metaGet(_kIds));
+    final count = ids.length;
+    final when = last == null
+        ? 'never'
+        : DateTime.tryParse(last)
+                ?.toLocal()
+                .toString()
+                .substring(11, 16) ??
+            last;
+    return 'Connected · last pulled $when · $count ascent(s) synced';
+  }
+
+  @override
+  Map<String, Future<void> Function(BuildContext)> get extraMenuActions =>
+      const {};
+
+  @override
+  Future<void> connect(BuildContext context) async {
+    String? dialogError;
+    bool busy = false;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Connect Kaya'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                decoration: const InputDecoration(labelText: 'Email'),
+                keyboardType: TextInputType.emailAddress,
+                enabled: !busy,
+                onChanged: (v) => _emailController.text = v,
+                controller: _emailController,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                decoration: const InputDecoration(labelText: 'Password'),
+                obscureText: true,
+                enabled: !busy,
+                onChanged: (v) => _passwordController.text = v,
+                controller: _passwordController,
+              ),
+              if (dialogError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  dialogError!,
+                  style: TextStyle(
+                    color: Theme.of(ctx).colorScheme.error,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      final email = _emailController.text.trim();
+                      final password = _passwordController.text;
+                      if (email.isEmpty || password.isEmpty) {
+                        setState(() {
+                          dialogError = 'Email and password are required.';
+                        });
+                        return;
+                      }
+                      setState(() {
+                        busy = true;
+                        dialogError = null;
+                      });
+                      try {
+                        final auth = await api.login(email, password);
+                        await _storage.write(
+                            key: _kToken, value: auth.token);
+                        await _storage.write(
+                            key: _kRefresh, value: auth.refreshToken);
+                        await _storage.write(
+                            key: _kUserId, value: auth.userId);
+                        if (ctx.mounted) Navigator.of(ctx).pop(true);
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          setState(() {
+                            busy = false;
+                            dialogError = _loginErrorMessage(e);
+                          });
+                        }
+                      }
+                    },
+              child: const Text('Connect'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    // Clear the text controllers after the dialog regardless of outcome.
+    _emailController.clear();
+    _passwordController.clear();
+
+    if (confirmed != true) return;
+
+    await repo.metaSet(_kStatus, 'ok');
+    // First pull = full backfill; don't block the UI on it.
+    // ignore: unawaited_futures
+    pull(force: true);
+  }
+
+  @override
+  Future<void> disconnect() async {
+    await _storage.delete(key: _kToken);
+    await _storage.delete(key: _kRefresh);
+    await _storage.delete(key: _kUserId);
+    await repo.metaSet(_kStatus, '');
+    await repo.metaSet(_kError, '');
+    // _kIds intentionally kept: reconnect stays consistent with the
+    // provenance the engine still holds (mirrors Withings _kDays).
+  }
+
+  @override
+  Future<void> pull({bool force = false, bool fullReconcile = false}) async {
+    // fullReconcile behaves identically to a normal pull because every pull
+    // is already a full walk of the user's logbook — Kaya's API has no
+    // updated-at filter, so we always fetch everything and diff against
+    // knownIds. The parameter exists to satisfy the Integration contract.
+    if (!await isConnected) return;
+    try {
+      if (!force) {
+        final last = await repo.metaGet(_kLastPull);
+        final lastAt = last == null ? null : DateTime.tryParse(last);
+        if (lastAt != null &&
+            DateTime.now().difference(lastAt) < _kMinPullInterval) {
+          return;
+        }
+      }
+
+      // ----------------------------------------------------------------
+      // 1. Walk both endpoints concurrently.
+      // ----------------------------------------------------------------
+      final token = await _storage.read(key: _kToken);
+      final userId = await _storage.read(key: _kUserId);
+      if (token == null || userId == null) return;
+
+      // Shared helper that wraps a single page call with one refresh-retry.
+      Future<List<Map<String, dynamic>>> Function(int) ascentsPageFn(
+          String tok) {
+        return (int offset) => api.ascentsPage(
+              token: tok,
+              userId: userId,
+              offset: offset,
+              count: _kPageSize,
+            );
+      }
+
+      Future<List<Map<String, dynamic>>> Function(int) sessionsPageFn(
+          String tok) {
+        return (int offset) => api.sessionsPage(
+              token: tok,
+              userId: userId,
+              offset: offset,
+              count: _kPageSize,
+            );
+      }
+
+      // Walk ascents, retrying once on auth failure.
+      final ascents = await _walkWithRefresh(ascentsPageFn, token);
+      if (ascents == null) return; // reconnect status already set
+
+      // Walk sessions, retrying once on auth failure.
+      // We re-read the stored token after a possible refresh during ascents.
+      final freshToken =
+          await _storage.read(key: _kToken) ?? token;
+      final sessions = await _walkWithRefresh(sessionsPageFn, freshToken);
+      if (sessions == null) return; // reconnect status already set
+
+      // ----------------------------------------------------------------
+      // 2. Transform.
+      // ----------------------------------------------------------------
+      final records = kayaAscentsToRecords(
+        ascents,
+        destinationBySession: kayaDestinationsBySession(sessions),
+      );
+
+      // fetchedIds uses RAW ascent ids, never derived from records, so a
+      // parse regression reads as "row not updated", never "row deleted".
+      final fetchedIds = kayaFetchedIds(ascents);
+
+      // ----------------------------------------------------------------
+      // 3. Mass-drift guard: ascents present but transform produced nothing
+      //    → wire format changed; abort rather than mass-deleting rows.
+      // ----------------------------------------------------------------
+      if (ascents.isNotEmpty && records.isEmpty) {
+        await repo.metaSet(_kStatus, 'error');
+        await repo.metaSet(
+          _kError,
+          'kaya: transform produced no records from '
+          '${ascents.length} ascents (wire drift?)',
+        );
+        return;
+      }
+
+      // ----------------------------------------------------------------
+      // 4. Compute deletions and ingest.
+      // ----------------------------------------------------------------
+      final knownIds = _decodeIds(await repo.metaGet(_kIds));
+      final deleted =
+          kayaDeletedIds(fetchedIds: fetchedIds, knownIds: knownIds);
+
+      if (records.isNotEmpty || deleted.isNotEmpty) {
+        await repo.ingest(climbingViewJson, {
+          'source': 'kaya',
+          'match_field': 'kaya_id',
+          'owned_fields': [
+            'kaya_id',
+            'date',
+            'climb_name',
+            'climb_type',
+            'grade',
+            'ascent_type',
+            'attempts',
+            'lead',
+            'gym',
+            'location',
+          ],
+          'fill_if_blank_fields': ['notes'],
+          'records': records,
+          'deleted_ids': deleted,
+        });
+        final sortedIds = fetchedIds.toList()..sort();
+        await repo.metaSet(_kIds, jsonEncode(sortedIds));
+      }
+
+      await repo.metaSet(_kLastPull, DateTime.now().toIso8601String());
+      await repo.metaSet(_kStatus, 'ok');
+      await repo.metaSet(_kError, '');
+    } catch (e) {
+      await repo.metaSet(_kStatus, 'error');
+      await repo.metaSet(_kError, e.toString());
+    }
+  }
+
+  // ------------------------------------------------------ internals
+
+  /// One pair of ephemeral controllers for the connect dialog.
+  /// Declared here (not inside connect()) so they outlive the builder
+  /// closures; disposed by clear() in connect() after the dialog closes.
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+
+  Set<String> _decodeIds(String? json) {
+    if (json == null || json.isEmpty) return <String>{};
+    final decoded = jsonDecode(json);
+    return decoded is List ? decoded.cast<String>().toSet() : <String>{};
+  }
+
+  /// Walk a paginated endpoint, retrying once if a [KayaAuthException] is
+  /// thrown. On retry failure (or refresh-token rejection) sets the status
+  /// to 'reconnect' and returns null so pull() can abort silently.
+  Future<List<Map<String, dynamic>>?> _walkWithRefresh(
+    Future<List<Map<String, dynamic>>> Function(int) Function(String token)
+        pageFn,
+    String currentToken,
+  ) async {
+    try {
+      return await kayaWalk(pageFn(currentToken));
+    } on KayaAuthException {
+      // First auth failure: try to refresh and retry once.
+      final newToken = await _refreshToken();
+      if (newToken == null) return null; // reconnect status already set
+      try {
+        return await kayaWalk(pageFn(newToken));
+      } on KayaAuthException {
+        await repo.metaSet(_kStatus, 'reconnect');
+        return null;
+      }
+    }
+  }
+
+  /// Exchange the stored refresh token for a new bearer token and persist it.
+  /// Returns the new token, or null on any failure (status set to 'reconnect').
+  Future<String?> _refreshToken() async {
+    final refreshToken = await _storage.read(key: _kRefresh);
+    if (refreshToken == null) {
+      await repo.metaSet(_kStatus, 'reconnect');
+      return null;
+    }
+    try {
+      final newToken = await api.refresh(refreshToken);
+      await _storage.write(key: _kToken, value: newToken);
+      return newToken;
+    } catch (_) {
+      await repo.metaSet(_kStatus, 'reconnect');
+      return null;
+    }
+  }
+
+  String _loginErrorMessage(Object e) {
+    if (e is StateError) {
+      final msg = e.message.toLowerCase();
+      if (msg.contains('401') || msg.contains('login failed')) {
+        return 'Incorrect email or password.';
+      }
+    }
+    return 'Connection failed. Please try again.';
+  }
 }

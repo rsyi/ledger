@@ -259,7 +259,11 @@ class KayaApi {
         throw StateError('Kaya graphql: missing $queryName in response');
       }
       final rows = data[queryName];
-      if (rows == null) return const [];
+      // A null list means the GraphQL field errored server-side. An empty
+      // logbook is represented as `[]`, never null — treat null as shape drift.
+      if (rows == null) {
+        throw StateError('Kaya graphql: $queryName is null (server-side field error)');
+      }
       return (rows as List).cast<Map<String, dynamic>>();
     }
 

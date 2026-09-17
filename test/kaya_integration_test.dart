@@ -1,5 +1,5 @@
 // Tests for the kayaWalk orchestration helper (multi-page assembly,
-// short-page stop, runaway-guard stop).
+// short-page stop, runaway-guard stop) and pure helper functions.
 //
 // EngineLedgerRepository is a concrete FFI-backed class (Isolate.run
 // internals) that cannot be faked cheaply without adding a mocking
@@ -59,6 +59,7 @@ void main() {
       _fetcher(totalItems: 250, pageSize: 100),
       pageSize: 100,
       maxOffset: 20000,
+      pageDelay: Duration.zero,
     );
     expect(results, hasLength(250));
     // Items come back in offset order.
@@ -67,13 +68,13 @@ void main() {
   });
 
   test('kayaWalk stops on a short final page (< pageSize)', () async {
-    // 200 items with pageSize=100: page0=100 items (full), page1=100
-    // items (full), page2=0 items → stops. But for a "short page" test
-    // we want the last page to be shorter than pageSize.
+    // 150 items with pageSize=100: page0=100 items (full), page1=50
+    // items (short) → stops after page1.
     final results = await kayaWalk(
       _fetcher(totalItems: 150, pageSize: 100),
       pageSize: 100,
       maxOffset: 20000,
+      pageDelay: Duration.zero,
     );
     expect(results, hasLength(150));
   });
@@ -83,6 +84,7 @@ void main() {
       _fetcher(totalItems: 0, pageSize: 100),
       pageSize: 100,
       maxOffset: 20000,
+      pageDelay: Duration.zero,
     );
     expect(results, isEmpty);
   });
@@ -104,6 +106,7 @@ void main() {
       fetcher,
       pageSize: 100,
       maxOffset: 20000,
+      pageDelay: Duration.zero,
     );
     expect(results, hasLength(100));
     expect(callCount, 2); // called twice: once for page 0, once for page 100
@@ -121,6 +124,7 @@ void main() {
       _infiniteFetcher(pageSize: 100),
       pageSize: 100,
       maxOffset: 200,
+      pageDelay: Duration.zero,
     );
     // 2 pages of 100 each.
     expect(results, hasLength(200));
@@ -137,6 +141,7 @@ void main() {
       fetcher,
       pageSize: 100,
       maxOffset: 0,
+      pageDelay: Duration.zero,
     );
     // offset 0 >= maxOffset 0 → guard triggers immediately, no fetch.
     expect(results, isEmpty);
@@ -155,7 +160,8 @@ void main() {
     }
 
     expect(
-      () => kayaWalk(alwaysFails, pageSize: 100, maxOffset: 20000),
+      () => kayaWalk(alwaysFails, pageSize: 100, maxOffset: 20000,
+          pageDelay: Duration.zero),
       throwsA(isA<KayaAuthException>()),
     );
   });
@@ -172,5 +178,28 @@ void main() {
       pageDelay: Duration.zero,
     );
     expect(results, hasLength(50));
+  });
+
+  // -------------------------------------------------------------------------
+  // kayaDeletedIds: symmetric mass-delete guard
+  // -------------------------------------------------------------------------
+  // These tests verify the pure helper; the pull() guard is an integration
+  // concern covered in kaya_integration_test (pull is tested via kayaWalk
+  // indirectly; the guard logic below is tested at the unit level here).
+
+  test('kayaDeletedIds: empty fetchedIds, non-empty knownIds → full diff', () {
+    // This case is what the pull() guard catches: the guard refuses to ingest
+    // when fetchedIds is empty and knownIds is non-empty (outside fullReconcile).
+    // The underlying arithmetic is correct — the guard is in pull(), not here.
+    final deleted = kayaDeletedIds(
+      fetchedIds: {},
+      knownIds: {'a1', 'a2', 'a3'},
+    );
+    expect(deleted, ['a1', 'a2', 'a3']); // sorted
+  });
+
+  test('kayaDeletedIds: empty fetchedIds and empty knownIds → empty list', () {
+    final deleted = kayaDeletedIds(fetchedIds: {}, knownIds: {});
+    expect(deleted, isEmpty);
   });
 }

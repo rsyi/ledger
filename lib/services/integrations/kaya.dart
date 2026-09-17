@@ -394,6 +394,12 @@ class KayaIntegration implements Integration {
     String? dialogError;
     bool busy = false;
 
+    // Per-call controllers: created here, disposed after showDialog returns.
+    // Password hygiene: values live only in these local controllers and are
+    // never persisted beyond the dialog lifetime.
+    final emailController = TextEditingController();
+    final passwordController = TextEditingController();
+
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -407,16 +413,14 @@ class KayaIntegration implements Integration {
                 decoration: const InputDecoration(labelText: 'Email'),
                 keyboardType: TextInputType.emailAddress,
                 enabled: !busy,
-                onChanged: (v) => _emailController.text = v,
-                controller: _emailController,
+                controller: emailController,
               ),
               const SizedBox(height: 8),
               TextField(
                 decoration: const InputDecoration(labelText: 'Password'),
                 obscureText: true,
                 enabled: !busy,
-                onChanged: (v) => _passwordController.text = v,
-                controller: _passwordController,
+                controller: passwordController,
               ),
               if (dialogError != null) ...[
                 const SizedBox(height: 8),
@@ -439,8 +443,8 @@ class KayaIntegration implements Integration {
               onPressed: busy
                   ? null
                   : () async {
-                      final email = _emailController.text.trim();
-                      final password = _passwordController.text;
+                      final email = emailController.text.trim();
+                      final password = passwordController.text;
                       if (email.isEmpty || password.isEmpty) {
                         setState(() {
                           dialogError = 'Email and password are required.';
@@ -476,9 +480,8 @@ class KayaIntegration implements Integration {
       ),
     );
 
-    // Clear the text controllers after the dialog regardless of outcome.
-    _emailController.clear();
-    _passwordController.clear();
+    emailController.dispose();
+    passwordController.dispose();
 
     if (confirmed != true) return;
 
@@ -501,10 +504,10 @@ class KayaIntegration implements Integration {
 
   @override
   Future<void> pull({bool force = false, bool fullReconcile = false}) async {
-    // fullReconcile behaves identically to a normal pull because every pull
-    // is already a full walk of the user's logbook — Kaya's API has no
-    // updated-at filter, so we always fetch everything and diff against
-    // knownIds. The parameter exists to satisfy the Integration contract.
+    // Every pull already walks the user's full logbook (Kaya's API has no
+    // updated-at filter) and diffs against knownIds. fullReconcile bypasses
+    // the symmetric mass-delete guard (item 1 below) for cases where the
+    // user's logbook is genuinely empty or they want to force a wipe.
     if (!await isConnected) return;
     try {
       if (!force) {
@@ -519,9 +522,11 @@ class KayaIntegration implements Integration {
       // ----------------------------------------------------------------
       // 1. Walk both endpoints concurrently.
       // ----------------------------------------------------------------
-      final token = await _storage.read(key: _kToken);
-      final userId = await _storage.read(key: _kUserId);
-      if (token == null || userId == null) return;
+      // Fall through with empty strings when token/userId are missing so
+      // the first page 401s into the existing refresh/reconnect path and
+      // self-heals the status instead of silently returning stale data.
+      final token = await _storage.read(key: _kToken) ?? '';
+      final userId = await _storage.read(key: _kUserId) ?? '';
 
       // Shared helper that wraps a single page call with one refresh-retry.
       Future<List<Map<String, dynamic>>> Function(int) ascentsPageFn(
@@ -568,9 +573,10 @@ class KayaIntegration implements Integration {
       final fetchedIds = kayaFetchedIds(ascents);
 
       // ----------------------------------------------------------------
-      // 3. Mass-drift guard: ascents present but transform produced nothing
-      //    → wire format changed; abort rather than mass-deleting rows.
+      // 3. Mass-drift guards.
       // ----------------------------------------------------------------
+      // 3a. Ascents present but transform produced nothing → wire format
+      //     changed; abort rather than mass-deleting rows.
       if (ascents.isNotEmpty && records.isEmpty) {
         await repo.metaSet(_kStatus, 'error');
         await repo.metaSet(
@@ -581,10 +587,24 @@ class KayaIntegration implements Integration {
         return;
       }
 
+      final knownIds = _decodeIds(await repo.metaGet(_kIds));
+
+      // 3b. Server returned no ascents but we have known local rows — refuse
+      //     mass-delete unless the user explicitly ran Full reconcile, which
+      //     is the sanctioned path for a genuinely emptied logbook.
+      if (!fullReconcile && fetchedIds.isEmpty && knownIds.isNotEmpty) {
+        await repo.metaSet(_kStatus, 'error');
+        await repo.metaSet(
+          _kError,
+          'kaya: server returned no ascents but ${knownIds.length} are known '
+          'locally — refusing to mass-delete (run Full reconcile to force)',
+        );
+        return;
+      }
+
       // ----------------------------------------------------------------
       // 4. Compute deletions and ingest.
       // ----------------------------------------------------------------
-      final knownIds = _decodeIds(await repo.metaGet(_kIds));
       final deleted =
           kayaDeletedIds(fetchedIds: fetchedIds, knownIds: knownIds);
 
@@ -622,12 +642,6 @@ class KayaIntegration implements Integration {
   }
 
   // ------------------------------------------------------ internals
-
-  /// One pair of ephemeral controllers for the connect dialog.
-  /// Declared here (not inside connect()) so they outlive the builder
-  /// closures; disposed by clear() in connect() after the dialog closes.
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
 
   Set<String> _decodeIds(String? json) {
     if (json == null || json.isEmpty) return <String>{};

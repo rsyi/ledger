@@ -276,6 +276,37 @@ void main() {
   });
 
   // ---------------------------------------------------------------------------
+  // Shape drift: key-present-but-null → StateError (not empty list)
+  // ---------------------------------------------------------------------------
+
+  test('200 with data:{ascentsForUser:null} throws StateError (null = server-side field error, not empty logbook)',
+      () async {
+    final client = MockClient((_) async => http.Response(
+          jsonEncode({'data': {'ascentsForUser': null}}),
+          200,
+        ));
+    final api = KayaApi(client: client);
+
+    expect(
+      () => api.ascentsPage(token: 'tok', userId: '1', offset: 0),
+      throwsA(isA<StateError>()),
+    );
+  });
+
+  test('200 with data:{sessionsForUser:null} throws StateError', () async {
+    final client = MockClient((_) async => http.Response(
+          jsonEncode({'data': {'sessionsForUser': null}}),
+          200,
+        ));
+    final api = KayaApi(client: client);
+
+    expect(
+      () => api.sessionsPage(token: 'tok', userId: '1', offset: 0),
+      throwsA(isA<StateError>()),
+    );
+  });
+
+  // ---------------------------------------------------------------------------
   // refresh 401 → KayaAuthException; refresh 500 → StateError
   // ---------------------------------------------------------------------------
 

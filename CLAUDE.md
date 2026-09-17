@@ -162,8 +162,13 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 ## Open follow-ups
 
 - User: Kaya on-device verification (integration deployed 2026-09-17,
-  never yet connected): Integrations → Kaya → Connect with Kaya
-  email/password → watch the full backfill land in the climbing
+  never yet connected). BLOCKED on credentials: the user's Kaya account
+  is Google-SSO (no password); Kaya has no self-serve password-set for
+  social accounts — a support ticket asking to convert to
+  email/password is drafted in the user's Gmail (2026-09-17, ~24h SLA
+  per kayaclimb.com/contact). Once a password exists: Integrations →
+  Kaya → Connect with Kaya email/password → watch the full backfill
+  land in the climbing
   tracker + `climbing` sheet tab → second "Sync now" must not create
   duplicates → check an EVENING session's date (kayaDay trusts the
   Z-string's date portion as wall-clock; if it lands a day off, fix

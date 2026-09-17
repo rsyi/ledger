@@ -161,6 +161,15 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
+- User: Kaya on-device verification (integration deployed 2026-09-17,
+  never yet connected): Integrations → Kaya → Connect with Kaya
+  email/password → watch the full backfill land in the climbing
+  tracker + `climbing` sheet tab → second "Sync now" must not create
+  duplicates → check an EVENING session's date (kayaDay trusts the
+  Z-string's date portion as wall-clock; if it lands a day off, fix
+  kayaDay — rows self-correct on the next pull). MCP `get_recent_data`
+  gains the `climbing` view automatically once rows sync (worker
+  already deployed).
 - User: run Withings Full reconcile once (ghost 20.9 fix lands then).
 - coach_apply-style row-writing exists only in git history (removed);
   "stage it from chat" could return as a CoachBrain tool.

@@ -161,20 +161,19 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
-- User: Kaya on-device verification (integration deployed 2026-09-17,
-  never yet connected). BLOCKED on credentials: the user's Kaya account
-  is Google-SSO (no password); Kaya has no self-serve password-set for
-  social accounts — a support ticket asking to convert to
-  email/password is drafted in the user's Gmail (2026-09-17, ~24h SLA
-  per kayaclimb.com/contact). Once a password exists: Integrations →
-  Kaya → Connect with Kaya email/password → watch the full backfill
-  land in the climbing
-  tracker + `climbing` sheet tab → second "Sync now" must not create
-  duplicates → check an EVENING session's date (kayaDay trusts the
-  Z-string's date portion as wall-clock; if it lands a day off, fix
-  kayaDay — rows self-correct on the next pull). MCP `get_recent_data`
-  gains the `climbing` view automatically once rows sync (worker
-  already deployed).
+- Kaya: user PIVOTED (2026-09-17) — climbing data is NOT synced into
+  the ledger; Claude reads it via MCP only. Flow: user taps "Export
+  Logbook via Email" in Kaya → `dart run tool/kaya_import.dart
+  <csv> --confirm` replaces the `kaya_ascents` tab (NOT a ledger
+  view; app/sync ignore it) → ledger-mcp's `climbing` view serves it
+  (snapshot; freshness = last import). The full in-app KayaIntegration
+  (unofficial API, engine match_field ingest) is BUILT + DEPLOYED but
+  DORMANT: user's Kaya account is Google-SSO with no password, and
+  connecting would need the support-ticket conversion (draft sits in
+  the user's Gmail, optional now). If they ever connect it, first
+  point ledger-mcp's climbing view back to the `climbing` tab and
+  verify an EVENING session's date lands on the right day (kayaDay
+  wall-clock assumption).
 - User: run Withings Full reconcile once (ghost 20.9 fix lands then).
 - coach_apply-style row-writing exists only in git history (removed);
   "stage it from chat" could return as a CoachBrain tool.

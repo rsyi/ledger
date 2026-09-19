@@ -161,23 +161,25 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
-- Kaya: user PIVOTED (2026-09-17) — climbing data is NOT synced into
-  the ledger; Claude reads it via MCP only. Flow: user taps "Export
-  Logbook via Email" in Kaya → `dart run tool/kaya_import.dart
-  <csv> --confirm` replaces the `kaya_ascents` tab (NOT a ledger
-  view; app/sync ignore it; first import 2026-09-17, 1354 ascents) →
-  ledger-mcp's `climbing` view serves it (snapshot; freshness = last
-  import). The climbing.view.yml/.input.yml schemas were REMOVED from
-  airledger-fitness (44921a6) so the app shows no empty tracker; the
-  KayaIntegration app code + engine match_field ingest remain in the
-  codebase, dormant and unregistered (registration is gated on a
-  `climbing` view existing). To resurrect the in-app path: restore
-  the view files from git, do the Kaya Google-SSO→password support
-  conversion (draft in user's Gmail), point ledger-mcp's climbing
-  view back at the `climbing` tab, and verify an EVENING session's
-  date lands on the right day (kayaDay wall-clock assumption). An
-  empty leftover `climbing` tab may exist in the workbook — safe to
-  hand-delete.
+- Kaya (final shape, 2026-09-18): climbing data is NEVER synced into
+  the engine ledger. Flow: user taps "Export Logbook via Email" in
+  Kaya → `dart run tool/kaya_import.dart <csv> --confirm` replaces
+  the `kaya_ascents` tab (first import 2026-09-17, 1354 ascents) →
+  read three ways: (1) ledger-mcp `climbing` view (snapshot note in
+  tool description), (2) the app's READ-ONLY climbing ledger, (3) a
+  freshness card on Integrations (KayaSnapshotIntegration,
+  isConfigured=false → button-less). The dormant API-pull
+  KayaIntegration + engine match_field ingest remain unused; the
+  Google-SSO→password support-ticket draft in Gmail is optional.
+- **Read-only ledgers** (2026-09-18): input.yml `read_only: true`
+  (parsed in Rust `src/schema/{overlay,view}.rs` + `src/parse/` AND
+  all three Dart mirrors). Such views render under a "Read-only"
+  home section, open a browse-only timeline backed by a DIRECT
+  SheetsRepository read (network on open, nothing stored locally),
+  and are excluded from ensureTable, SyncScheduler, and the Today
+  strip — ensureTable on a foreign tab like kaya_ascents would
+  rewrite its headers. Timeline gates every mutation affordance on
+  view.readOnly.
 - User: run Withings Full reconcile once (ghost 20.9 fix lands then).
 - coach_apply-style row-writing exists only in git history (removed);
   "stage it from chat" could return as a CoachBrain tool.

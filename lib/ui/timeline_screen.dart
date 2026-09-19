@@ -342,7 +342,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// the sheet — bypassing the form AND the plan store. The user sees
   /// the in-progress banner appear at the top once the writes land.
   Future<void> _startProduction(Template template) async {
-    if (_producing) return;
+    if (_producing || widget.view.readOnly) return;
     setState(() => _producing = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -382,7 +382,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
 
   /// One-tap finish: stamp end_time on every row in the batch.
   Future<void> _finishProduction(_Item item) async {
-    if (_producing || !item.isBatch) return;
+    if (_producing || !item.isBatch || widget.view.readOnly) return;
     setState(() => _producing = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -537,8 +537,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
 
   /// Merges planned (local) entries with logged (sheet) rows and folds
   /// repeat-group batches. Pure assembly over an already-fetched row list.
+  /// Read-only views skip the PlanStore load entirely — planned items don't
+  /// apply to browse-only content.
   Future<List<_Item>> _assemble(List<Record> logged) async {
-    final planned = await PlanStore.loadForDate(widget.view, _selectedDate);
+    final planned = widget.view.readOnly
+        ? const <PlannedEntry>[]
+        : await PlanStore.loadForDate(widget.view, _selectedDate);
 
     // Batch grouping: when the view declares a repeat_group with a
     // group_key, fold contiguous-rows-sharing-a-group_key into single
@@ -666,18 +670,28 @@ class _TimelineScreenState extends State<TimelineScreen> {
                           selectionMode: _selectionMode,
                           expandedKeys: _expandedLoggedKeys,
                           repository: widget.repository,
-                          // First tap toggles inline expand (shows full
-                          // fields). The expanded panel surfaces Edit +
-                          // Move buttons that route into the dedicated
-                          // methods. While in selection mode the
-                          // original toggle-select behavior wins.
-                          onTap: (item) => _selectionMode
-                              ? _toggleSelect(item)
-                              : _toggleExpand(item.keyString),
-                          onEdit: _edit,
-                          onMove: _moveToDate,
-                          onLongPress: _toggleSelect,
-                          onDelete: _delete,
+                          // Read-only views: tap toggles inline expand
+                          // only (no edit/delete entry points). Long-
+                          // press and delete are no-ops so selection
+                          // mode can never start.
+                          onTap: (item) => widget.view.readOnly
+                              ? _toggleExpand(item.keyString)
+                              : (_selectionMode
+                                  ? _toggleSelect(item)
+                                  : _toggleExpand(item.keyString)),
+                          onEdit: widget.view.readOnly
+                              ? (_) {}
+                              : _edit,
+                          onMove: widget.view.readOnly
+                              ? (_) {}
+                              : _moveToDate,
+                          onLongPress: widget.view.readOnly
+                              ? (_) {}
+                              : _toggleSelect,
+                          onDelete: widget.view.readOnly
+                              ? (_) {}
+                              : _delete,
+                          readOnly: widget.view.readOnly,
                         ),
                       for (var i = 0; i < plannedRows.length; i++) ...[
                         if (i > 0 &&
@@ -735,7 +749,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
             ),
           ],
         ),
-        floatingActionButton: _selectionMode
+        floatingActionButton: (_selectionMode || widget.view.readOnly)
             ? null
             : FloatingActionButton(
                 onPressed: _create,
@@ -2002,8 +2016,9 @@ class _RecordTile extends StatelessWidget {
       child: tile,
     );
     // Swipe-to-delete is disabled in selection mode — too easy to fire
-    // accidentally while scrolling through a long selection.
-    if (selectionMode) return tile;
+    // accidentally while scrolling through a long selection. Also
+    // disabled for read-only views.
+    if (selectionMode || view.readOnly) return tile;
     return Dismissible(
       key: ValueKey(item.keyString),
       direction: DismissDirection.endToStart,
@@ -2087,6 +2102,9 @@ class _CompletedSection extends StatelessWidget {
   final void Function(_Item) onLongPress;
   final void Function(_Item) onDelete;
 
+  /// When true, swipe-to-delete and the Edit/Move buttons are hidden.
+  final bool readOnly;
+
   const _CompletedSection({
     required this.view,
     required this.items,
@@ -2099,6 +2117,7 @@ class _CompletedSection extends StatelessWidget {
     required this.onMove,
     required this.onLongPress,
     required this.onDelete,
+    this.readOnly = false,
   });
 
   @override
@@ -2130,6 +2149,7 @@ class _CompletedSection extends StatelessWidget {
             item: item,
             selected: selectedKeys.contains(item.keyString),
             expanded: expandedKeys.contains(item.keyString),
+            readOnly: readOnly,
             onTap: () => onTap(item),
             onEdit: () => onEdit(item),
             onMove: () => onMove(item),
@@ -2151,6 +2171,12 @@ class _CompactLoggedTile extends StatelessWidget {
   final _Item item;
   final bool selected;
   final bool expanded;
+
+  /// When true, swipe-to-delete is hidden and the Edit/Move panel is
+  /// suppressed. Long-press still does nothing because onLongPress is a
+  /// no-op at that point.
+  final bool readOnly;
+
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onMove;
@@ -2167,6 +2193,7 @@ class _CompactLoggedTile extends StatelessWidget {
     required this.onMove,
     required this.onLongPress,
     required this.onDelete,
+    this.readOnly = false,
   });
 
   String? _timeLabel() {
@@ -2261,15 +2288,18 @@ class _CompactLoggedTile extends StatelessWidget {
               _ExpandedDetails(
                 view: view,
                 item: item,
-                onEdit: onEdit,
-                onMove: onMove,
+                // Read-only: suppress Edit and Move buttons entirely so
+                // the expanded panel is purely informational.
+                onEdit: readOnly ? null : onEdit,
+                onMove: readOnly ? null : onMove,
               ),
             ],
           )
         : headerRow;
     // Swipe-to-delete on the compact tile. Disabled while in selection
-    // mode (matches the regular _RecordTile behavior).
-    if (selected) return inner;
+    // mode (matches the regular _RecordTile behavior), and also
+    // disabled for read-only views.
+    if (selected || readOnly) return inner;
     return Dismissible(
       key: ValueKey('compact-${item.keyString}'),
       direction: DismissDirection.endToStart,
@@ -2300,13 +2330,17 @@ class _CompactLoggedTile extends StatelessWidget {
 class _ExpandedDetails extends StatelessWidget {
   final ViewSchema view;
   final _Item item;
-  final VoidCallback onEdit;
+
+  /// Null when the view is read-only — the Edit button is hidden.
+  final VoidCallback? onEdit;
+
+  /// Null when the view is read-only or the item has no date field.
   final VoidCallback? onMove;
 
   const _ExpandedDetails({
     required this.view,
     required this.item,
-    required this.onEdit,
+    this.onEdit,
     this.onMove,
   });
 
@@ -2375,15 +2409,16 @@ class _ExpandedDetails extends StatelessWidget {
                     ),
                     onPressed: onMove,
                   ),
-                TextButton.icon(
-                  icon: const Icon(Icons.edit, size: 16),
-                  label: const Text('Edit'),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                if (onEdit != null)
+                  TextButton.icon(
+                    icon: const Icon(Icons.edit, size: 16),
+                    label: const Text('Edit'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                    onPressed: onEdit,
                   ),
-                  onPressed: onEdit,
-                ),
               ],
             ),
           ),

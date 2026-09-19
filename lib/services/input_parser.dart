@@ -49,6 +49,10 @@ class InputOverlay {
   /// See [RepeatGroup].
   final RepeatGroup? repeatGroup;
 
+  /// True when this overlay marks the view as browse-only (no writes to
+  /// the ledger, no ensureTable, no sync). Set via `read_only: true`.
+  final bool readOnly;
+
   InputOverlay({
     required this.viewName,
     this.dateField,
@@ -61,6 +65,7 @@ class InputOverlay {
     this.groups = const {},
     this.topMetric,
     this.repeatGroup,
+    this.readOnly = false,
   });
 }
 
@@ -130,6 +135,7 @@ InputOverlay parseInputOverlay(String yamlText) {
     groups: _parseGroups(node['groups']),
     topMetric: node['top_metric'] as String?,
     repeatGroup: _parseRepeatGroup(node['repeat_group']),
+    readOnly: (node['read_only'] as bool?) ?? false,
   );
 }
 
@@ -501,6 +507,7 @@ ViewSchema applyInputOverlay(ViewSchema view, InputOverlay overlay) {
     groups: overlay.groups,
     topMetric: overlay.topMetric,
     hasInputOverlay: true,
+    readOnly: overlay.readOnly,
     repeatGroup: overlay.repeatGroup,
   );
 }

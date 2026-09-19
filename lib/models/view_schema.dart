@@ -91,6 +91,14 @@ class ViewSchema {
   /// headers).
   final bool hasInputOverlay;
 
+  /// True when this view is browse-only. Read-only views are backed by
+  /// a direct sheet read and must never touch the engine ledger,
+  /// `ensureTable`, or sync. The timeline drops all mutation affordances
+  /// (FAB, edit, long-press selection, swipe-to-delete).
+  ///
+  /// Set via `read_only: true` in the paired `.input.yml`. Default false.
+  final bool readOnly;
+
   /// Optional declaration that a subset of fields repeats together. The
   /// form renders a "+ Add <label>" button; on save the repeating fields
   /// fan out into N rows (one per block) that share every other field.
@@ -114,6 +122,7 @@ class ViewSchema {
     this.groups = const {},
     this.topMetric,
     this.hasInputOverlay = false,
+    this.readOnly = false,
     this.repeatGroup,
   });
 

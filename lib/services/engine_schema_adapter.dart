@@ -55,6 +55,7 @@ Map<String, dynamic> viewSchemaToEngineJson(ViewSchema view) {
       },
     if (view.topMetric != null) 'top_metric': view.topMetric,
     'has_input_overlay': view.hasInputOverlay,
+    'read_only': view.readOnly,
     if (view.repeatGroup != null) 'repeat_group': _repeatGroupToJson(view.repeatGroup!),
   };
 }
@@ -216,6 +217,7 @@ ViewSchema viewSchemaFromEngineJson(Map<String, dynamic> json) {
     groups: _groups(json['groups']),
     topMetric: json['top_metric'] as String?,
     hasInputOverlay: (json['has_input_overlay'] as bool?) ?? false,
+    readOnly: (json['read_only'] as bool?) ?? false,
     repeatGroup: _repeatGroup(json['repeat_group']),
   );
 }

@@ -32,6 +32,7 @@ import '../services/llm_response_cache.dart';
 import '../services/qbo_service.dart';
 import '../services/schema_loader.dart';
 import '../services/schema_sync.dart';
+import '../services/sheets_repository.dart';
 import '../services/transient_retry.dart';
 import '../services/warehouse_connector.dart';
 import 'apps_screen.dart';
@@ -124,12 +125,18 @@ class _HomeScreenState extends State<HomeScreen> {
       configs: const [],
       bundledSheets: repo,
     );
-    // Skip analytics-only views (no .input.yml). Their dimensions are
-    // SQL expressions (e.g. `CAST(date AS DATE)`), so passing them to
-    // `ensureTable` would try to write those exprs as sheet column
-    // headers — corrupts the underlying sheet and surfaces as a
-    // "bad state: can't finalize a finalized request" mid-startup.
-    for (final view in views.where((v) => v.hasInputOverlay)) {
+    // Skip analytics-only views (no .input.yml) and read-only views.
+    // Analytics-only: their dimensions are SQL expressions (e.g.
+    // `CAST(date AS DATE)`), so passing them to `ensureTable` would try
+    // to write those exprs as sheet column headers — corrupts the
+    // underlying sheet and surfaces as a "bad state: can't finalize a
+    // finalized request" mid-startup.
+    // Read-only: these views are backed by a direct sheet read and must
+    // never touch the engine ledger or have their sheet tabs "ensured"
+    // (that would rewrite headers on tabs like kaya_ascents that the app
+    // doesn't own).
+    for (final view
+        in views.where((v) => v.hasInputOverlay && !v.readOnly)) {
       // Wrap the first network-touching calls: the engine's reqwest client
       // can hit a cold-start DNS failure on the first request after launch
       // (see retryTransient). A few short retries ride out the window that
@@ -173,11 +180,30 @@ class _HomeScreenState extends State<HomeScreen> {
       await SyncScheduler.init(
         ledger: repo,
         viewsJson: views
-            .where((v) => v.hasInputOverlay && v.datasource == 'gsheets')
+            .where((v) =>
+                v.hasInputOverlay &&
+                v.datasource == 'gsheets' &&
+                !v.readOnly)
             .map(viewSchemaToEngineJson)
             .toList(),
       );
     }
+    // Read-only views: connect a direct SheetsRepository that bypasses the
+    // engine ledger entirely. Only established when at least one loaded view
+    // is read-only — avoids a superfluous auth round-trip on builds without
+    // read-only views.
+    WarehouseConnector? readOnlyRepo;
+    final hasReadOnlyViews =
+        views.any((v) => v.hasInputOverlay && v.readOnly);
+    if (hasReadOnlyViews) {
+      readOnlyRepo = await retryTransient(
+        () => SheetsRepository.connectFromKey(
+          defaultSpreadsheetId: assetConfig.spreadsheetId,
+          serviceAccountKeyJson: keyJson,
+        ),
+      );
+    }
+
     // disable_post_log in config.yml gates every piece of the LLM plumbing.
     // When set, we hand TimelineScreen `null` llm/cache so the post-log hook
     // is a no-op even for views that declare one — useful for builds (Poke
@@ -212,6 +238,7 @@ class _HomeScreenState extends State<HomeScreen> {
       qboService: assetConfig.quickbooks == null
           ? null
           : QboService(assetConfig.quickbooks!),
+      readOnlyRepo: readOnlyRepo,
     );
   }
 
@@ -368,20 +395,32 @@ class _HomeScreenState extends State<HomeScreen> {
                 return _ErrorView(error: snap.error.toString());
               }
               final data = snap.data!;
-              // Only show data-entry trackers (paired with .input.yml).
-              // Analytics-only views still live in data.views for the
-              // chat / apps screen to query. coach_chat is a chat, not
-              // a tracker — excluded here, rendered as the pinned Coach
-              // row instead.
+              // Only show writable data-entry trackers (paired with
+              // .input.yml, not read-only). Analytics-only views still
+              // live in data.views for the chat / apps screen to query.
+              // coach_chat is a chat, not a tracker — excluded here,
+              // rendered as the pinned Coach row instead.
               final entryViews = data.views
                   .where((v) =>
-                      v.hasInputOverlay && v.name != kCoachChatViewName)
+                      v.hasInputOverlay &&
+                      !v.readOnly &&
+                      v.name != kCoachChatViewName)
                   .toList();
+              // Read-only views show in a separate "Read-only" section
+              // backed by a direct sheet read (no ledger writes). Only
+              // rendered when the bootstrap established a readOnlyRepo.
+              final readOnlyViews = data.readOnlyRepo == null
+                  ? const <ViewSchema>[]
+                  : data.views
+                      .where((v) => v.hasInputOverlay && v.readOnly)
+                      .toList();
               ViewSchema? coachView;
               for (final v in data.views) {
                 if (v.name == kCoachChatViewName) coachView = v;
               }
-              if (entryViews.isEmpty && coachView == null) {
+              if (entryViews.isEmpty &&
+                  readOnlyViews.isEmpty &&
+                  coachView == null) {
                 return const Center(child: Text('No views available.'));
               }
               // Ledger meta access for the Coach row's unread marker.
@@ -445,76 +484,133 @@ class _HomeScreenState extends State<HomeScreen> {
                       },
                     ),
                   Expanded(
-                    child: ListView.separated(
-                      itemCount: entryViews.length + 2,
-                      separatorBuilder: (_, _) => const Divider(height: 1),
-                      itemBuilder: (_, i) {
-                        if (i == entryViews.length + 1) {
-                          return ListTile(
-                            leading: const Icon(Icons.sync_alt),
-                            title: const Text('Integrations'),
-                            subtitle: const Text(
-                                'Withings and other sources → ledger'),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const IntegrationsScreen(),
-                              ),
+                    child: ListView(
+                      children: [
+                        // Writable trackers.
+                        for (final view in entryViews) ...[
+                          ListTile(
+                            leading: IconResolver.resolve(
+                              view.icon,
+                              size: 22,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
                             ),
-                          );
-                        }
-                        if (i == entryViews.length) {
-                          return ListTile(
-                            leading: const Icon(Icons.bar_chart),
-                            title: const Text('Apps'),
-                            subtitle: const Text(
-                                'Interactive analytics from .app.yml'),
+                            title: Text(view.name),
+                            subtitle: view.description == null
+                                ? null
+                                : Text(view.description!),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
-                                builder: (_) => AppsScreen(
-                                  views: data.views,
-                                  repository: data.repository,
+                                builder: (_) => TimelineScreen(
+                                  view: view,
+                                  repository: data.registry.forView(view),
+                                  llm: data.llm,
+                                  llmCache: data.llmCache,
+                                  chatModel: chatModel,
+                                  github: github == null
+                                      ? null
+                                      : GithubClient(github),
+                                  analytics: data.analytics,
+                                  qboSpec:
+                                      data.quickbooks?.specFor(view.name),
+                                  qboService:
+                                      data.quickbooks
+                                                  ?.specFor(view.name) ==
+                                              null
+                                          ? null
+                                          : data.qboService,
                                 ),
                               ),
                             ),
-                          );
-                        }
-                        final view = entryViews[i];
-                        return ListTile(
-                          leading: IconResolver.resolve(
-                            view.icon,
-                            size: 22,
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
-                          title: Text(view.name),
-                          subtitle: view.description == null
-                              ? null
-                              : Text(view.description!),
+                          const Divider(height: 1),
+                        ],
+                        // Read-only section: browse-only views backed by
+                        // a direct sheet read. Only shown when the
+                        // bootstrap established a readOnlyRepo (which
+                        // requires at least one read-only view loaded).
+                        if (readOnlyViews.isNotEmpty) ...[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                            child: Text(
+                              'Read-only',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant,
+                                  ),
+                            ),
+                          ),
+                          for (final view in readOnlyViews) ...[
+                            ListTile(
+                              leading: IconResolver.resolve(
+                                view.icon,
+                                size: 22,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                              title: Text(view.name),
+                              subtitle: view.description == null
+                                  ? null
+                                  : Text(view.description!),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => TimelineScreen(
+                                    view: view,
+                                    repository: data.readOnlyRepo!,
+                                    // No post-log hooks on read-only views.
+                                    llm: null,
+                                    llmCache: null,
+                                    chatModel: chatModel,
+                                    github: github == null
+                                        ? null
+                                        : GithubClient(github),
+                                    analytics: data.analytics,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const Divider(height: 1),
+                          ],
+                        ],
+                        // Apps tile.
+                        ListTile(
+                          leading: const Icon(Icons.bar_chart),
+                          title: const Text('Apps'),
+                          subtitle: const Text(
+                              'Interactive analytics from .app.yml'),
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => TimelineScreen(
-                                view: view,
-                                repository: data.registry.forView(view),
-                                llm: data.llm,
-                                llmCache: data.llmCache,
-                                chatModel: chatModel,
-                                github: github == null
-                                    ? null
-                                    : GithubClient(github),
-                                analytics: data.analytics,
-                                qboSpec: data.quickbooks?.specFor(view.name),
-                                qboService:
-                                    data.quickbooks?.specFor(view.name) == null
-                                        ? null
-                                        : data.qboService,
+                              builder: (_) => AppsScreen(
+                                views: data.views,
+                                repository: data.repository,
                               ),
                             ),
                           ),
-                        );
-                      },
+                        ),
+                        const Divider(height: 1),
+                        // Integrations tile.
+                        ListTile(
+                          leading: const Icon(Icons.sync_alt),
+                          title: const Text('Integrations'),
+                          subtitle: const Text(
+                              'Withings and other sources → ledger'),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const IntegrationsScreen(),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -562,6 +658,12 @@ class _Bootstrap {
   final QuickBooksConfig? quickbooks;
   final QboService? qboService;
 
+  /// Direct SheetsRepository for read-only views. Null when no loaded view
+  /// is read-only (avoids the auth round-trip on builds that don't use the
+  /// feature). The home screen's Read-only section renders only when
+  /// non-null.
+  final WarehouseConnector? readOnlyRepo;
+
   _Bootstrap({
     required this.views,
     required this.repository,
@@ -575,6 +677,7 @@ class _Bootstrap {
     this.kioskView,
     this.quickbooks,
     this.qboService,
+    this.readOnlyRepo,
   });
 }
 

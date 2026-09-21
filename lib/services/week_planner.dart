@@ -1,7 +1,9 @@
 /// Weekly auto-planner — generates the week's planned strength rows from
-/// the coach program (`coach/program.yaml` v4 `planned` + `weight_fill` +
-/// `warmup_protocol` keys) into the device-local PlanStore, where the
-/// timeline renders them with Log-now.
+/// the coach program (`coach/program.yaml` `planned` + `warmup_protocol`
+/// keys; weights from the working-max controller's chart math (v5
+/// `load_policies` + `rpe_chart`), falling back to v4 `weight_fill`
+/// reference math) into the device-local PlanStore, where the timeline
+/// renders them with Log-now.
 ///
 /// Two layers:
 ///  - [buildWeekPlannedEntries]: pure core (zero Flutter/IO imports) —
@@ -23,14 +25,17 @@ import 'package:intl/intl.dart';
 import '../models/planned_entry.dart';
 import '../models/view_schema.dart';
 import 'plan_store.dart';
-import 'program_current.dart' show currentVersion;
+import 'program_current.dart' show currentVersion, programCurrent;
 import 'program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
 import 'program_provider.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 import 'week_plan.dart' show defaultWeekStart;
-import 'working_max.dart' show warmupRamp;
+import 'wm_tabs.dart'
+    show WmSnapshot, activeCapsByLift, currentWorkingMaxesByLift;
+import 'working_max.dart'
+    show LoadPolicy, loadPolicies, policyForDate, rpePct, warmupRamp;
 
 const List<String> _weekdayKeys = [
   'mon',
@@ -83,10 +88,19 @@ num _roundTo(num x, num step) {
 ///   - `reps`     — planned reps for that one set
 ///   - `weight`   — only when computable; never guessed.
 ///
-/// Weight fill (program v4 `weight_fill`): a working set's weight is the
-/// lift's entry in [references] (42-day reference e1rm, see
-/// [liftReferencesAsOf]) × `pct_by_reps[reps]`, rounded to `rounding_lb`.
-/// Absent when the lift has no reference or the reps have no pct entry.
+/// Weight fill, v3 (working-max controller, spec §0: percentages hang off
+/// the working max): when the lift has an entry in [workingMaxes] and a
+/// load policy covers the date, a working set's weight is
+///   working max × rpe_chart[policy target RPE][reps]
+/// (target = the policy's upper target RPE, undercut by its cap_rpe and
+/// by [capRpeByLift] — the post-drop / pain cap), rounded to
+/// `rounding_lb`. This is the same §4 prescription math as
+/// buildPrescription.
+///
+/// Fallback (v2, when the lift has no working max or no policy applies):
+/// the lift's entry in [references] (42-day reference e1rm, see
+/// [liftReferencesAsOf]) × `weight_fill.pct_by_reps[reps]`, rounded.
+/// Absent when neither path is computable — never guessed.
 ///
 /// Warm-ups (program v4 `warmup_protocol`): each planned exercise's sets
 /// are preceded — once per exercise per day — by the ramp rows: fixed
@@ -107,6 +121,8 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
   Map<Object?, Object?> program,
   DateTime weekMonday, {
   Map<String, double> references = const {},
+  Map<String, double> workingMaxes = const {},
+  Map<String, double> capRpeByLift = const {},
 }) {
   final version = currentVersion(program);
   if (version == null) return const [];
@@ -135,9 +151,28 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
   // Warm-up config (v4). Missing/malformed → no warm-up rows.
   final warmup = version['warmup_protocol'];
 
+  // v3: load policies for the working-max weight path (empty list when
+  // the program predates v5 → wm path never fires).
+  final policies = workingMaxes.isEmpty
+      ? const <LoadPolicy>[]
+      : loadPolicies(version);
+
   /// Working weight for one planned set, or null (never guessed).
-  num? workingWeight(String exercise, num reps) {
+  /// [policy] is the day's load policy — non-null only on the v3 path.
+  num? workingWeight(String exercise, num reps, LoadPolicy? policy) {
     final lift = mainLiftByExercise[exercise];
+    // v3: the working max is the weight authority when present.
+    final wm = lift == null ? null : workingMaxes[lift];
+    if (wm != null && policy != null) {
+      var target = policy.targetRpeHigh;
+      if (policy.capRpe != null && policy.capRpe! < target) {
+        target = policy.capRpe!;
+      }
+      final cap = capRpeByLift[lift];
+      if (cap != null && cap < target) target = cap;
+      return _roundTo(wm * rpePct(target, reps.toInt()), fillRounding);
+    }
+    // v2 fallback: reference e1rm × pct_by_reps.
     final ref = lift == null ? null : references[lift];
     if (ref == null) return null;
     final pct = pctByReps[reps] ?? pctByReps[reps.toInt()];
@@ -175,6 +210,19 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     if (planned is Map) planned = planned[parity]; // alternation day
     if (planned is! List) continue;
 
+    // The day's load policy (v3 weight path). Week-type overrides
+    // (light/test) come through programCurrent's resolution.
+    LoadPolicy? dayPolicy;
+    if (policies.isNotEmpty) {
+      final rawBlockN = block['n'];
+      dayPolicy = policyForDate(
+        policies,
+        date: day,
+        block: rawBlockN is num ? rawBlockN.toInt() : null,
+        weekType: programCurrent(program, null, day)?.weekType,
+      );
+    }
+
     // Pass 1: expand working sets (with weights where computable).
     final working = <Map<String, Object?>>[];
     for (final item in planned) {
@@ -184,7 +232,7 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
       if (exercise is! String || exercise.isEmpty || reps is! num) continue;
       final rawSets = item['sets'];
       final sets = rawSets is num && rawSets >= 1 ? rawSets.toInt() : 1;
-      final weight = workingWeight(exercise, reps);
+      final weight = workingWeight(exercise, reps, dayPolicy);
       for (var s = 0; s < sets; s++) {
         // ONLY exercise + reps + optional weight (+ date). Never
         // rpe/notes — those describe what happened, and nothing has
@@ -233,8 +281,9 @@ class WeekPlanner {
   static const metaGeneratedKey = 'week_planner_generated_monday';
 
   /// Planner generation suffix in the meta stamp. Bump when the generated
-  /// row shape changes and existing weeks should be upgraded in place.
-  static const planVersion = 'plan_v2';
+  /// row shape changes and existing weeks should be upgraded in place
+  /// (v3: working-max weight math replaced the reference-e1rm fill).
+  static const planVersion = 'plan_v3';
 
   /// Ledger meta key the runner writes the last swallowed error into.
   static const metaErrorKey = 'week_planner_error';
@@ -262,6 +311,8 @@ class WeekPlanner {
     required Map<String, double> references,
     required DateTime targetMonday,
     required DateTime today,
+    Map<String, double> workingMaxes = const {},
+    Map<String, double> capRpeByLift = const {},
   }) async {
     final fmt = DateFormat('yyyy-MM-dd');
     final monday = DateTime.utc(
@@ -285,6 +336,8 @@ class WeekPlanner {
       program,
       monday,
       references: references,
+      workingMaxes: workingMaxes,
+      capRpeByLift: capRpeByLift,
     );
     for (final e in built) {
       final date = e['date'] as DateTime;
@@ -313,20 +366,26 @@ class WeekPlanner {
   /// week — except on Sundays, when it targets the UPCOMING week (the
   /// app-wide "on Sunday you plan next week" convention).
   ///
-  /// Per-lift references come from the local strength history read
-  /// through [connector] (the same list path every screen uses); a failed
+  /// Working maxes come from [wmSnapshotOf] (the app passes
+  /// `WmStore.snapshot` — a direct read of the append-only tabs); a null/
+  /// failed snapshot silently falls back to the reference-e1rm path, so
+  /// the planner still fills weights before the tabs exist. Per-lift
+  /// references come from the local strength history read through
+  /// [connector] (the same list path every screen uses); a failed
   /// read aborts the run (error meta, retried next launch) rather than
   /// generating a weightless week. First run mid-week only adds entries
   /// dated today or later — no backfilling of already-past days. A stamp
-  /// mismatch for an already-generated week (planner upgrade) replaces
-  /// only the week's still-planned rows via [regenerateWeek]. Skips
-  /// silently (without stamping) when program.yaml is missing or
-  /// unparseable. Any error is swallowed into the [metaErrorKey] meta.
+  /// mismatch for an already-generated week (planner upgrade, e.g.
+  /// plan_v2 → plan_v3) replaces only the week's still-planned rows via
+  /// [regenerateWeek]. Skips silently (without stamping) when
+  /// program.yaml is missing or unparseable. Any error is swallowed into
+  /// the [metaErrorKey] meta.
   static Future<void> ensureCurrentWeek({
     required EngineLedgerRepository repo,
     required WarehouseConnector connector,
     required ProgramProvider provider,
     required ViewSchema strengthView,
+    Future<WmSnapshot?> Function()? wmSnapshotOf,
     DateTime Function() now = DateTime.now,
   }) async {
     try {
@@ -346,12 +405,44 @@ class WeekPlanner {
         today,
       );
 
+      // v3 inputs — best-effort: any failure leaves both maps empty and
+      // the reference fallback carries the week.
+      var workingMaxes = const <String, double>{};
+      var capRpeByLift = const <String, double>{};
+      if (wmSnapshotOf != null) {
+        try {
+          final snap = await wmSnapshotOf();
+          if (snap != null) {
+            workingMaxes = currentWorkingMaxesByLift(snap.workingMax);
+            final version = currentVersion(program);
+            final policies =
+                version == null ? const <LoadPolicy>[] : loadPolicies(version);
+            capRpeByLift = activeCapsByLift(
+              snap,
+              (d) => policies.isEmpty
+                  ? null
+                  : policyForDate(
+                      policies,
+                      date: d,
+                      block: programCurrent(program, null, d)
+                          ?.block['number'] as int?,
+                      weekType: programCurrent(program, null, d)?.weekType,
+                    ),
+            );
+          }
+        } catch (_) {
+          // Tabs unreadable — reference fallback.
+        }
+      }
+
       await regenerateWeek(
         strengthView: strengthView,
         program: program,
         references: references,
         targetMonday: targetMonday,
         today: today,
+        workingMaxes: workingMaxes,
+        capRpeByLift: capRpeByLift,
       );
       // Mark the week done even when empty (e.g. pre-program week) so we
       // don't re-evaluate on every launch.

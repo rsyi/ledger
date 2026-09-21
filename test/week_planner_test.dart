@@ -284,6 +284,91 @@ void main() {
     });
   });
 
+  group('v3 — working-max weights (wm × rpe_chart[policy target][reps])', () {
+    // The §5 seed values; deadlift pain-capped at RPE 7.
+    const wms = {
+      'squat': 320.0,
+      'bench': 240.0,
+      'deadlift': 330.0,
+      'press': 140.0,
+    };
+
+    test('A-week Monday squat: single at chart[8][1], triple at chart[8][3]',
+        () {
+      final mon = onDay(
+          buildWeekPlannedEntries(program, anchorMonday,
+              references: refs, workingMaxes: wms),
+          anchorMonday);
+      // wm 320, cut_early target 8: single 295.04→295, triple 276.16→275;
+      // ramp toward 295: 118→120, 177→175, 236→235.
+      expect(rows(mon), [
+        'Barbell Squat 45x10',
+        'Barbell Squat 120x5',
+        'Barbell Squat 175x3',
+        'Barbell Squat 235x1',
+        'Barbell Squat 295x1',
+        'Barbell Squat 275x3',
+      ]);
+    });
+
+    test('Tuesday bench + press from their working maxes', () {
+      final tue = onDay(
+          buildWeekPlannedEntries(program, anchorMonday,
+              references: refs, workingMaxes: wms),
+          anchorMonday.add(const Duration(days: 1)));
+      expect(rows(tue), [
+        // bench wm 240: single 221.28→220, triple 207.12→205.
+        'Flat Barbell Bench Press 45x10',
+        'Flat Barbell Bench Press 90x5',
+        'Flat Barbell Bench Press 130x3',
+        'Flat Barbell Bench Press 175x1',
+        'Flat Barbell Bench Press 220x1',
+        'Flat Barbell Bench Press 205x3',
+        // press wm 140: single 129.08→130, triple 120.82→120.
+        'Overhead Press 45x10',
+        'Overhead Press 50x5',
+        'Overhead Press 80x3',
+        'Overhead Press 105x1',
+        'Overhead Press 130x1',
+        'Overhead Press 120x3',
+      ]);
+    });
+
+    test('an active RPE cap lowers the target (pain-capped deadlift)', () {
+      final fri = onDay(
+          buildWeekPlannedEntries(program, anchorMonday,
+              references: refs,
+              workingMaxes: wms,
+              capRpeByLift: const {'deadlift': 7}),
+          anchorMonday.add(const Duration(days: 4)));
+      // A-week deadlift light 1x3 at chart[7][3]=0.837: 276.21→275.
+      expect(rows(fri), [
+        'Barbell Deadlift 135x5',
+        'Barbell Deadlift 165x3',
+        'Barbell Deadlift 220x1',
+        'Barbell Deadlift 275x3',
+      ]);
+    });
+
+    test('lifts without a working max fall back to the reference path', () {
+      final entries = buildWeekPlannedEntries(program, anchorMonday,
+          references: refs, workingMaxes: const {'squat': 320.0});
+      final mon = onDay(entries, anchorMonday);
+      expect(rows(mon).sublist(4),
+          ['Barbell Squat 295x1', 'Barbell Squat 275x3']);
+      final tue = onDay(entries, anchorMonday.add(const Duration(days: 1)));
+      // bench ref 250 × 0.96 = 240 (v2 math).
+      expect(rows(tue), contains('Flat Barbell Bench Press 240x1'));
+    });
+
+    test('no working maxes at all == v2 output exactly', () {
+      expect(
+          buildWeekPlannedEntries(program, anchorMonday, references: refs),
+          buildWeekPlannedEntries(program, anchorMonday,
+              references: refs, workingMaxes: const {}));
+    });
+  });
+
   group('synthetic programs', () {
     Map<Object?, Object?> synthetic({int sets = 1}) => {
           'versions': [

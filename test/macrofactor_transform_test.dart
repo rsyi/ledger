@@ -47,7 +47,7 @@ void main() {
     final r = recs.first;
     expect(r['hc_id'], {'kind': 'string', 'value': 'hc-1'});
     expect(r['eaten_at'],
-        {'kind': 'datetime', 'value': '2026-09-14T12:30:05'});
+        {'kind': 'date_time', 'value': '2026-09-14T12:30:05'});
     expect(r['meal'], {'kind': 'string', 'value': 'Chicken and rice'});
     expect(r['meal_type'], {'kind': 'string', 'value': 'lunch'});
     expect(r['calories'], {'kind': 'float', 'value': 650.0});
@@ -74,7 +74,7 @@ void main() {
     final recs =
         hcNutritionToRecords([_point(dateFrom: '2026-09-14T07:05:00')]);
     expect(recs.first['eaten_at'],
-        {'kind': 'datetime', 'value': '2026-09-14T07:05:00'});
+        {'kind': 'date_time', 'value': '2026-09-14T07:05:00'});
   });
 
   // -------------------------------------------------------------------------

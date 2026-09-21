@@ -63,7 +63,7 @@ List<Map<String, dynamic>> hcNutritionToRecords(List<dynamic> points) {
 
     final rec = <String, dynamic>{
       'hc_id': _str(idStr),
-      'eaten_at': {'kind': 'datetime', 'value': eatenAt},
+      'eaten_at': {'kind': 'date_time', 'value': eatenAt},
     };
 
     final mealTypeRaw = raw['meal_type'];

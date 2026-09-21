@@ -203,6 +203,33 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 - **Form UX**: required-field misses show floating red snackbar +
   field highlights (fixed snackbars hide behind the keyboard); cardio
   `type` renders first.
+- **Switch widget + equipment flags** (2026-09-21): `widget: switch`
+  is a tri-state NULLABLE bool end-to-end (Rust `WidgetType::Switch`,
+  Dart `WidgetType.switch_`, `_SwitchFieldWidget`). UX contract: null
+  renders a dimmed "Not set", toggling sets an explicit true/false, a
+  × suffix clears back to blank — blank is NEVER coerced to false.
+  boolean dims with no widget now default to switch. strength gained
+  boolean dims paused/belted/wrist_wraps/knee_sleeves (sheet columns
+  `Paused`/`Belted`/`Wrist Wraps`/`Knee Sleeves`), gated per exercise
+  via `show_when: { exercise: { in: [...] } }` (fully supported
+  through the engine — no new key was needed): paused = bench+squat;
+  belted = squat+deadlift (user never belts bench/ohp — the dim exists
+  on every row, the form just hides it there); wrist_wraps =
+  bench+OHP+military press; knee_sleeves = squat+dl. All four are
+  `autofill: false` (carrying gear flags over would fabricate data).
+  WM variant resolution (`parseVariant` named params via
+  `StrengthRow.paused/belted`) PREFERS the structured flags over notes
+  keywords when non-null (bench paused=false ⇒ touch_and_go); blank
+  falls back to legacy notes parsing unchanged. Historical backfill:
+  `tool/migrate_equipment.dart` (idempotent, dry-run default,
+  --confirm writes the new columns only) applied 2026-09-21 — Belted
+  on squat/dl: 130 explicit-true + 75 explicit-false from notes, 669
+  inferred-true (day-top set, effort ≥ .93 vs the 42-day reference),
+  111 inferred-false (effort ≤ .80 + ≥2 strong days within ±3 wks);
+  Paused on bench from notes only (37 true / 16 false); ~5.3k
+  candidate rows left honestly blank; wraps/sleeves never backfilled.
+  strength exercise options trimmed to a curated ~37 (mains first,
+  then live-sheet frequency, recent-year bias).
 
 ## Dev gotchas (hard-won)
 
@@ -277,3 +304,12 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 - MCP worker's workers.dev subdomain is `ryime` (renamed from
   `airledger-mcp` 2026-09-13; old URLs are dead). Connector URL:
   `https://ledger-mcp.ryime.workers.dev/mcp/<token>`.
+- Equipment-flags rollout ordering (2026-09-21): the airledger-fitness
+  schema commit (paused/belted/wrist_wraps/knee_sleeves + trimmed
+  options) is committed locally but the PUSH is gated on the new APK
+  (switch-widget dylib) being installed — trap #2 in reverse: pushing
+  first would sync switch-widget schemas into an app whose dylib drops
+  the key. A background `adb wait-for-device` install was armed
+  2026-09-21; once the install lands, `git push` airledger-fitness.
+  The sheet columns + backfilled data are ALREADY live (harmless to
+  the old app — unknown columns are ignored).

@@ -5,6 +5,8 @@ import 'dart:io';
 
 import 'package:airledger/services/program_current.dart';
 import 'package:airledger/services/program_metrics.dart';
+import 'package:airledger/services/wm_tabs.dart';
+import 'package:airledger/services/working_max.dart';
 import 'package:googleapis/sheets/v4.dart' as gsheets;
 import 'package:googleapis_auth/auth_io.dart';
 import 'package:yaml/yaml.dart';
@@ -17,6 +19,15 @@ import 'package:yaml/yaml.dart';
 ///   • program_status tab — one row per ISO week, 2024-01-01 forward.
 ///   • coach_flags tab   — one row per flag fired in the last 8 ISO weeks,
 ///                         acknowledged values preserved by (id, fired_on).
+///   • working_max + readings tabs — APPEND-ONLY (never rewritten): new
+///     §1.2 readings since the last run are evaluated chronologically
+///     through the WM-1 controller (lib/services/working_max.dart via
+///     runWmChain) and appended together with any working-max changes.
+///     When the working_max tab is empty/missing, the §5 seed rows land
+///     first (source=seed, confirmed=false — the app's "Working maxes"
+///     card confirms them; the deadlift seed carries its pain_cap marker).
+///     program_status rows gain `working_max_&lt;lift&gt;` (end of week) +
+///     wm_decisions columns.
 ///
 /// Modes:
 ///   dart run tool/program_status_update.dart           # full update (writes tabs)
@@ -85,12 +96,15 @@ Future<void> main(List<String> args) async {
     }
     final rpeText = cell(r, sHead['RPE']);
     final rpe = rpeText.isEmpty ? null : double.tryParse(rpeText);
+    final notes = cell(r, sHead['Notes']);
     strengthRows.add(StrengthRow(
       date: date,
       exercise: exercise,
       weight: weight ?? 0,
       reps: (reps ?? 0).round(),
       rpe: rpe,
+      // Notes feed the working-max chain (variant + grinder parsing).
+      notes: notes.isEmpty ? null : notes,
     ));
   }
 
@@ -134,7 +148,8 @@ Future<void> main(List<String> args) async {
     climbingDates.add(date);
   }
 
-  // daily_notes: read `cause` column if present (PAIN_NOTE).
+  // daily_notes: read `cause` column if present (PAIN_NOTE) + the note
+  // text (the working-max chain scans it for pain-capped lifts/regions).
   final nHead = headerIndex(notesTab);
   final noteRows = <DailyNoteRow>[];
   for (final r in notesTab.skip(1)) {
@@ -143,7 +158,9 @@ Future<void> main(List<String> args) async {
     final cause = nHead.containsKey('cause')
         ? (cell(r, nHead['cause']).isEmpty ? null : cell(r, nHead['cause']))
         : null;
-    noteRows.add(DailyNoteRow(date: date, cause: cause));
+    final text = cell(r, nHead['note']);
+    noteRows.add(DailyNoteRow(
+        date: date, cause: cause, note: text.isEmpty ? null : text));
   }
 
   if (!brief) {
@@ -242,6 +259,91 @@ Future<void> main(List<String> args) async {
   }
 
   // -------------------------------------------------------------------------
+  // Working-max controller (WM-2): read tabs, seed if empty, evaluate new
+  // readings through the WM-1 chain. APPEND-ONLY — computed here, written
+  // (appended) after the dry-run gate below.
+  // -------------------------------------------------------------------------
+  final wmValues = await tab(wmTabName);
+  final readingValues = await tab(readingsTabName);
+  final wmHead = headerIndex(wmValues);
+  final rdHead = headerIndex(readingValues);
+  final existingWm = <WorkingMaxRow>[
+    for (final r in wmValues.skip(1)) ?WorkingMaxRow.fromCells(wmHead, r),
+  ];
+  final existingReadings = <ReadingRow>[
+    for (final r in readingValues.skip(1)) ?ReadingRow.fromCells(rdHead, r),
+  ];
+
+  // §5 seeds when the tab is empty/missing (pending until confirmed in
+  // the app's "Working maxes" card; deadlift carries its pain_cap marker).
+  final seeds =
+      existingWm.isEmpty ? seedWorkingMaxRows() : const <WorkingMaxRow>[];
+
+  final wmVersion = programYaml == null ? null : currentVersion(programYaml);
+  final wmPolicies =
+      wmVersion == null ? const <LoadPolicy>[] : loadPolicies(wmVersion);
+  final py = programYaml;
+  LoadPolicy? policyAt(DateTime d) {
+    if (py == null || wmPolicies.isEmpty) return null;
+    final slice = programCurrent(py, phaseYaml, d);
+    if (slice == null) return null;
+    return policyForDate(
+      wmPolicies,
+      date: d,
+      block: slice.block['number'] as int?,
+      weekType: slice.weekType,
+    );
+  }
+
+  String? weekTypeAt(DateTime d) =>
+      py == null ? null : programCurrent(py, phaseYaml, d)?.weekType;
+
+  // TWO_SIGNALS → controller freeze: DELIBERATELY NOT WIRED (2026-09-21).
+  // The §2.6 volume flags (WORKING_LOW ~28 sets, NEAR_MAX_LOW ≥6) are
+  // bulk-calibrated and fire on essentially every block-0 cut week, so
+  // feeding coach_flags' TWO_SIGNALS into runWmChain would freeze all
+  // four lifts indefinitely — contradicting §3 (cut_early is NOT frozen).
+  // The evaluate() override itself is implemented + tested; re-wire this
+  // set (fire → freeze the FOLLOWING week, since a week's own rollup is
+  // partial mid-week) once the flag rules are phase-aware.
+  final twoSignalsWeeks = <DateTime>{};
+  final painNotes = [
+    for (final n in noteRows)
+      if ((n.cause ?? '').toLowerCase().contains('pain'))
+        (date: n.date, text: '${n.cause} ${n.note ?? ''}'),
+  ];
+
+  final today = DateTime.now();
+  final chain = runWmChain(
+    snapshot: (
+      workingMax: [...existingWm, ...seeds],
+      readings: existingReadings,
+    ),
+    strengthRows: strengthRows,
+    policyFor: policyAt,
+    weekTypeOf: weekTypeAt,
+    today: today,
+    twoSignalsWeeks: twoSignalsWeeks,
+    painNotes: painNotes,
+  );
+  final allWmRows = [...existingWm, ...seeds, ...chain.newWorkingMaxRows];
+  final allReadings = [...existingReadings, ...chain.newReadings];
+
+  print('working_max: ${existingWm.length} existing rows'
+      '${seeds.isNotEmpty ? ' — EMPTY, seeding §5 (${seeds.length} rows, '
+          'pending in-app confirmation)' : ''}');
+  print('readings: ${existingReadings.length} existing, '
+      '${chain.newReadings.length} new; '
+      '${chain.newWorkingMaxRows.length} working-max change rows');
+  for (final r in chain.newReadings) {
+    print('  ${r.id}: ${r.weightLb}x${r.reps}@${r.rpe} [${r.variant}/'
+        '${r.kind}] → ${r.decision} (wm ${r.wmAfter})');
+  }
+  for (final e in chain.flagsByLift.entries) {
+    print('  flags ${e.key}: ${e.value.toSet().join(',')}');
+  }
+
+  // -------------------------------------------------------------------------
   // Read existing coach_flags tab to preserve acknowledged values
   // -------------------------------------------------------------------------
   final existingFlags = await tab('coach_flags');
@@ -275,12 +377,30 @@ Future<void> main(List<String> args) async {
     'climbing_sessions', 'bike_4x4_count', 'bike_4x4_max_hr',
     'bw_7d_avg', 'bw_rate_lb_wk', 'bw_3wk_change',
     'flags', 'deviations',
+    // WM-2: working max in force at week end + the week's controller
+    // decisions (current week also carries NO_READING flags).
+    'working_max_squat', 'working_max_bench', 'working_max_deadlift',
+    'working_max_press', 'wm_decisions',
   ];
+
+  // Current-week extras for wm_decisions (NO_READING has no reading row).
+  final currentWeekStart =
+      filteredWeeks.isEmpty ? null : filteredWeeks.last.weekStart;
+  final noReadingNotes = [
+    for (final e in chain.flagsByLift.entries)
+      if (e.value.contains('NO_READING')) '${e.key}:NO_READING',
+  ].join('; ');
 
   final psRows = <List<Object?>>[];
   for (final w in filteredWeeks.reversed) {
     final flagHits = flagsByWeek[w.weekStart] ?? [];
     final flagIds = flagHits.map((f) => f.id).join(',');
+    final weekSunday = w.weekStart.add(const Duration(days: 6));
+    var wmDecisions = wmDecisionsForWeek(allReadings, w.weekStart);
+    if (w.weekStart == currentWeekStart && noReadingNotes.isNotEmpty) {
+      wmDecisions =
+          wmDecisions.isEmpty ? noReadingNotes : '$wmDecisions; $noReadingNotes';
+    }
     psRows.add([
       ymd(w.weekStart),
       w.weekType ?? '',
@@ -307,6 +427,11 @@ Future<void> main(List<String> args) async {
       _r1(w.bw3wkChange),
       flagIds,
       '', // deviations — empty until phase C
+      workingMaxAsOf(allWmRows, 'squat', weekSunday) ?? '',
+      workingMaxAsOf(allWmRows, 'bench', weekSunday) ?? '',
+      workingMaxAsOf(allWmRows, 'deadlift', weekSunday) ?? '',
+      workingMaxAsOf(allWmRows, 'press', weekSunday) ?? '',
+      wmDecisions,
     ]);
   }
 
@@ -338,8 +463,43 @@ Future<void> main(List<String> args) async {
     print('--dry-run: skipping writes');
     print('program_status: ${psRows.length} rows');
     print('coach_flags: ${cfRows.length} rows');
+    print('working_max: would append '
+        '${seeds.length + chain.newWorkingMaxRows.length} rows');
+    print('readings: would append ${chain.newReadings.length} rows');
     _printCurrentWeekRow(filteredWeeks, flagsByWeek, psHeaders);
     return;
+  }
+
+  // -------------------------------------------------------------------------
+  // APPEND-ONLY write working_max + readings (history is never rewritten)
+  // -------------------------------------------------------------------------
+  final wmAppends = [
+    for (final r in [...seeds, ...chain.newWorkingMaxRows]) r.toSheetRow(),
+  ];
+  if (wmAppends.isNotEmpty) {
+    await _appendRows(
+      api: api,
+      spreadsheetId: config.spreadsheetId,
+      tabName: wmTabName,
+      headers: wmTabHeaders,
+      existingRowCount: wmValues.length,
+      rows: wmAppends,
+    );
+    print('appended ${wmAppends.length} working_max rows');
+  }
+  final readingAppends = [
+    for (final r in chain.newReadings) r.toSheetRow(),
+  ];
+  if (readingAppends.isNotEmpty) {
+    await _appendRows(
+      api: api,
+      spreadsheetId: config.spreadsheetId,
+      tabName: readingsTabName,
+      headers: readingsTabHeaders,
+      existingRowCount: readingValues.length,
+      rows: readingAppends,
+    );
+    print('appended ${readingAppends.length} readings rows');
   }
 
   // -------------------------------------------------------------------------
@@ -448,6 +608,55 @@ void _printCurrentWeekRow(
       print('    evidence: ${jsonEncode(f.evidence)}');
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// APPEND-ONLY tab write (working_max / readings). Creates the tab +
+// header row when missing, then writes new rows at an EXPLICIT range
+// below the existing data (never values.append at A1 — that eats the
+// header row when A1 is empty; never clear/rewrite).
+// ---------------------------------------------------------------------------
+
+Future<void> _appendRows({
+  required gsheets.SheetsApi api,
+  required String spreadsheetId,
+  required String tabName,
+  required List<String> headers,
+  required int existingRowCount, // header + data rows read this run
+  required List<List<Object?>> rows,
+}) async {
+  final meta = await api.spreadsheets.get(spreadsheetId);
+  final exists =
+      (meta.sheets ?? []).any((s) => s.properties?.title == tabName);
+  if (!exists) {
+    print('creating tab "$tabName" ...');
+    await api.spreadsheets.batchUpdate(
+      gsheets.BatchUpdateSpreadsheetRequest(requests: [
+        gsheets.Request(
+          addSheet: gsheets.AddSheetRequest(
+            properties: gsheets.SheetProperties(title: tabName),
+          ),
+        ),
+      ]),
+      spreadsheetId,
+    );
+  }
+  var startRow = existingRowCount + 1; // 1-based first free row
+  if (existingRowCount == 0) {
+    await api.spreadsheets.values.update(
+      gsheets.ValueRange(values: [headers]),
+      spreadsheetId,
+      "'$tabName'!A1",
+      valueInputOption: 'RAW',
+    );
+    startRow = 2;
+  }
+  await api.spreadsheets.values.update(
+    gsheets.ValueRange(values: rows),
+    spreadsheetId,
+    "'$tabName'!A$startRow",
+    valueInputOption: 'RAW',
+  );
 }
 
 // ---------------------------------------------------------------------------

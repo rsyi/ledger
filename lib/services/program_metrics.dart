@@ -49,12 +49,15 @@ class FourByFourRow {
   const FourByFourRow({required this.date, this.maxHr, this.workRateOrSpeed});
 }
 
-/// One daily note (only `cause` matters to flags).
+/// One daily note. `cause` drives the PAIN_NOTE flag; `note` (free text)
+/// is scanned by the working-max chain for pain-cap lift/region names
+/// (back → squat+deadlift, elbow/finger → press+bench).
 class DailyNoteRow {
   final DateTime date;
   final String? cause;
+  final String? note;
 
-  const DailyNoteRow({required this.date, this.cause});
+  const DailyNoteRow({required this.date, this.cause, this.note});
 }
 
 // ---------------------------------------------------------------------------

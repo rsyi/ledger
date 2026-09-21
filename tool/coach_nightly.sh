@@ -28,11 +28,20 @@ DUMP="$(cd "$APP" && dart run tool/coach_dump.dart --days 28)"
 PROGRAM_SLICE="$(cd "$APP" && dart run tool/program_slice.dart --date "$TARGET" 2>/dev/null \
   || cat "$FIT/coach/routine.md")"
 
+# Update program_status + coach_flags tabs (|| true so a failure doesn't
+# kill the briefing; errors land in the log).
+(cd "$APP" && dart run tool/program_status_update.dart) || true
+
+PROGRAM_STATUS_BRIEF="$(cd "$APP" && dart run tool/program_status_update.dart --brief 2>/dev/null)" || true
+
 PROMPT="$(
   printf 'MODE: BRIEFING\n\n'
   cat "$FIT/coach/PROMPT.md"
   printf '\n\n# goals.md\n\n';   cat "$FIT/coach/goals.md"
   printf '\n\n# program_slice\n\n%s\n' "$PROGRAM_SLICE"
+  if [ -n "$PROGRAM_STATUS_BRIEF" ]; then
+    printf '\n\n# program_status\n\n%s\n' "$PROGRAM_STATUS_BRIEF"
+  fi
   printf '\n\n# metrics.md\n\n'; cat "$FIT/coach/metrics.md"
   printf '\n\n# Templates\n\n'
   for t in "$FIT"/views/*.template.yml; do

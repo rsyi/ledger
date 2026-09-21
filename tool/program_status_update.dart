@@ -1,0 +1,555 @@
+// ignore_for_file: avoid_print
+
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:airledger/services/program_current.dart';
+import 'package:airledger/services/program_metrics.dart';
+import 'package:googleapis/sheets/v4.dart' as gsheets;
+import 'package:googleapis_auth/auth_io.dart';
+import 'package:yaml/yaml.dart';
+
+/// Nightly program-status compute + write for the coach outcome layer.
+///
+/// Reads FULL strength + weight + 4x4 + kaya_ascents + daily_notes history
+/// from the workbook, runs gradeSets → weeklyRollup → evaluateFlags (with
+/// programCurrent for weeks >= the program effective date), and writes:
+///   • program_status tab — one row per ISO week, 2024-01-01 forward.
+///   • coach_flags tab   — one row per flag fired in the last 8 ISO weeks,
+///                         acknowledged values preserved by (id, fired_on).
+///
+/// Modes:
+///   dart run tool/program_status_update.dart           # full update (writes tabs)
+///   dart run tool/program_status_update.dart --brief   # print top-3 rows + open
+///                                                        flags as markdown, no write
+///   dart run tool/program_status_update.dart --dry-run # compute but no write
+///
+/// Wire into coach_nightly.sh BEFORE the briefing prompt is assembled.
+
+// ---------------------------------------------------------------------------
+// Config / API (backtest pattern)
+// ---------------------------------------------------------------------------
+
+final home = Platform.environment['HOME']!;
+final configPath = '$home/.config/airledger/config.yaml';
+final coachDir = '$home/repos/airledger-fitness/coach';
+
+Future<void> main(List<String> args) async {
+  final brief = args.contains('--brief');
+  final dryRun = args.contains('--dry-run') || args.contains('--dry');
+
+  final config = readConfig();
+  final api = await sheetsApi(config.keyPath);
+
+  Future<List<List<Object?>>> tab(String name) async {
+    try {
+      final resp = await api.spreadsheets.values.get(
+        config.spreadsheetId,
+        "'$name'",
+      );
+      return resp.values ?? [];
+    } on gsheets.DetailedApiRequestError catch (e) {
+      if (e.status == 400) return [];
+      rethrow;
+    }
+  }
+
+  if (!brief) print('reading tabs ...');
+
+  final strengthTab = await tab('strength');
+  final weightTab = await tab('weight');
+  final cardioTab = await tab('4x4');
+  final climbTab = await tab('kaya_ascents');
+  final notesTab = await tab('daily_notes');
+
+  // -------------------------------------------------------------------------
+  // Map sheet rows → metrics inputs
+  // -------------------------------------------------------------------------
+  final anomalies = <String, int>{};
+  void anomaly(String kind) => anomalies[kind] = (anomalies[kind] ?? 0) + 1;
+
+  final sHead = headerIndex(strengthTab);
+  final strengthRows = <StrengthRow>[];
+  for (final r in strengthTab.skip(1)) {
+    if (r.isEmpty) { anomaly('strength: empty row'); continue; }
+    final date = parseSheetDate(cell(r, sHead['Date']));
+    if (date == null) { anomaly('strength: missing Date'); continue; }
+    final exercise = cell(r, sHead['Exercise']);
+    if (exercise.isEmpty) { anomaly('strength: empty Exercise'); continue; }
+    final weight = double.tryParse(cell(r, sHead['Weight']));
+    final reps = double.tryParse(cell(r, sHead['Reps']));
+    if (mainLiftByExercise.containsKey(exercise) &&
+        (weight == null || reps == null)) {
+      anomaly('strength: main lift missing weight/reps');
+      continue;
+    }
+    final rpeText = cell(r, sHead['RPE']);
+    final rpe = rpeText.isEmpty ? null : double.tryParse(rpeText);
+    strengthRows.add(StrengthRow(
+      date: date,
+      exercise: exercise,
+      weight: weight ?? 0,
+      reps: (reps ?? 0).round(),
+      rpe: rpe,
+    ));
+  }
+
+  final wHead = headerIndex(weightTab);
+  final weightRows = <WeightRow>[];
+  for (final r in weightTab.skip(1)) {
+    final date = parseSheetDate(cell(r, wHead['date']));
+    final lbs = double.tryParse(cell(r, wHead['weight_lbs']));
+    if (date == null || lbs == null) {
+      anomaly('weight: missing date or weight_lbs');
+      continue;
+    }
+    weightRows.add(WeightRow(date: date, weightLbs: lbs));
+  }
+
+  final cHead = headerIndex(cardioTab);
+  final fourByFours = <FourByFourRow>[];
+  for (final r in cardioTab.skip(1)) {
+    final date = parseSheetDate(cell(r, cHead['Date']));
+    if (date == null) { anomaly('4x4: missing Date'); continue; }
+    final type = cell(r, cHead['Type']).toLowerCase();
+    if (type.isNotEmpty &&
+        !const {'treadmill', 'bike', 'stairmaster'}.contains(type)) {
+      anomaly('4x4: non-4x4 row excluded (type=$type)');
+      continue;
+    }
+    final speed = double.tryParse(cell(r, cHead['Treadmill Speed'])) ??
+        double.tryParse(cell(r, cHead['Stairmaster Speed']));
+    fourByFours.add(FourByFourRow(
+      date: date,
+      maxHr: double.tryParse(cell(r, cHead['Max Heart Rate'])),
+      workRateOrSpeed: speed,
+    ));
+  }
+
+  final kHead = headerIndex(climbTab);
+  final climbingDates = <DateTime>[];
+  for (final r in climbTab.skip(1)) {
+    final date = parseSheetDate(cell(r, kHead['date']));
+    if (date == null) { anomaly('kaya_ascents: missing date'); continue; }
+    climbingDates.add(date);
+  }
+
+  // daily_notes: read `cause` column if present (PAIN_NOTE).
+  final nHead = headerIndex(notesTab);
+  final noteRows = <DailyNoteRow>[];
+  for (final r in notesTab.skip(1)) {
+    final date = parseSheetDate(cell(r, nHead['date']));
+    if (date == null) continue;
+    final cause = nHead.containsKey('cause')
+        ? (cell(r, nHead['cause']).isEmpty ? null : cell(r, nHead['cause']))
+        : null;
+    noteRows.add(DailyNoteRow(date: date, cause: cause));
+  }
+
+  if (!brief) {
+    print('  ${strengthRows.length} strength rows, ${weightRows.length} '
+        'weigh-ins, ${fourByFours.length} 4x4 rows, '
+        '${climbingDates.length} climb ascents, ${noteRows.length} notes');
+    for (final e in anomalies.entries) {
+      print('  anomaly: ${e.value}x ${e.key}');
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Load program.yaml + phase.yaml for resolvers
+  // -------------------------------------------------------------------------
+  Map<Object?, Object?>? programYaml;
+  Map<Object?, Object?>? phaseYaml;
+
+  final programFile = File('$coachDir/program.yaml');
+  if (programFile.existsSync()) {
+    final parsed = loadYaml(programFile.readAsStringSync());
+    if (parsed is Map) programYaml = Map<Object?, Object?>.from(parsed);
+  }
+
+  final phaseFile = File('$coachDir/phase.yaml');
+  if (phaseFile.existsSync()) {
+    final parsed = loadYaml(phaseFile.readAsStringSync());
+    if (parsed is Map) phaseYaml = Map<Object?, Object?>.from(parsed);
+  }
+
+  // Program effective date: first block start of the current program version.
+  DateTime? programEffectiveDate;
+  if (programYaml != null) {
+    final ver = currentVersion(programYaml);
+    if (ver != null) {
+      final blocks = ver['blocks'];
+      if (blocks is List && blocks.isNotEmpty && blocks.first is Map) {
+        final dates = (blocks.first as Map)['dates'];
+        if (dates is List && dates.isNotEmpty) {
+          final d = DateTime.tryParse(dates.first.toString());
+          if (d != null) programEffectiveDate = DateTime.utc(d.year, d.month, d.day);
+        }
+      }
+    }
+  }
+
+  String? Function(DateTime) weekTypeResolver = (m) => null;
+  if (programYaml != null && programEffectiveDate != null) {
+    final py = programYaml; // non-null: inside `programYaml != null` guard
+    final effDate = programEffectiveDate;
+    weekTypeResolver = (DateTime monday) {
+      // effDate is captured from programEffectiveDate which is non-null here.
+      if (monday.isBefore(effDate)) return null;
+      final slice = programCurrent(py, phaseYaml, monday);
+      return slice?.weekType;
+    };
+  }
+
+  String? Function(DateTime) phaseResolver = (m) => null;
+  if (phaseYaml != null) {
+    phaseResolver = (DateTime monday) {
+      final ver = currentVersion(phaseYaml!);
+      return ver?['value']?.toString();
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Compute
+  // -------------------------------------------------------------------------
+  if (!brief) print('computing metrics ...');
+  final graded = gradeSets(strengthRows);
+  final weeks = weeklyRollup(
+    graded,
+    weights: weightRows,
+    fourByFours: fourByFours,
+    climbingDates: climbingDates,
+    notes: noteRows,
+    weekTypeOf: weekTypeResolver,
+  );
+  final flagsByWeek = evaluateFlags(weeks, phaseOf: phaseResolver);
+
+  // Only keep weeks from 2024-01-01 forward.
+  final cutoff = DateTime.utc(2024, 1, 1);
+  final filteredWeeks = [for (final w in weeks) if (!w.weekStart.isBefore(cutoff)) w];
+
+  if (!brief) {
+    print('  ${weeks.length} total ISO weeks, '
+        '${filteredWeeks.length} from 2024-01-01 forward');
+  }
+
+  // -------------------------------------------------------------------------
+  // --brief mode: print top-3 rows + open flags as markdown, then exit
+  // -------------------------------------------------------------------------
+  if (brief) {
+    _printBrief(filteredWeeks, flagsByWeek);
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // Read existing coach_flags tab to preserve acknowledged values
+  // -------------------------------------------------------------------------
+  final existingFlags = await tab('coach_flags');
+  final ackByKey = <String, String>{};
+  if (existingFlags.length > 1) {
+    final fHead = headerIndex(existingFlags);
+    final idCol = fHead['id'];
+    final firedCol = fHead['fired_on'];
+    final ackCol = fHead['acknowledged'];
+    for (final r in existingFlags.skip(1)) {
+      if (idCol == null || firedCol == null || ackCol == null) break;
+      final id = cell(r, idCol);
+      final fired = cell(r, firedCol);
+      final ack = cell(r, ackCol);
+      if (id.isNotEmpty && fired.isNotEmpty && ack.isNotEmpty) {
+        ackByKey['$id|$fired'] = ack;
+      }
+    }
+  }
+  print('  preserved ${ackByKey.length} acknowledged flag values');
+
+  // -------------------------------------------------------------------------
+  // Build program_status rows (newest first)
+  // -------------------------------------------------------------------------
+  const psHeaders = [
+    'week_monday', 'week_type', 'sessions', 'sets_total', 'working_sets',
+    'hard_sets', 'near_max_sets', 'long_failure_sets', 'avg_reps_working',
+    'bench_days', 'squat_days', 'deadlift_days', 'press_days',
+    'best_e1rm_squat', 'best_e1rm_bench', 'best_e1rm_deadlift',
+    'best_e1rm_press',
+    'climbing_sessions', 'bike_4x4_count', 'bike_4x4_max_hr',
+    'bw_7d_avg', 'bw_rate_lb_wk', 'bw_3wk_change',
+    'flags', 'deviations',
+  ];
+
+  final psRows = <List<Object?>>[];
+  for (final w in filteredWeeks.reversed) {
+    final flagHits = flagsByWeek[w.weekStart] ?? [];
+    final flagIds = flagHits.map((f) => f.id).join(',');
+    psRows.add([
+      ymd(w.weekStart),
+      w.weekType ?? '',
+      w.sessions,
+      w.setsTotal,
+      w.workingSets,
+      w.hardSets,
+      w.nearMaxSets,
+      w.longFailureSets,
+      _r1(w.avgRepsWorking),
+      w.benchDays,
+      w.perLift['squat']?.days ?? 0,
+      w.perLift['deadlift']?.days ?? 0,
+      w.perLift['press']?.days ?? 0,
+      _r1(w.perLift['squat']?.bestE1rmFromSetsLe5),
+      _r1(w.perLift['bench']?.bestE1rmFromSetsLe5),
+      _r1(w.perLift['deadlift']?.bestE1rmFromSetsLe5),
+      _r1(w.perLift['press']?.bestE1rmFromSetsLe5),
+      w.climbingSessions,
+      w.bike4x4Count,
+      _r1(w.bike4x4MaxHr),
+      _r1(w.bw7dAvg),
+      _r1(w.bwRateLbWk),
+      _r1(w.bw3wkChange),
+      flagIds,
+      '', // deviations — empty until phase C
+    ]);
+  }
+
+  // -------------------------------------------------------------------------
+  // Build coach_flags rows (open flags: last 8 ISO weeks, newest first)
+  // -------------------------------------------------------------------------
+  const cfHeaders = ['id', 'fired_on', 'evidence', 'action', 'acknowledged'];
+
+  final now = DateTime.now();
+  final eightWeeksAgo = mondayOf(DateTime(now.year, now.month, now.day - 56));
+  final cfRows = <List<Object?>>[];
+  for (final w in filteredWeeks.reversed) {
+    if (w.weekStart.isBefore(eightWeeksAgo)) continue;
+    final flagHits = flagsByWeek[w.weekStart] ?? [];
+    for (final f in flagHits) {
+      final firedStr = ymd(f.firedOn);
+      final key = '${f.id}|$firedStr';
+      cfRows.add([
+        f.id,
+        firedStr,
+        jsonEncode(f.evidence),
+        f.action,
+        ackByKey[key] ?? '',
+      ]);
+    }
+  }
+
+  if (dryRun) {
+    print('--dry-run: skipping writes');
+    print('program_status: ${psRows.length} rows');
+    print('coach_flags: ${cfRows.length} rows');
+    _printCurrentWeekRow(filteredWeeks, flagsByWeek, psHeaders);
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // REPLACE-ALL write program_status
+  // -------------------------------------------------------------------------
+  await _replaceTab(
+    api: api,
+    spreadsheetId: config.spreadsheetId,
+    tabName: 'program_status',
+    headers: psHeaders,
+    rows: psRows,
+  );
+  print('wrote program_status: ${psRows.length} data rows');
+
+  // -------------------------------------------------------------------------
+  // REPLACE-ALL write coach_flags
+  // -------------------------------------------------------------------------
+  await _replaceTab(
+    api: api,
+    spreadsheetId: config.spreadsheetId,
+    tabName: 'coach_flags',
+    headers: cfHeaders,
+    rows: cfRows,
+  );
+  print('wrote coach_flags: ${cfRows.length} flag rows');
+
+  // -------------------------------------------------------------------------
+  // Report
+  // -------------------------------------------------------------------------
+  _printCurrentWeekRow(filteredWeeks, flagsByWeek, psHeaders);
+}
+
+// ---------------------------------------------------------------------------
+// Brief output (for coach_nightly.sh prompt injection)
+// ---------------------------------------------------------------------------
+
+void _printBrief(
+  List<WeeklyMetrics> filteredWeeks,
+  Map<DateTime, List<FlagHit>> flagsByWeek,
+) {
+  print('## Program status (recent weeks)\n');
+  print('| week_monday | week_type | sessions | working_sets | near_max_sets | bw_7d_avg | bw_rate_lb_wk | flags |');
+  print('|---|---|---|---|---|---|---|---|');
+
+  var count = 0;
+  for (final w in filteredWeeks.reversed) {
+    if (count >= 3) break;
+    count++;
+    final flagHits = flagsByWeek[w.weekStart] ?? [];
+    final flagIds = flagHits.map((f) => f.id).join(', ');
+    print('| ${ymd(w.weekStart)} | ${w.weekType ?? '-'} '
+        '| ${w.sessions} | ${w.workingSets} | ${w.nearMaxSets} '
+        '| ${_r1(w.bw7dAvg)} | ${_r1(w.bwRateLbWk)} | $flagIds |');
+  }
+
+  // Open flags from last 8 weeks
+  final now = DateTime.now();
+  final eightWeeksAgo = mondayOf(DateTime(now.year, now.month, now.day - 56));
+  final openFlags = <FlagHit>[];
+  for (final w in filteredWeeks.reversed) {
+    if (w.weekStart.isBefore(eightWeeksAgo)) break;
+    openFlags.addAll(flagsByWeek[w.weekStart] ?? []);
+  }
+
+  if (openFlags.isEmpty) {
+    print('\n## Open flags\n\nNone.');
+  } else {
+    print('\n## Open flags (last 8 weeks)\n');
+    for (final f in openFlags) {
+      print('- **${f.id}** (${ymd(f.firedOn)}): ${f.action}');
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Report current week row to stdout
+// ---------------------------------------------------------------------------
+
+void _printCurrentWeekRow(
+  List<WeeklyMetrics> filteredWeeks,
+  Map<DateTime, List<FlagHit>> flagsByWeek,
+  List<String> psHeaders,
+) {
+  if (filteredWeeks.isEmpty) return;
+  final w = filteredWeeks.last;
+  final flagHits = flagsByWeek[w.weekStart] ?? [];
+  final flagIds = flagHits.map((f) => f.id).join(',');
+  print('\nCurrent week: ${ymd(w.weekStart)}');
+  print('  week_type=${w.weekType ?? "(none)"} sessions=${w.sessions} '
+      'sets_total=${w.setsTotal} working=${w.workingSets} '
+      'hard=${w.hardSets} near_max=${w.nearMaxSets} '
+      'long_failure=${w.longFailureSets}');
+  print('  bench_d=${w.benchDays} squat_d=${w.perLift['squat']?.days ?? 0} '
+      'dl_d=${w.perLift['deadlift']?.days ?? 0} '
+      'press_d=${w.perLift['press']?.days ?? 0}');
+  print('  bw_7d=${_r1(w.bw7dAvg)} rate=${_r1(w.bwRateLbWk)} '
+      '3wk=${_r1(w.bw3wkChange)}');
+  print('  bike_4x4=${w.bike4x4Count} max_hr=${_r1(w.bike4x4MaxHr)}');
+  print('  climb=${w.climbingSessions}');
+  print('  flags=${flagIds.isEmpty ? "(none)" : flagIds}');
+
+  if (flagHits.isNotEmpty) {
+    print('\nOpen flags this week:');
+    for (final f in flagHits) {
+      print('  ${f.id}: ${f.action}');
+      print('    evidence: ${jsonEncode(f.evidence)}');
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// REPLACE-ALL tab write (kaya_import pattern)
+// ---------------------------------------------------------------------------
+
+Future<void> _replaceTab({
+  required gsheets.SheetsApi api,
+  required String spreadsheetId,
+  required String tabName,
+  required List<String> headers,
+  required List<List<Object?>> rows,
+}) async {
+  // Ensure tab exists.
+  final meta = await api.spreadsheets.get(spreadsheetId);
+  final exists = (meta.sheets ?? [])
+      .any((s) => s.properties?.title == tabName);
+  if (!exists) {
+    print('creating tab "$tabName" ...');
+    await api.spreadsheets.batchUpdate(
+      gsheets.BatchUpdateSpreadsheetRequest(requests: [
+        gsheets.Request(
+          addSheet: gsheets.AddSheetRequest(
+            properties: gsheets.SheetProperties(title: tabName),
+          ),
+        ),
+      ]),
+      spreadsheetId,
+    );
+  }
+
+  // Clear then write.
+  await api.spreadsheets.values
+      .clear(gsheets.ClearValuesRequest(), spreadsheetId, "'$tabName'");
+  await api.spreadsheets.values.update(
+    gsheets.ValueRange(values: [headers, ...rows]),
+    spreadsheetId,
+    "'$tabName'!A1",
+    valueInputOption: 'RAW',
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers (shared with coach_backtest pattern)
+// ---------------------------------------------------------------------------
+
+({String spreadsheetId, String keyPath}) readConfig() {
+  final lines = File(configPath).readAsLinesSync();
+  String? pick(String key) {
+    for (final l in lines) {
+      if (l.startsWith('$key:')) return l.substring(key.length + 1).trim();
+    }
+    return null;
+  }
+
+  final spreadsheetId = pick('spreadsheet_id');
+  if (spreadsheetId == null || spreadsheetId.isEmpty) {
+    print('no spreadsheet_id in $configPath');
+    exit(1);
+  }
+  final keyPath = pick('service_account_key_path') ??
+      '$home/.config/airledger/service-account.json';
+  return (spreadsheetId: spreadsheetId, keyPath: keyPath);
+}
+
+Future<gsheets.SheetsApi> sheetsApi(String keyPath) async {
+  final keyJson = await File(keyPath).readAsString();
+  final credentials = ServiceAccountCredentials.fromJson(keyJson);
+  final client = await clientViaServiceAccount(
+    credentials,
+    [gsheets.SheetsApi.spreadsheetsScope],
+  );
+  return gsheets.SheetsApi(client);
+}
+
+Map<String, int> headerIndex(List<List<Object?>> tab) => tab.isEmpty
+    ? {}
+    : {for (var i = 0; i < tab.first.length; i++) tab.first[i].toString(): i};
+
+String cell(List<Object?> row, int? i) =>
+    i == null || i < 0 || i >= row.length
+        ? ''
+        : (row[i]?.toString() ?? '').trim();
+
+DateTime? parseSheetDate(String s) {
+  if (s.isEmpty) return null;
+  final iso = DateTime.tryParse(s);
+  if (iso != null) return DateTime(iso.year, iso.month, iso.day);
+  final us = RegExp(r'^(\d{1,2})/(\d{1,2})/(\d{4})$').firstMatch(s);
+  if (us != null) {
+    return DateTime(
+      int.parse(us.group(3)!),
+      int.parse(us.group(1)!),
+      int.parse(us.group(2)!),
+    );
+  }
+  return null;
+}
+
+String ymd(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+    '${d.day.toString().padLeft(2, '0')}';
+
+/// Round float to 1dp; return empty string when null.
+Object _r1(double? v) => v == null ? '' : double.parse(v.toStringAsFixed(1));

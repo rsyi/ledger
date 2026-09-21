@@ -20,6 +20,12 @@ import 'coach_chat_screen.dart';
 /// activity. The app-bar "+" opens a chat for a fresh `t-xxxxxxxx` id —
 /// the thread only exists once its first message is sent. Refreshes on
 /// return from a chat and when a background sync completes.
+///
+/// Long-press a tile to delete its thread (confirm dialog → every
+/// coach_chat row with that thread id is engine-tombstoned via
+/// repository.delete, so the sheet rows disappear on next sync).
+/// Long-press is the timeline's destructive idiom, and the trailing
+/// slot already carries the unread dot + chevron.
 class CoachThreadsScreen extends StatefulWidget {
   final ViewSchema view;
   final WarehouseConnector repository;
@@ -71,6 +77,9 @@ class _CoachThreadsScreenState extends State<CoachThreadsScreen> {
   String? _error;
   Timer? _poll;
   ValueListenable<bool>? _syncing;
+
+  /// Thread ids mid-delete: their tiles show a spinner and ignore taps.
+  final Set<String> _deleting = {};
 
   @override
   void initState() {
@@ -217,6 +226,74 @@ class _CoachThreadsScreenState extends State<CoachThreadsScreen> {
     _openThread(id, 'New thread');
   }
 
+  /// Confirm-then-delete every row in [t]'s thread. Blank-`thread` rows
+  /// belong to `general` (coachThreadOf), so deleting General removes
+  /// the pre-threads history too. Rows delete sequentially through the
+  /// normal repository API — the engine tombstones each one and the
+  /// next sync removes them from the sheet; a failure mid-loop leaves a
+  /// partial thread, surfaced by the refresh + snackbar below.
+  Future<void> _deleteThread(_ThreadInfo t) async {
+    final List<Record> rows;
+    try {
+      final all = await widget.repository.list(widget.view);
+      rows = all.where((r) => coachThreadOf(r) == t.id).toList();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      return;
+    }
+    if (rows.isEmpty) {
+      // Already gone (deleted elsewhere / synced away) — just refresh.
+      _load();
+      return;
+    }
+    if (!mounted) return;
+    final n = rows.length;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete this thread?'),
+        content: Text(
+          'Its $n message${n == 1 ? ' is' : 's are'} removed from the '
+          'ledger and the sheet on next sync.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    setState(() => _deleting.add(t.id));
+    try {
+      // Sequential on purpose: briefings can hold months of daily rows
+      // and the engine store serializes writes anyway.
+      for (final r in rows) {
+        await widget.repository.delete(widget.view, r);
+      }
+      // Same post-write trigger as sends — push the tombstones out.
+      unawaited(SyncScheduler.instance?.maybeSync(manual: true));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Delete failed: $e — refreshing')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _deleting.remove(t.id));
+        await _load();
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -279,11 +356,13 @@ class _CoachThreadsScreenState extends State<CoachThreadsScreen> {
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (_, i) {
         final t = _threads[i];
+        final deleting = _deleting.contains(t.id);
         final rel = _relativeTime(t.lastTs);
         final subtitle = [t.preview, ?rel]
             .where((s) => s.isNotEmpty)
             .join(' · ');
         return ListTile(
+          enabled: !deleting,
           title: Text(
             t.title,
             maxLines: 1,
@@ -302,7 +381,7 @@ class _CoachThreadsScreenState extends State<CoachThreadsScreen> {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (t.unread)
+              if (t.unread && !deleting)
                 Container(
                   width: 10,
                   height: 10,
@@ -312,10 +391,18 @@ class _CoachThreadsScreenState extends State<CoachThreadsScreen> {
                     shape: BoxShape.circle,
                   ),
                 ),
-              const Icon(Icons.chevron_right),
+              if (deleting)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                const Icon(Icons.chevron_right),
             ],
           ),
-          onTap: () => _openThread(t.id, t.title),
+          onTap: deleting ? null : () => _openThread(t.id, t.title),
+          onLongPress: deleting ? null : () => _deleteThread(t),
         );
       },
     );

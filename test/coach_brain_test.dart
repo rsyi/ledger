@@ -138,10 +138,11 @@ void main() {
     expect(prompt, contains('coach/metrics.md body'));
     expect(prompt, contains('| 2026-09-13 | 70.5 |'));
     expect(prompt, contains('[user] hi coach'));
-    expect(fetches, CoachBrain.docPaths.length);
-    // Second build serves docs from the 1h cache.
+    // First build fetches both the doc paths and the intent-layer YAML paths.
+    expect(fetches, CoachBrain.docPaths.length + CoachBrain.intentPaths.length);
+    // Second build serves everything from the 1h cache — no new fetches.
     await b.buildPrompt(const []);
-    expect(fetches, CoachBrain.docPaths.length);
+    expect(fetches, CoachBrain.docPaths.length + CoachBrain.intentPaths.length);
   });
 
   test('buildSystemPrompt has docs+dump but no chat history; buildPrompt '

@@ -25,11 +25,14 @@ fi
 
 DUMP="$(cd "$APP" && dart run tool/coach_dump.dart --days 28)"
 
+PROGRAM_SLICE="$(cd "$APP" && dart run tool/program_slice.dart --date "$TARGET" 2>/dev/null \
+  || cat "$FIT/coach/routine.md")"
+
 PROMPT="$(
   printf 'MODE: BRIEFING\n\n'
   cat "$FIT/coach/PROMPT.md"
   printf '\n\n# goals.md\n\n';   cat "$FIT/coach/goals.md"
-  printf '\n\n# routine.md\n\n'; cat "$FIT/coach/routine.md"
+  printf '\n\n# program_slice\n\n%s\n' "$PROGRAM_SLICE"
   printf '\n\n# metrics.md\n\n'; cat "$FIT/coach/metrics.md"
   printf '\n\n# Templates\n\n'
   for t in "$FIT"/views/*.template.yml; do

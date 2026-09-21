@@ -1,3 +1,5 @@
+import 'package:yaml/yaml.dart';
+
 import '../models/coach_proposal.dart';
 import '../models/github_config.dart';
 import '../models/model_config.dart';
@@ -5,6 +7,8 @@ import '../models/view_schema.dart';
 import 'chat_runner.dart';
 import 'coach_tools.dart';
 import 'github_client.dart';
+import 'program_current.dart';
+import 'program_slice_text.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 
@@ -25,10 +29,21 @@ typedef CoachDocFetcher = Future<String?> Function(String path);
 class CoachBrain {
   /// Coach docs pulled from the schemas repo. Order matters — it's the
   /// order they appear in the prompt.
+  /// routine.md is retained this release for fallback; the program slice
+  /// above is now authoritative for weekly structure.
   static const docPaths = [
     'coach/goals.md',
-    'coach/routine.md',
+    'coach/routine.md', // deprecated: kept as fallback only; see program slice
     'coach/metrics.md',
+  ];
+
+  /// Intent-layer YAML paths fetched alongside docs. strategy.yaml may 404
+  /// — tolerated (null slice section → fall back to docs only). Exposed as
+  /// a public constant so tests can account for the extra fetches.
+  static const intentPaths = [
+    'coach/program.yaml',
+    'coach/phase.yaml',
+    'coach/strategy.yaml', // may 404 — null is fine
   ];
 
   /// Ledger views dumped into the prompt (those that exist).
@@ -132,12 +147,15 @@ class CoachBrain {
 MODE: REPLY
 
 You are Robert's training coach, replying inside his phone's ledger app.
-Below you are given his goals, weekly routine rules, and metric
-definitions (the coach docs), a dump of recent ledger data (last 28 days
-plus any planned future rows), and the coach-chat history. The newest
-user message(s) in the history are unanswered — reply to them
-conversationally as his coach, grounded in the ledger data, routine
-rules, and metric definitions.
+Below you are given a PROGRAM SLICE (the authoritative current-week
+intent: block, week type, today's template, targets, and flag rules),
+followed by his goals, metric definitions, and recent ledger data (last
+28 days plus any planned future rows), and the coach-chat history. The
+newest user message(s) in the history are unanswered — reply to them
+conversationally as his coach, grounded in the ledger data, program
+slice, and metric definitions.
+
+(routine.md retired; the program slice above is authoritative)
 
 Plain text, concise (this renders as a chat bubble on a phone). Light
 markdown is fine — short lines, a few bullets. Do NOT output JSON in
@@ -148,21 +166,26 @@ to a plan you suggested), use list_templates / read_template to ground
 the plan in a template, fill in concrete numbers from the ledger data,
 and call propose_schedule — it shows him a card with Schedule / Not
 now buttons. Never claim something is scheduled; the card handles
-confirmation. Follow routine.md's carryover rule and state your
-reasoning in one line. If he asks to change goals or routine, describe
-the change and note that editing coach/*.md happens in a desktop
-Claude session — you cannot edit files from here.''';
+confirmation. Follow the program slice's weekly template and carryover
+rule; state your reasoning in one line. If he asks to change goals or
+routine, describe the change and note that editing coach/*.yaml happens
+in a desktop Claude session — you cannot edit files from here.''';
 
-  /// System-prompt half: instructions, TODAY, coach docs, ledger dump.
+  /// System-prompt half: instructions, TODAY, program slice, coach docs,
+  /// ledger dump. The program slice is injected BEFORE the docs so the LLM
+  /// sees current intent first. Falls back gracefully when YAML is missing.
   Future<String> buildSystemPrompt(DateTime today) async {
+    final sliceSection = await _programSliceSection(today);
     final docs = await _docsSection();
     final dump = await _ledgerDump(today);
-    return [
+    final sections = [
       systemPrompt,
       'TODAY: ${_fmtDate(today)}',
+      ?sliceSection,
       '## Coach docs\n\n$docs',
       '## Ledger data (last ${dumpWindow.inDays} days + planned)\n\n$dump',
-    ].join('\n\n');
+    ];
+    return sections.join('\n\n');
   }
 
   /// Full single-string prompt (system half + history). Kept for tests
@@ -174,6 +197,57 @@ Claude session — you cannot edit files from here.''';
       '## Chat history (oldest first)\n\n${renderHistory(history)}',
       'Reply to the newest user message(s) now.',
     ].join('\n\n');
+  }
+
+  /// Fetches program.yaml, phase.yaml, strategy.yaml (with 1h caching),
+  /// runs the Dart resolver, and returns the rendered program slice section.
+  /// Returns null on any failure so the caller can fall back to current
+  /// behaviour including routine.md.
+  Future<String?> _programSliceSection(DateTime today) async {
+    try {
+      final yamls = <String, Map<Object?, Object?>?>{};
+      for (final path in intentPaths) {
+        final at = now();
+        final cached = _docCache[path];
+        String? raw;
+        if (cached != null && at.difference(cached.at) < docCacheTtl) {
+          raw = cached.content;
+        } else {
+          try {
+            raw = await fetchDoc(path);
+          } catch (_) {
+            raw = null;
+          }
+          if (raw != null) _docCache[path] = (at: at, content: raw);
+        }
+        if (raw == null) {
+          yamls[path] = null;
+        } else {
+          final parsed = loadYaml(raw);
+          yamls[path] =
+              parsed is Map ? Map<Object?, Object?>.from(parsed) : null;
+        }
+      }
+
+      final programYaml = yamls['coach/program.yaml'];
+      if (programYaml == null) return null;
+
+      final phaseYaml = yamls['coach/phase.yaml'];
+      final strategyYaml = yamls['coach/strategy.yaml'];
+
+      final slice = programCurrent(programYaml, phaseYaml, today);
+      if (slice == null) return null;
+
+      final phase = phaseYaml != null ? currentVersion(phaseYaml) : null;
+      final strategy =
+          strategyYaml != null ? currentVersion(strategyYaml) : null;
+
+      final rendered = renderProgramSlice(slice, phase: phase, strategy: strategy);
+      return rendered;
+    } catch (_) {
+      // Any parse/resolve failure → fall back gracefully.
+      return null;
+    }
   }
 
   /// Fetches (or serves cached) coach docs. Docs that fail to fetch are

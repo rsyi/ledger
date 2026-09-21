@@ -35,12 +35,15 @@ import '../services/schema_sync.dart';
 import '../services/sheets_repository.dart';
 import '../services/transient_retry.dart';
 import '../services/warehouse_connector.dart';
+import '../services/program_current.dart';
+import '../services/program_provider.dart';
 import 'apps_screen.dart';
 import 'chat_screen.dart';
 import 'coach_chat_screen.dart';
 import 'coach_threads_screen.dart';
 import 'timeline_screen.dart';
 import 'today_dashboard.dart';
+import 'week_plan_screen.dart';
 
 /// The synced view that backs the coach chat. Hidden from the normal
 /// tile list; surfaced only through the pinned Coach row + chat screen.
@@ -486,6 +489,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   Expanded(
                     child: ListView(
                       children: [
+                        // Week plan tile — only shown when GitHub config is
+                        // present (program.yaml lives in the schemas repo).
+                        if (github != null) ...[
+                          _WeekPlanTile(
+                            fetchDoc: CoachBrain.githubFetcher(github),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => WeekPlanScreen(
+                                  provider: ProgramProvider(
+                                    CoachBrain.githubFetcher(github),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const Divider(height: 1),
+                        ],
                         // Writable trackers.
                         for (final view in entryViews) ...[
                           ListTile(
@@ -869,6 +889,70 @@ class _CoachRowState extends State<_CoachRow> {
         ),
         onTap: _open,
       ),
+    );
+  }
+}
+
+/// Home-screen tile for the Week Plan feature. Loads program.yaml (via
+/// [ProgramProvider]'s 1 h cache) to compute a useful subtitle: the
+/// morning template text for today (or tomorrow when today is Sunday).
+/// Falls back to "This week: [weekType]" when the slice is available but has
+/// no morning session, or "View this week's plan" when data is absent.
+class _WeekPlanTile extends StatefulWidget {
+  final CoachDocFetcher fetchDoc;
+  final VoidCallback onTap;
+
+  const _WeekPlanTile({required this.fetchDoc, required this.onTap});
+
+  @override
+  State<_WeekPlanTile> createState() => _WeekPlanTileState();
+}
+
+class _WeekPlanTileState extends State<_WeekPlanTile> {
+  String _subtitle = 'View this week\'s plan';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSubtitle();
+  }
+
+  Future<void> _loadSubtitle() async {
+    try {
+      final provider = ProgramProvider(widget.fetchDoc);
+      final docs = await provider.load();
+      final program = docs.program;
+      if (program == null) return;
+
+      final now = DateTime.now();
+      // On Sundays show tomorrow's (Monday) template — that's the upcoming day.
+      final refDate =
+          now.weekday == DateTime.sunday ? now.add(const Duration(days: 1)) : now;
+
+      final slice = programCurrent(program, docs.phase, refDate);
+      if (slice == null) return;
+
+      final morning = slice.todayTemplate['morning']?.toString().trim() ?? '';
+      if (morning.isNotEmpty) {
+        final preview =
+            morning.length > 60 ? '${morning.substring(0, 60)}…' : morning;
+        if (mounted) setState(() => _subtitle = preview);
+      } else {
+        if (mounted) setState(() => _subtitle = 'This week: ${slice.weekType}');
+      }
+    } catch (_) {
+      // Keep default subtitle.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.event_note_outlined),
+      title: const Text('Week plan'),
+      subtitle: Text(_subtitle),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: widget.onTap,
     );
   }
 }

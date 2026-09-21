@@ -1,5 +1,3 @@
-import 'package:yaml/yaml.dart';
-
 import '../models/coach_proposal.dart';
 import '../models/github_config.dart';
 import '../models/model_config.dart';
@@ -8,6 +6,7 @@ import 'chat_runner.dart';
 import 'coach_tools.dart';
 import 'github_client.dart';
 import 'program_current.dart';
+import 'program_provider.dart';
 import 'program_slice_text.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
@@ -64,8 +63,12 @@ class CoachBrain {
   static const docCacheTtl = Duration(hours: 1);
   static final Map<String, ({DateTime at, String content})> _docCache = {};
 
-  /// Test hook — the doc cache is process-global.
-  static void clearDocCache() => _docCache.clear();
+  /// Test hook — the doc cache is process-global. Also clears
+  /// [ProgramProvider]'s cache so tests that use both get a clean slate.
+  static void clearDocCache() {
+    _docCache.clear();
+    ProgramProvider.clearCache();
+  }
 
   /// Anthropic model the reply turn runs on (ChatRunner requires
   /// anthropic vendor — home_screen's _chatModel already selects one).
@@ -199,41 +202,20 @@ in a desktop Claude session — you cannot edit files from here.''';
     ].join('\n\n');
   }
 
-  /// Fetches program.yaml, phase.yaml, strategy.yaml (with 1h caching),
-  /// runs the Dart resolver, and returns the rendered program slice section.
-  /// Returns null on any failure so the caller can fall back to current
-  /// behaviour including routine.md.
+  /// Fetches program.yaml, phase.yaml, strategy.yaml (via [ProgramProvider]
+  /// with 1 h caching), runs the Dart resolver, and returns the rendered
+  /// program slice section. Returns null on any failure so the caller can
+  /// fall back to current behaviour including routine.md.
   Future<String?> _programSliceSection(DateTime today) async {
     try {
-      final yamls = <String, Map<Object?, Object?>?>{};
-      for (final path in intentPaths) {
-        final at = now();
-        final cached = _docCache[path];
-        String? raw;
-        if (cached != null && at.difference(cached.at) < docCacheTtl) {
-          raw = cached.content;
-        } else {
-          try {
-            raw = await fetchDoc(path);
-          } catch (_) {
-            raw = null;
-          }
-          if (raw != null) _docCache[path] = (at: at, content: raw);
-        }
-        if (raw == null) {
-          yamls[path] = null;
-        } else {
-          final parsed = loadYaml(raw);
-          yamls[path] =
-              parsed is Map ? Map<Object?, Object?>.from(parsed) : null;
-        }
-      }
+      final provider = ProgramProvider(fetchDoc, now: now);
+      final docs = await provider.load();
 
-      final programYaml = yamls['coach/program.yaml'];
+      final programYaml = docs.program;
       if (programYaml == null) return null;
 
-      final phaseYaml = yamls['coach/phase.yaml'];
-      final strategyYaml = yamls['coach/strategy.yaml'];
+      final phaseYaml = docs.phase;
+      final strategyYaml = docs.strategy;
 
       final slice = programCurrent(programYaml, phaseYaml, today);
       if (slice == null) return null;
@@ -242,7 +224,8 @@ in a desktop Claude session — you cannot edit files from here.''';
       final strategy =
           strategyYaml != null ? currentVersion(strategyYaml) : null;
 
-      final rendered = renderProgramSlice(slice, phase: phase, strategy: strategy);
+      final rendered =
+          renderProgramSlice(slice, phase: phase, strategy: strategy);
       return rendered;
     } catch (_) {
       // Any parse/resolve failure → fall back gracefully.

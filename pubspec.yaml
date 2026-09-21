@@ -46,6 +46,13 @@ dependencies:
   # (13.3.2 bumps device_info_plus to a win32 that conflicts with
   # flutter_secure_storage 9.x — do not raise without checking.)
   health: 13.3.1
+  # Kaya → Gmail import (kaya_ascents snapshot). Pinned exact like
+  # `health`: google_sign_in 7.x is the Credential Manager API era —
+  # the auth surface (initialize/authenticate/authorizationClient)
+  # broke compatibly-numbered minors before; the integration is
+  # verified against these.
+  google_sign_in: 7.2.0
+  android_intent_plus: 6.1.0
 
 dev_dependencies:
   flutter_test:

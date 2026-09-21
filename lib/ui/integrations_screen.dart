@@ -272,12 +272,25 @@ class _IntegrationCardState extends State<_IntegrationCard> {
       future: it.isConnected,
       builder: (context, connectedSnap) {
         final connected = connectedSnap.data ?? false;
+        // Guided integrations (Kaya) replace the Sync button's quiet
+        // pull() with a user-guided flow and surface its progress in
+        // place of the status line while it runs.
+        final integration = widget.integration;
+        final guided =
+            integration is GuidedSyncIntegration ? integration : null;
+        final statusText = FutureBuilder<String>(
+          future: it.statusLine,
+          builder: (context, s) => Text(s.data ?? '…'),
+        );
         return ListTile(
           title: Text('${it.displayName} ${it.targetDescription}'),
-          subtitle: FutureBuilder<String>(
-            future: it.statusLine,
-            builder: (context, s) => Text(s.data ?? '…'),
-          ),
+          subtitle: guided == null
+              ? statusText
+              : ValueListenableBuilder<String?>(
+                  valueListenable: guided.syncProgress,
+                  builder: (context, progress, _) =>
+                      progress == null ? statusText : Text(progress),
+                ),
           trailing: _busy
               ? const SizedBox(
                   width: 20,
@@ -297,6 +310,13 @@ class _IntegrationCardState extends State<_IntegrationCard> {
                           children: [
                             TextButton(
                               onPressed: () => _run(() async {
+                                if (guided != null) {
+                                  // Guided flow owns its own UI; no
+                                  // ledger sync after — these sources
+                                  // don't write ledger rows.
+                                  await guided.guidedSync(context);
+                                  return;
+                                }
                                 await it.pull(force: true);
                                 SyncScheduler.instance
                                     ?.maybeSync(manual: true);
@@ -325,10 +345,15 @@ class _IntegrationCardState extends State<_IntegrationCard> {
                                     value: label,
                                     child: Text(label),
                                   ),
-                                const PopupMenuItem(
-                                  value: 'reconcile',
-                                  child: Text('Full reconcile'),
-                                ),
+                                // Guided sources don't reconcile a
+                                // ledger window — hide the generic item
+                                // (Kaya's equivalent is "Import latest
+                                // export" above).
+                                if (guided == null)
+                                  const PopupMenuItem(
+                                    value: 'reconcile',
+                                    child: Text('Full reconcile'),
+                                  ),
                                 const PopupMenuItem(
                                   value: 'disconnect',
                                   child: Text('Disconnect'),

@@ -224,16 +224,36 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
-- Kaya (final shape, 2026-09-18): climbing data is NEVER synced into
-  the engine ledger. Flow: user taps "Export Logbook via Email" in
-  Kaya → `dart run tool/kaya_import.dart <csv> --confirm` replaces
-  the `kaya_ascents` tab (first import 2026-09-17, 1354 ascents) →
-  read three ways: (1) ledger-mcp `climbing` view (snapshot note in
-  tool description), (2) the app's READ-ONLY climbing ledger, (3) a
-  freshness card on Integrations (KayaSnapshotIntegration,
-  isConfigured=false → button-less). The dormant API-pull
-  KayaIntegration + engine match_field ingest remain unused; the
-  Google-SSO→password support-ticket draft in Gmail is optional.
+- Kaya (in-app Gmail flow, 2026-09-21 — supersedes the 2026-09-18
+  CLI-only shape): climbing data is STILL never synced into the engine
+  ledger; the `kaya_ascents` tab replace-all just moved in-app.
+  `KayaGmailIntegration` (integrations/kaya_gmail.dart): Connect =
+  Google sign-in (google_sign_in PINNED 7.2.0, Credential Manager era)
+  requesting gmail.readonly ONLY, behind the injectable GmailGateway
+  seam (D2 pattern); Sync = guided flow — dialog, launch Kaya
+  (com.project9a.redpoint via android_intent_plus PINNED 6.1.0 +
+  manifest `<queries>`), poll Gmail 20s×15 for an export email
+  STRICTLY newer than sync-start (never re-imports yesterday's),
+  download/base64url-decode CSV, parse via shared
+  services/kaya_csv.dart, replace-all the tab (service-account path);
+  card menu "Import latest export" = same import, 7d window, no
+  Kaya launch. Meta integration_kaya_gmail_* (imported_at/count/
+  msg_ms) drives the "imported <ago>" status. pull() = quiet 6h
+  background check for exports newer than the last imported email.
+  NOT YET CONFIGURED: needs `integrations.kaya_gmail.server_client_id`
+  in the schemas repo config.yml — GCP console (ryi-data-entry):
+  enable Gmail API; consent screen (external/testing: add each user
+  as test user — gmail.readonly is restricted, unverified apps are
+  test-users-only); OAuth client (1) Android: package
+  com.robertyi.fitness + SHA-1 (release signs with debug keystore:
+  `keytool -list -v -alias androiddebugkey -keystore
+  ~/.android/debug.keystore -storepass android | grep SHA1`); OAuth
+  client (2) Web application — THAT id is server_client_id (7.x
+  Android requires the web id; Play Services finds the Android client
+  by package+SHA-1). Until then the card shows the setup hint,
+  button-less. `dart run tool/kaya_import.dart <csv> --confirm` still
+  works (delegates to kaya_csv.dart). Dormant API-pull KayaIntegration
+  (kaya.dart/kaya_api.dart) remains unused.
 - **Read-only ledgers** (2026-09-18): input.yml `read_only: true`
   (parsed in Rust `src/schema/{overlay,view}.rs` + `src/parse/` AND
   all three Dart mirrors). Such views render under a "Read-only"

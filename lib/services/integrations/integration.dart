@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 /// One connectable external source. Implementations own auth, pull,
@@ -38,4 +39,19 @@ abstract class Integration {
   /// deletions instead of the rolling window. Must never throw —
   /// failures land in the status meta and retry next trigger.
   Future<void> pull({bool force = false, bool fullReconcile = false});
+}
+
+/// An [Integration] whose Sync button runs a user-guided flow (needs a
+/// BuildContext: dialogs, launching another app, long-running progress)
+/// instead of the fire-and-forget `pull()`. The card calls [guidedSync]
+/// from the Sync button and renders [syncProgress] in place of the
+/// status line while it's non-null. `pull()` remains the quiet
+/// background path (scheduler-driven) and must stay UI-free. Kaya uses
+/// this: open the Kaya app for its email export, then watch Gmail.
+abstract class GuidedSyncIntegration implements Integration {
+  Future<void> guidedSync(BuildContext context);
+
+  /// Non-null while a guided sync runs — one short human line
+  /// ("Waiting for export email… (3/15)").
+  ValueListenable<String?> get syncProgress;
 }

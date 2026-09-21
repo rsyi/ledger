@@ -74,5 +74,9 @@
         <!-- Health Connect package visibility (standalone app on
              Android 13-; harmless on 14+ where HC is built in). -->
         <package android:name="com.google.android.apps.healthdata"/>
+        <!-- Kaya (climbing) — the guided Gmail import launches Kaya so
+             the user can trigger Export Logbook via Email; Android 11+
+             package visibility requires declaring it. -->
+        <package android:name="com.project9a.redpoint"/>
     </queries>
 </manifest>

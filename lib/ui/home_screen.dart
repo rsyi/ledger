@@ -20,7 +20,8 @@ import '../services/engine_schema_adapter.dart';
 import 'widgets/sync_status_button.dart';
 import 'integrations_screen.dart';
 import '../services/heart_rate_service.dart';
-import '../services/integrations/kaya_snapshot.dart';
+import '../services/integrations/gmail_gateway.dart';
+import '../services/integrations/kaya_gmail.dart';
 import '../services/integrations/macrofactor.dart';
 import '../services/integrations/registry.dart';
 import '../services/integrations/whoop.dart';
@@ -186,13 +187,22 @@ class _HomeScreenState extends State<HomeScreen> {
             repo: repo.repo,
             weightViewJson: viewSchemaToEngineJson(weightView),
           ),
-        // Read-only indicator: climbing data lives in the kaya_ascents
-        // tab for the MCP (user's choice — not synced into the ledger);
-        // this card just surfaces that snapshot's freshness. The full
-        // KayaIntegration (API pull → ingest) is dormant in kaya.dart.
-        KayaSnapshotIntegration(
-          spreadsheetId: assetConfig.spreadsheetId,
-          serviceAccountKeyJson: keyJson,
+        // Kaya: climbing data lives in the kaya_ascents tab for the MCP
+        // (user's choice — not synced into the ledger). The card's
+        // guided Sync opens Kaya for its email export, watches Gmail
+        // (gmail.readonly via Google sign-in), and replace-alls the tab.
+        // The full KayaIntegration (API pull → ingest) is dormant in
+        // kaya.dart.
+        KayaGmailIntegration(
+          config: assetConfig.kayaGmail,
+          repo: repo.repo,
+          gateway: GoogleSignInGmailGateway(
+            serverClientId: assetConfig.kayaGmail?.serverClientId ?? '',
+          ),
+          store: ServiceAccountKayaTabStore(
+            spreadsheetId: assetConfig.spreadsheetId,
+            serviceAccountKeyJson: keyJson,
+          ),
         ),
         WhoopIntegration(hr: hrService),
         // Macrofactor exports nutrition to Health Connect; the

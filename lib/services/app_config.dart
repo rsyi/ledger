@@ -42,6 +42,11 @@ class AppConfig {
   /// `integrations.withings` block; the card shows a setup hint.
   final WithingsConfig? withings;
 
+  /// Optional Kaya Gmail-import config — drives the Kaya card's
+  /// Connect/Sync flow. Null (or placeholder) when the build has no
+  /// `integrations.kaya_gmail` block; the card shows the GCP setup hint.
+  final KayaGmailConfig? kayaGmail;
+
   AppConfig({
     required this.spreadsheetId,
     required this.models,
@@ -50,6 +55,7 @@ class AppConfig {
     this.kioskView,
     this.quickbooks,
     this.withings,
+    this.kayaGmail,
   });
 
   static Future<AppConfig> load() async {
@@ -90,6 +96,11 @@ class AppConfig {
           ? WithingsConfig.fromYaml(_yamlMapToJson(
               (node['integrations'] as YamlMap)['withings'] as YamlMap))
           : null,
+      kayaGmail: node['integrations'] is YamlMap &&
+              (node['integrations'] as YamlMap)['kaya_gmail'] is YamlMap
+          ? KayaGmailConfig.fromYaml(_yamlMapToJson(
+              (node['integrations'] as YamlMap)['kaya_gmail'] as YamlMap))
+          : null,
     );
   }
 }
@@ -111,6 +122,28 @@ class WithingsConfig {
   static WithingsConfig fromYaml(Map<String, dynamic> m) => WithingsConfig(
         clientId: (m['client_id'] ?? '').toString(),
         clientSecret: (m['client_secret'] ?? '').toString(),
+      );
+}
+
+/// `integrations.kaya_gmail` — the Google sign-in half of the Kaya
+/// import flow. [serverClientId] must be the WEB-type OAuth client id
+/// from the GCP project that also holds the Android OAuth client
+/// (package + signing SHA-1): google_sign_in 7.x on Android requires
+/// the web client id at initialize() while Play Services matches the
+/// Android client by package + SHA-1 automatically. Any Google account
+/// can then sign in — nothing here is account-specific.
+class KayaGmailConfig {
+  const KayaGmailConfig({required this.serverClientId});
+
+  final String serverClientId;
+
+  /// False while config.yml still lacks the block / carries the SET_ME
+  /// placeholder — the card shows the GCP setup hint instead of Connect.
+  bool get isConfigured =>
+      serverClientId.isNotEmpty && serverClientId != 'SET_ME';
+
+  static KayaGmailConfig fromYaml(Map<String, dynamic> m) => KayaGmailConfig(
+        serverClientId: (m['server_client_id'] ?? '').toString(),
       );
 }
 

@@ -1,5 +1,8 @@
 package com.robertyi.ledger
 
-import io.flutter.embedding.android.FlutterActivity
+// FlutterFragmentActivity (a ComponentActivity), not FlutterActivity:
+// the health plugin registers Health Connect's permission-request
+// ActivityResultContract, which needs a ComponentActivity host.
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+class MainActivity : FlutterFragmentActivity()

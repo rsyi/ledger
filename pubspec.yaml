@@ -40,6 +40,12 @@ dependencies:
   flutter_blue_plus: ^2.3.12
   permission_handler: ^13.0.2
   wakelock_plus: ^1.3.3
+  # Health Connect bridge (Macrofactor → meals). Pinned exact: the
+  # plugin's Android surface (SDK status / permission contract) shifts
+  # between minors and the integration is verified against this one.
+  # (13.3.2 bumps device_info_plus to a win32 that conflicts with
+  # flutter_secure_storage 9.x — do not raise without checking.)
+  health: 13.3.1
 
 dev_dependencies:
   flutter_test:

@@ -21,7 +21,9 @@ android {
         applicationId = "com.robertyi.fitness"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // health (Health Connect) requires minSdk >= 26; the only
+        // target device is a Pixel on a current API level.
+        minSdk = maxOf(flutter.minSdkVersion, 26)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

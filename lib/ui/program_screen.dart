@@ -28,6 +28,7 @@ import '../services/program_metrics.dart' show WeightRow;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/warehouse_connector.dart';
+import '../services/weight_series.dart';
 
 class ProgramScreen extends StatefulWidget {
   final ProgramProvider provider;
@@ -92,52 +93,18 @@ class _ProgramScreenState extends State<ProgramScreen> {
       return null;
     }
 
-    final analytics = widget.analytics;
-    final view = widget.weightView;
-    if (analytics == null || view == null) {
-      return _ProgramData(
-        docs: docs,
-        daily: const [],
-        observedError: 'Analytics engine unavailable on this build.',
-      );
-    }
-    try {
-      // Refresh the local analytics mirror from the ledger (best-effort:
-      // a failure here still lets us query the last-synced cache).
-      if (widget.weightRepo != null) {
-        try {
-          await analytics.db.syncFromSheet(view, widget.weightRepo!);
-        } catch (_) {/* stale cache is better than nothing */}
-      }
-      // The airlayer path: group by date, average weight_lbs — both
-      // declared on the weight view. Windowed metrics happen in Dart.
-      final rows = await analytics.run(view, query: {
-        'dimensions': ['weight.date'],
-        'measures': ['weight.avg_weight_lbs'],
-        'order': [
-          {'id': 'weight.date', 'desc': false},
-        ],
-      });
-      final daily = <WeightRow>[];
-      for (final r in rows) {
-        final lbs = (r['weight__avg_weight_lbs'] as num?)?.toDouble();
-        final dateRaw = r['weight__date']?.toString();
-        if (lbs == null || dateRaw == null) continue;
-        final date = DateTime.tryParse(dateRaw);
-        if (date == null) continue;
-        daily.add(WeightRow(
-          date: DateTime.utc(date.year, date.month, date.day),
-          weightLbs: lbs,
-        ));
-      }
-      return _ProgramData(docs: docs, daily: daily);
-    } catch (e) {
-      return _ProgramData(
-        docs: docs,
-        daily: const [],
-        observedError: 'Weight query failed: $e',
-      );
-    }
+    // Shared loader (weight_series.dart) — the home dashboard's BODY
+    // card reads through the same path, so the two always agree.
+    final series = await loadDailyWeighIns(
+      analytics: widget.analytics,
+      view: widget.weightView,
+      repo: widget.weightRepo,
+    );
+    return _ProgramData(
+      docs: docs,
+      daily: series.daily,
+      observedError: series.error,
+    );
   }
 
   @override

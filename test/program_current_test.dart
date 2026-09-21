@@ -56,15 +56,15 @@ void main() {
     final v = currentVersion(program);
     expect(v, isNotNull);
     expect(v!['id'], 'bulk-2026-27');
-    expect(v['version'], 1);
+    expect(v['version'], 2);
     // A trailing pending entry must be skipped.
     final withPending = {
       'versions': [
         ...(program['versions'] as List),
-        {'version': 2, 'pending': true, 'id': 'draft'},
+        {'version': 3, 'pending': true, 'id': 'draft'},
       ],
     };
-    expect(currentVersion(withPending)!['id'], 'bulk-2026-27');
+    expect(currentVersion(withPending)!['version'], 2);
   });
 
   for (final c in cases) {
@@ -90,6 +90,22 @@ void main() {
       expect(slice.todayTemplate['weekday'], exp['weekday'],
           reason: '$name weekday');
 
+      // Check today_template fields when the fixture specifies them.
+      if (exp.containsKey('today_template')) {
+        final expTmpl = exp['today_template'] as Map;
+        for (final key in expTmpl.keys) {
+          final actual = slice.todayTemplate[key.toString()];
+          expect(_deepEq(actual, expTmpl[key]), isTrue,
+              reason:
+                  '$name today_template.$key: expected ${expTmpl[key]}, got $actual');
+        }
+      }
+
+      // Check version when the fixture specifies it.
+      if (exp.containsKey('version')) {
+        expect(slice.version, exp['version'], reason: '$name version');
+      }
+
       final expTargets = exp['targets'] as Map;
       for (final key in expTargets.keys) {
         final actual = slice.targetsInForce[key.toString()];
@@ -100,7 +116,6 @@ void main() {
 
       // Slice invariants beyond the fixture subset.
       expect(slice.id, 'bulk-2026-27');
-      expect(slice.version, 1);
       expect(slice.rulesInForce, contains('NEAR_MAX_LOW'));
       expect(slice.rulesInForce.length, 16);
       final wd = slice.todayTemplate['weekday'];
@@ -108,16 +123,17 @@ void main() {
     });
   }
 
-  test('today_template carries the weekly_template text for Mondays', () {
+  test('today_template carries the weekly_template text for Mondays (non-block-0)', () {
     final slice =
         programCurrent(program, phase, DateTime.parse('2027-03-01'))!;
     expect(slice.todayTemplate['morning'], contains('Squat heavy'));
     expect(slice.todayTemplate['afternoon'], isNull);
   });
 
-  test('block 0 slice carries the block-0 override note', () {
+  test('block 0 slice uses weekly_template_block_0 and carries block_0_loads note', () {
     final slice =
         programCurrent(program, phase, DateTime.parse('2026-09-21'))!;
-    expect(slice.todayTemplate['block_note'], contains('second bench day'));
+    expect(slice.todayTemplate['morning'], contains('one hard single at RPE 8'));
+    expect(slice.todayTemplate['block_note'], contains('Maintenance'));
   });
 }

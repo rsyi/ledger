@@ -137,16 +137,26 @@ ProgramSlice? programCurrent(
   }
 
   // Today's template row.
+  // For block 0, prefer weekly_template_block_0 when present.
   final weekday = _weekdayKeys[day.weekday - 1];
   final template = version['weekly_template'] as Map? ?? const {};
-  final today = template[weekday];
+  final block0Template = version['weekly_template_block_0'] as Map?;
+  final Map activeTemplate =
+      (blockN == 0 && block0Template != null) ? block0Template : template;
+  final today = activeTemplate[weekday];
   final todayTemplate = <String, Object?>{
     'weekday': weekday,
     'morning': today is Map ? today['morning'] : null,
     'afternoon': today is Map ? today['afternoon'] : null,
   };
-  if (blockN == 0 && template['block_0_overrides'] != null) {
-    todayTemplate['block_note'] = template['block_0_overrides'];
+  if (blockN == 0) {
+    final blockNote = version['block_0_loads'];
+    if (blockNote != null) {
+      todayTemplate['block_note'] = blockNote;
+    } else if (template['block_0_overrides'] != null) {
+      // Legacy fallback: v1 used block_0_overrides on the template map.
+      todayTemplate['block_note'] = template['block_0_overrides'];
+    }
   }
 
   // Targets in force: weekly targets resolved for this block.

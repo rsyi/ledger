@@ -119,6 +119,29 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   (<2,500 tokens; flags_open = last 2 wks only) + get_program_status.
   Phases C (deviation capture) + D (set_strategy/set_phase pending
   writes) NOT built — see the plan doc.
+- **Working-max controller (WM-1+WM-2, 2026-09-21)**: spec = airledger
+  docs/superpowers/specs/2026-09-21-working-max-controller-spec.md.
+  WM-1: lib/services/working_max.dart (pure) — §1.3 chart, §1.4
+  variants, reading extraction, evaluate(), replayLift, §4
+  buildPrescription; policies/chart/variants DECLARED in program.yaml
+  v5 (pinned by test); §7.1 replay tool/wm_replay.dart. WM-2:
+  wm_tabs.dart (pure codecs/state/runWmChain) + APPEND-ONLY sheet tabs
+  `working_max` (lift, variant, value_lb, effective_from, source,
+  reason, reading_id, confirmed) + `readings` (id=date|lift, …,
+  decision, wm_after) written by nightly program_status_update.dart
+  (seeds §5 when empty: confirmed=false pending + deadlift pain_cap
+  marker; pain-cap state = explicit marker rows, cleared by a
+  "pain cap lifted" reason row). NEVER rewrite those tabs.
+  program_status gained working_max_<lift> + wm_decisions columns.
+  App: wm_store.dart (direct Sheets, 3-min cache; confirmSeed appends
+  a confirmed duplicate — append-only-honest; setWorkingMax appends
+  source=manual) → planner v3 (weights = wm × chart[policy target]
+  [reps], stamp plan_v3, reference-e1rm fallback), Week Plan §4
+  prescription blocks on heavy days, Integrations "Working maxes"
+  card. DELIBERATE: TWO_SIGNALS→freeze implemented in evaluate() but
+  NOT wired from coach_flags (volume flags are bulk-calibrated and
+  fire every block-0 cut week — would freeze all lifts vs §3); app
+  on-log evaluation + MCP/TS twin = WM-3.
 - **Coach** (the big feature, v3 architecture):
   - `coach_chat` synced view rendered ONLY as chat: pinned tinted
     Coach row (unread accent via meta `coach_chat_last_read_ts`) +

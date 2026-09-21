@@ -164,10 +164,15 @@ class _HomeDashboardState extends State<HomeDashboard> {
       ? null
       : programCurrent(docs!.program!, docs.phase, _today);
 
+  /// ProgramProvider.load() swallows fetch errors into a record of
+  /// nulls — "docs present" means at least one intent file parsed.
+  static bool _hasDocs(IntentDocs? docs) =>
+      docs?.program != null || docs?.phase != null;
+
   Future<_BodyData?> _computeBody() async {
     final docs = await _docs;
     final w = await _weights;
-    if (docs == null && (w == null || w.daily.isEmpty)) return null;
+    if (!_hasDocs(docs) && (w == null || w.daily.isEmpty)) return null;
     final phaseVersion = currentVersion(docs?.phase);
     final targetRate =
         (phaseVersion?['target_rate_lb_per_week'] as num?)?.toDouble();
@@ -187,7 +192,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
   Future<_ExecData?> _computeExec() async {
     final docs = await _docs;
     final status = await _status;
-    if (docs == null && status == null) return null;
+    if (!_hasDocs(docs) && status == null) return null;
     return _ExecData(
       week: latestStatusWeek(status ?? const [], _today),
       targets: _slice(docs)?.targetsInForce ?? const {},
@@ -197,7 +202,7 @@ class _HomeDashboardState extends State<HomeDashboard> {
   Future<_EngineData?> _computeEngine() async {
     final docs = await _docs;
     final status = await _status;
-    if (docs == null && status == null) return null;
+    if (!_hasDocs(docs) && status == null) return null;
     final slice = _slice(docs);
     return _EngineData(
       week: latestStatusWeek(status ?? const [], _today),

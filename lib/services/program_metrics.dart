@@ -110,6 +110,11 @@ class GradedSet {
 
 DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
 
+/// Calendar-day shift via component arithmetic — DST-safe, unlike adding
+/// `Duration(days: n)` to a local DateTime.
+DateTime _addDays(DateTime d, int days) =>
+    DateTime(d.year, d.month, d.day + days);
+
 int _daysBetween(DateTime a, DateTime b) =>
     DateTime.utc(b.year, b.month, b.day)
         .difference(DateTime.utc(a.year, a.month, a.day))
@@ -303,7 +308,7 @@ class WeeklyMetrics {
     required this.painNotes,
   });
 
-  DateTime get weekSunday => weekStart.add(const Duration(days: 6));
+  DateTime get weekSunday => _addDays(weekStart, 6);
   int get bike4x4Count => bike4x4Sessions.length;
   double? get bike4x4MaxHr => _maxOf([
         for (final s in bike4x4Sessions)
@@ -319,10 +324,8 @@ double? _maxOf(List<double> xs) =>
     xs.isEmpty ? null : xs.reduce((a, b) => a > b ? a : b);
 
 /// Monday of the ISO week containing [d].
-DateTime mondayOf(DateTime d) {
-  final day = _day(d);
-  return day.subtract(Duration(days: day.weekday - DateTime.monday));
-}
+DateTime mondayOf(DateTime d) =>
+    _addDays(_day(d), -(d.weekday - DateTime.monday));
 
 /// Rolls graded sets + weigh-ins + 4x4 rows + climbing dates + notes into
 /// per-ISO-week metrics. Emits a contiguous run of weeks from the first to
@@ -371,7 +374,7 @@ List<WeeklyMetrics> weeklyRollup(
   }
 
   double? bw7dAvgAsOf(DateTime sunday) {
-    final from = sunday.subtract(const Duration(days: 6));
+    final from = _addDays(sunday, -6);
     var sum = 0.0;
     var n = 0;
     for (final w in weighIns) {
@@ -386,7 +389,7 @@ List<WeeklyMetrics> weeklyRollup(
 
   final out = <WeeklyMetrics>[];
   final bwByIndex = <double?>[];
-  for (var m = first; !m.isAfter(last); m = m.add(const Duration(days: 7))) {
+  for (var m = first; !m.isAfter(last); m = _addDays(m, 7)) {
     final weekSets = setsByWeek[m] ?? const <GradedSet>[];
     final graded = [for (final s in weekSets) if (s.effort != null) s];
     final working = [for (final s in graded) if (s.working) s];
@@ -435,7 +438,7 @@ List<WeeklyMetrics> weeklyRollup(
       );
     }
 
-    final sunday = m.add(const Duration(days: 6));
+    final sunday = _addDays(m, 6);
     final bw = bw7dAvgAsOf(sunday);
     bwByIndex.add(bw);
     final i = bwByIndex.length - 1;

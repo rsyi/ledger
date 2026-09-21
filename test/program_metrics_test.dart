@@ -256,6 +256,23 @@ void main() {
       );
     });
 
+    test('week keys stay on Mondays across a DST fall-back boundary', () {
+      // US fall-back 2024-11-03: naive Duration arithmetic drifts week keys
+      // to Sunday 23:00. Span it and check every key is a real Monday.
+      final sets = gradeSets([
+        row('2024-10-07', 'Barbell Squat', 300, 1), // Monday, pre-DST
+        row('2024-12-02', 'Barbell Squat', 300, 1), // Monday, post-DST
+      ]);
+      final weeks = weeklyRollup(sets);
+      for (final w in weeks) {
+        expect(w.weekStart.weekday, DateTime.monday);
+        expect(w.weekStart.hour, 0);
+      }
+      final dec = weeks.firstWhere((w) => w.weekStart == d('2024-12-02'));
+      expect(dec.sessions, 1);
+      expect(weeks.length, 9);
+    });
+
     test('ungraded sets count toward sessions/sets_total only', () {
       final sets = gradeSets([
         row('2025-01-06', 'Barbell Squat', 200, 10), // ungraded (no ref yet)

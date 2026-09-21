@@ -30,6 +30,7 @@ import 'program_provider.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 import 'week_plan.dart' show defaultWeekStart;
+import 'working_max.dart' show warmupRamp;
 
 const List<String> _weekdayKeys = [
   'mon',
@@ -133,9 +134,6 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
 
   // Warm-up config (v4). Missing/malformed → no warm-up rows.
   final warmup = version['warmup_protocol'];
-  final warmupRounding = warmup is Map && warmup['rounding_lb'] is num
-      ? warmup['rounding_lb'] as num
-      : 5;
 
   /// Working weight for one planned set, or null (never guessed).
   num? workingWeight(String exercise, num reps) {
@@ -148,31 +146,16 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
   }
 
   /// Warm-up rows for [exercise] on [day], ramping to [top] (the day's
-  /// top working weight). Empty when no protocol applies.
+  /// top working weight). Empty when no protocol applies. Ramp semantics
+  /// live in [warmupRamp] (working_max.dart), shared with the §4
+  /// prescription builder.
   List<Map<String, Object?>> warmupRows(
       DateTime day, String exercise, num top) {
-    if (warmup is! Map) return const [];
-    final lift = mainLiftByExercise[exercise];
-    final steps = (lift != null ? warmup[lift] : null) ?? warmup['default'];
-    if (steps is! List) return const [];
-    final rows = <Map<String, Object?>>[];
-    for (final step in steps) {
-      if (step is! Map) continue;
-      final reps = step['reps'];
-      if (reps is! num) continue;
-      num? w;
-      if (step['weight_lb'] is num) {
-        w = step['weight_lb'] as num;
-      } else if (step['pct_top'] is num) {
-        w = _roundTo((step['pct_top'] as num) * top, warmupRounding);
-        final minAbove = step['min_above_lb'];
-        if (minAbove is num && w <= minAbove) continue; // deadlift 135 rule
-      } else {
-        continue;
-      }
-      rows.add({'date': day, 'exercise': exercise, 'reps': reps, 'weight': w});
-    }
-    return rows;
+    final steps = warmupRamp(warmup, mainLiftByExercise[exercise], top);
+    return [
+      for (final s in steps)
+        {'date': day, 'exercise': exercise, 'reps': s.reps, 'weight': s.weight},
+    ];
   }
 
   final entries = <Map<String, Object?>>[];

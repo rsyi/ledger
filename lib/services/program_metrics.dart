@@ -18,12 +18,17 @@ class StrengthRow {
   final int reps;
   final double? rpe;
 
+  /// Free-text notes — the working-max controller parses variants
+  /// (paused/belted/...) and grinder cues out of them (spec §1.2/§1.4).
+  final String? notes;
+
   const StrengthRow({
     required this.date,
     required this.exercise,
     required this.weight,
     required this.reps,
     this.rpe,
+    this.notes,
   });
 }
 

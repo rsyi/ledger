@@ -22,6 +22,13 @@ class StrengthRow {
   /// (paused/belted/...) and grinder cues out of them (spec §1.2/§1.4).
   final String? notes;
 
+  /// Structured tri-state equipment flags (sheet columns Paused/Belted,
+  /// 2026-09-21 schema hardening). Null = not recorded — the working-max
+  /// variant logic falls back to notes-keyword parsing; non-null values
+  /// take precedence over notes for their own keyword domain.
+  final bool? paused;
+  final bool? belted;
+
   const StrengthRow({
     required this.date,
     required this.exercise,
@@ -29,6 +36,8 @@ class StrengthRow {
     required this.reps,
     this.rpe,
     this.notes,
+    this.paused,
+    this.belted,
   });
 }
 

@@ -241,6 +241,72 @@ void main() {
       expect(parseVariant('press', 'belted').mismatch, isFalse);
       expect(parseVariant('squat', 'straps').variant, 'belted');
     });
+
+    test('structured belted flag wins over notes keywords', () {
+      // Explicit false beats a 'belted' note (post-hardening row edited
+      // after the fact) — and vice versa.
+      expect(
+        parseVariant('squat', 'belted', belted: false).factor,
+        closeTo(0.97, 1e-12),
+      );
+      expect(
+        parseVariant('squat', 'no belt today', belted: true).factor,
+        1.0,
+      );
+      expect(parseVariant('deadlift', null, belted: false).factor,
+          closeTo(0.96, 1e-12));
+      expect(parseVariant('deadlift', null, belted: true).factor, 1.0);
+      // Notes outside the belted domain still apply alongside the flag.
+      final v = parseVariant('deadlift', 'straps', belted: false);
+      expect(v.variant, contains('unbelted'));
+      expect(v.factor, closeTo(0.96, 1e-12));
+    });
+
+    test('structured paused flag: bench false = touch-and-go', () {
+      expect(parseVariant('bench', null, paused: true).variant, 'paused');
+      expect(parseVariant('bench', null, paused: true).factor, 1.0);
+      final tng = parseVariant('bench', null, paused: false);
+      expect(tng.variant, 'touch_and_go');
+      expect(tng.factor, closeTo(1.03, 1e-12));
+      // paused=false overrides a stale 'paused' note.
+      expect(parseVariant('bench', 'paused', paused: false).variant,
+          'touch_and_go');
+      // Squat: paused=true is the -3% variant; false = default, no keyword.
+      expect(parseVariant('squat', null, paused: true).factor,
+          closeTo(0.97, 1e-12));
+      expect(parseVariant('squat', null, paused: false).variant, 'belted');
+      expect(parseVariant('squat', null, paused: false).factor, 1.0);
+    });
+
+    test('structured flags out of scope are ignored (belted bench/press)',
+        () {
+      expect(parseVariant('bench', null, belted: true).variant, 'paused');
+      expect(parseVariant('bench', null, belted: true).mismatch, isFalse);
+      expect(parseVariant('press', null, belted: false).variant, 'standard');
+    });
+
+    test('null flags = legacy notes-only behavior, unchanged', () {
+      expect(parseVariant('squat', 'unbelted').factor, closeTo(0.97, 1e-12));
+      expect(parseVariant('bench', 'touch and go').factor,
+          closeTo(1.03, 1e-12));
+    });
+
+    test('extraction prefers structured flags on the reading row', () {
+      final rows = [
+        StrengthRow(
+            date: _d('2026-09-22'),
+            exercise: 'Barbell Squat',
+            weight: 290,
+            reps: 1,
+            rpe: 8,
+            notes: 'belted', // stale note...
+            belted: false), // ...explicit flag wins
+      ];
+      final r = extractReadings(rows, kindOf: (_, _) => 'heavy_top').single;
+      expect(r.variant, 'unbelted');
+      expect(r.weightLb, closeTo(290 / 0.97, 1e-9));
+      expect(r.rawWeightLb, 290);
+    });
   });
 
   // -------------------------------------------------------------------------

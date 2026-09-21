@@ -131,26 +131,66 @@ class VariantResult {
   const VariantResult(this.variant, this.factor, this.mismatch);
 }
 
-/// Parses the §1.4 variant for [lift] out of [notes]. Unknown text -> the
-/// lift's default. Distinct matched conversions multiply, but default-
-/// equivalent keywords contribute 1.0, so "belted, paused" squat is a
-/// single -3% (never stacked).
-VariantResult parseVariant(String lift, String? notes) {
+/// Parses the §1.4 variant for [lift] out of [notes], optionally
+/// overridden by the STRUCTURED equipment flags (sheet columns
+/// Paused/Belted, 2026-09-21). Unknown text -> the lift's default.
+/// Distinct matched conversions multiply, but default-equivalent
+/// keywords contribute 1.0, so "belted, paused" squat is a single -3%
+/// (never stacked).
+///
+/// Structured precedence: a non-null [belted]/[paused] REPLACES whatever
+/// the notes said within its own keyword domain (belted ⇒
+/// {belted, unbelted}; paused ⇒ {paused} + bench's {touch_and_go}) —
+/// notes keep feeding every other keyword (straps, pins, ...). Null =
+/// legacy row, notes-only, unchanged behavior:
+///   belted: true  -> 'belted';  false -> 'unbelted'
+///   paused: true  -> 'paused';  false -> bench: 'touch_and_go'
+///                               (not-paused IS touch-and-go on bench);
+///                               other lifts: the default, no keyword.
+/// Out-of-scope structured values (e.g. belted on bench) are ignored,
+/// matching the notes-keyword scoping rule.
+VariantResult parseVariant(
+  String lift,
+  String? notes, {
+  bool? paused,
+  bool? belted,
+}) {
   final def = defaultVariantByLift[lift] ?? 'default';
   final text = notes ?? '';
-  if (text.trim().isEmpty) return VariantResult(def, 1.0, false);
-
   final scope = parsedKeywordsByLift[lift] ?? const <String>{};
+
   final matched = <String>[];
-  var scan = text;
-  for (final e in _variantKeywords.entries) {
-    if (e.value.hasMatch(scan)) {
-      // Remove matches even when out of scope so 'unbelted' never
-      // double-counts as 'belted' and 'double overhand' doesn't re-match.
-      scan = scan.replaceAll(e.value, ' ');
-      if (scope.contains(e.key)) matched.add(e.key);
+  if (text.trim().isNotEmpty) {
+    var scan = text;
+    for (final e in _variantKeywords.entries) {
+      if (e.value.hasMatch(scan)) {
+        // Remove matches even when out of scope so 'unbelted' never
+        // double-counts as 'belted' and 'double overhand' doesn't re-match.
+        scan = scan.replaceAll(e.value, ' ');
+        if (scope.contains(e.key)) matched.add(e.key);
+      }
     }
   }
+
+  // Structured overrides — remove the domain's notes keywords, then add
+  // the keyword the flag implies (when in scope for this lift).
+  if (belted != null) {
+    matched.removeWhere((k) => k == 'belted' || k == 'unbelted');
+    final kw = belted ? 'belted' : 'unbelted';
+    if (scope.contains(kw)) matched.add(kw);
+  }
+  if (paused != null) {
+    matched.removeWhere(
+      (k) => k == 'paused' || (lift == 'bench' && k == 'touch_and_go'),
+    );
+    if (paused) {
+      if (scope.contains('paused')) matched.add('paused');
+    } else if (lift == 'bench') {
+      // Explicit not-paused bench is touch-and-go by definition.
+      matched.add('touch_and_go');
+    }
+  }
+
   if (matched.isEmpty) return VariantResult(def, 1.0, false);
 
   final conversions = variantConversions[lift] ?? const {};
@@ -284,7 +324,10 @@ Reading _toReading(
 ) {
   final lift = mainLiftByExercise[r.exercise]!;
   final day = _day(r.date);
-  final variant = parseVariant(lift, r.notes);
+  // Structured equipment flags win over notes keywords when present
+  // (post-hardening rows); legacy rows fall back to notes-only parsing.
+  final variant =
+      parseVariant(lift, r.notes, paused: r.paused, belted: r.belted);
   final prescribed = prescribedReps?.call(day, lift);
   return Reading(
     date: day,

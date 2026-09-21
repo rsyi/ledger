@@ -66,6 +66,10 @@ Future<void> main() async {
       reps: reps.round(),
       rpe: rpeText.isEmpty ? null : double.tryParse(rpeText),
       notes: cell(r, head['Notes']),
+      // Structured equipment flags (2026-09-21 hardening) — preferred
+      // over notes keywords by the variant parser when present.
+      paused: boolCell(cell(r, head['Paused'])),
+      belted: boolCell(cell(r, head['Belted'])),
     ));
   }
 
@@ -204,6 +208,10 @@ String cell(List<Object?> row, int? i) =>
     i == null || i < 0 || i >= row.length
         ? ''
         : (row[i]?.toString() ?? '').trim();
+
+/// Tri-state boolean cell: blank/missing = null (not recorded).
+bool? boolCell(String s) =>
+    s.isEmpty ? null : s.toLowerCase() == 'true';
 
 /// Sheet dates are YYYY-MM-DD (ISO); tolerate M/D/YYYY just in case.
 DateTime? parseSheetDate(String s) {

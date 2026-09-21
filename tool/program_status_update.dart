@@ -105,6 +105,10 @@ Future<void> main(List<String> args) async {
       rpe: rpe,
       // Notes feed the working-max chain (variant + grinder parsing).
       notes: notes.isEmpty ? null : notes,
+      // Structured equipment flags (2026-09-21 hardening) — the variant
+      // parser prefers these over notes keywords when present.
+      paused: boolCell(cell(r, sHead['Paused'])),
+      belted: boolCell(cell(r, sHead['Belted'])),
     ));
   }
 
@@ -748,6 +752,10 @@ String cell(List<Object?> row, int? i) =>
     i == null || i < 0 || i >= row.length
         ? ''
         : (row[i]?.toString() ?? '').trim();
+
+/// Tri-state boolean cell: blank/missing = null (not recorded).
+bool? boolCell(String s) =>
+    s.isEmpty ? null : s.toLowerCase() == 'true';
 
 DateTime? parseSheetDate(String s) {
   if (s.isEmpty) return null;

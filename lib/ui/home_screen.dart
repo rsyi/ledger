@@ -41,6 +41,7 @@ import '../services/week_planner.dart';
 import '../services/wm_store.dart';
 import 'apps_screen.dart';
 import 'chat_screen.dart';
+import 'program_screen.dart';
 import 'coach_chat_screen.dart';
 import 'coach_threads_screen.dart';
 import 'timeline_screen.dart';
@@ -531,6 +532,43 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                             ),
+                          ),
+                          const Divider(height: 1),
+                          // Program tile — declared intent (phase/blocks)
+                          // vs observed reality (weight via airlayer).
+                          ListTile(
+                            leading: IconResolver.resolve(
+                              'target',
+                              size: 22,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
+                            title: const Text('Program'),
+                            subtitle: const Text(
+                                'Declared phase vs observed weight'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () {
+                              ViewSchema? weightView;
+                              for (final v in data.views) {
+                                if (v.name == 'weight') weightView = v;
+                              }
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ProgramScreen(
+                                    provider: ProgramProvider(
+                                      CoachBrain.githubFetcher(github),
+                                    ),
+                                    analytics: data.analytics,
+                                    weightView: weightView,
+                                    weightRepo: weightView == null
+                                        ? null
+                                        : data.registry
+                                            .forView(weightView),
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                           const Divider(height: 1),
                         ],

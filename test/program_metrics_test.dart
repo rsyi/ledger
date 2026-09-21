@@ -190,6 +190,36 @@ void main() {
       expect(atPoint95.nearMax, isTrue);
     });
 
+    test('near_max requires reps <= 8: 16-rep set at effort 1.0 is '
+        'long_failure but not near_max; 3-rep set at effort 0.96 is near_max',
+        () {
+      // 16-rep set: effort >= 0.95 but reps > 8 → long_failure=true, near_max=false.
+      // ref: 300x1 → e1rm = 310; 220x16 → e1rm = 220*(1+12/30)=308.0,
+      //   effort = 308.0/310 ≈ 0.9935 >= 0.95. reps=16 >= 8 → long_failure.
+      //   But reps > 8 → NOT near_max (amendment 2026-09-20).
+      final amrap = gradeSets([
+        row('2025-01-01', 'Barbell Squat', 300, 1), // e1rm 310 → reference
+        row('2025-01-08', 'Barbell Squat', 220, 16), // 16-rep AMRAP
+      ]).last;
+      expect(amrap.reps, 16);
+      expect(amrap.effort! >= 0.95, isTrue); // effort condition alone would fire
+      expect(amrap.longFailureSet, isTrue); // reps>=8 and effort>=0.95
+      expect(amrap.nearMax, isFalse); // reps > 8 → not near_max
+
+      // 3-rep set at effort 0.96: both conditions met → near_max=true.
+      // ref: 300x1 → e1rm 310; need weight s.t. weight*(1+3/30)/310 = 0.96.
+      // weight = 0.96*310/(1+0.1) = 270.545…; use weight=270, e1rm=270*1.1=297,
+      //   effort=297/310=0.9581 >= 0.95, reps=3 <= 8 → near_max.
+      final heavy = gradeSets([
+        row('2025-01-01', 'Barbell Squat', 300, 1),
+        row('2025-01-08', 'Barbell Squat', 270, 3),
+      ]).last;
+      expect(heavy.reps, 3);
+      expect(heavy.effort! >= 0.95, isTrue);
+      expect(heavy.nearMax, isTrue);
+      expect(heavy.longFailureSet, isFalse); // reps < 8
+    });
+
     test('long_failure_set = reps >= 8 and effort >= 0.95', () {
       // ref 160x1 → e1rm ≈ 165.33; 124x8 → e1rm ≈ 157.07, effort == 0.95.
       final long = withRef(160, 124, 8);

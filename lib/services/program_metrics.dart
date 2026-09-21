@@ -195,7 +195,9 @@ List<GradedSet> gradeSets(List<StrengthRow> rows) {
                 ? SetTier.moderate
                 : SetTier.hard;
     final working = effort != null && effort >= 0.80;
-    final nearMax = effort != null && effort >= 0.95;
+    // Amendment 2026-09-20: near_max requires reps <= 8 — long-failure AMRAP
+    // sets (reps >= 8 and effort >= 0.95) must not silence NEAR_MAX_LOW.
+    final nearMax = effort != null && effort >= 0.95 && r.reps <= 8;
     out.add(
       GradedSet(
         date: day,
@@ -209,7 +211,11 @@ List<GradedSet> gradeSets(List<StrengthRow> rows) {
         tier: tier,
         working: working,
         nearMax: nearMax,
-        longFailureSet: r.reps >= 8 && nearMax,
+        // long_failure_set: reps >= 8 and effort >= 0.95 (spec §2.5, unchanged
+        // by 2026-09-20 amendment — computed independently of nearMax so that
+        // long-failure AMRAPs still count toward LONG_SETS even though they no
+        // longer count as near_max_sets).
+        longFailureSet: r.reps >= 8 && effort != null && effort >= 0.95,
         rpe: r.rpe,
       ),
     );

@@ -116,6 +116,13 @@ Widget buildFieldWidget({
         adHocSuggestions: adHocSuggestions ?? const [],
         onShowHistory: history,
       );
+    case WidgetType.switch_:
+      return _SwitchFieldWidget(
+        key: key,
+        dim: dim,
+        value: value,
+        onChanged: onChanged,
+      );
     case WidgetType.timer:
       return _TimerFieldWidget(
         key: key,
@@ -136,8 +143,9 @@ WidgetType _widgetForType(DimensionType t) {
       return WidgetType.date;
     case DimensionType.datetime:
       return WidgetType.datetime;
-    case DimensionType.string:
     case DimensionType.boolean:
+      return WidgetType.switch_;
+    case DimensionType.string:
       return WidgetType.text;
   }
 }
@@ -593,6 +601,100 @@ class _DropdownFieldWidget extends StatelessWidget {
           onPressed: history,
         ),
       ],
+    );
+  }
+}
+
+/// Tri-state boolean toggle (`widget: switch`). The value contract is an
+/// HONEST nullable bool — three distinct states, never conflated:
+///
+///   - **null / absent** → "not recorded". Renders a dimmed off-position
+///     switch with a "Not set" status label. Saves as a blank cell.
+///   - **true / false** → explicit user answer ("Yes" / "No" status).
+///
+/// Set-vs-unset UX (the documented decision): the switch itself is the
+/// binary control — tapping it from the unset state sets `true`, toggling
+/// again sets `false` (an explicit No, NOT a return to blank; equipment
+/// answers are sticky once given). Returning to blank is a deliberate,
+/// separate act: a clear (×) suffix button that only appears once a value
+/// exists. This keeps the honest tri-state without a nonstandard
+/// three-way control, and makes "unset" impossible to hit by accident.
+///
+/// Blank matters downstream: the working-max variant logic treats blank
+/// as "fall back to notes-keyword parsing" and the migration backfill
+/// treats blank as "unknown — do not infer".
+class _SwitchFieldWidget extends StatelessWidget {
+  final Dimension dim;
+  final Object? value;
+  final ValueChanged<Object?> onChanged;
+
+  const _SwitchFieldWidget({
+    super.key,
+    required this.dim,
+    required this.value,
+    required this.onChanged,
+  });
+
+  /// Coerces the stored value to the tri-state bool. Sheets round-trips
+  /// booleans as "TRUE"/"FALSE" strings in some paths, so accept those.
+  bool? get _current {
+    final v = value;
+    if (v == null) return null;
+    if (v is bool) return v;
+    final s = v.toString().trim().toLowerCase();
+    if (s.isEmpty) return null;
+    return s == 'true';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final current = _current;
+    final status = switch (current) {
+      null => 'Not set',
+      true => 'Yes',
+      false => 'No',
+    };
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: _labelFor(dim),
+        helperText: dim.description,
+        border: const OutlineInputBorder(),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              status,
+              style: TextStyle(
+                color: current == null
+                    ? scheme.onSurfaceVariant.withValues(alpha: 0.6)
+                    : scheme.onSurface,
+                fontStyle:
+                    current == null ? FontStyle.italic : FontStyle.normal,
+              ),
+            ),
+          ),
+          if (current != null)
+            IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Clear (back to not set)',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => onChanged(null),
+            ),
+          Opacity(
+            // Dim the off-position switch while unset so it doesn't read
+            // as an explicit "No".
+            opacity: current == null ? 0.45 : 1.0,
+            child: Switch(
+              value: current ?? false,
+              onChanged: (v) => onChanged(v),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

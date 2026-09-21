@@ -128,6 +128,7 @@ String _widgetToJson(WidgetType w) => switch (w) {
       WidgetType.datetime => 'datetime',
       WidgetType.dropdown => 'dropdown',
       WidgetType.autocomplete => 'autocomplete',
+      WidgetType.switch_ => 'switch',
       WidgetType.timer => 'timer',
     };
 
@@ -319,6 +320,8 @@ WidgetType _widget(String s) {
       return WidgetType.dropdown;
     case 'autocomplete':
       return WidgetType.autocomplete;
+    case 'switch':
+      return WidgetType.switch_;
     case 'timer':
       return WidgetType.timer;
   }

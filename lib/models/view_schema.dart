@@ -18,6 +18,14 @@ enum WidgetType {
   datetime,
   dropdown,
   autocomplete,
+  /// Tri-state boolean toggle (`switch` in YAML — trailing underscore is
+  /// Dart keyword avoidance). The value is a NULLABLE bool: null/absent =
+  /// "not recorded" (blank cell), true/false only when the user explicitly
+  /// set the toggle. The form must never coerce blank to false — equipment
+  /// fields (belted, paused, wrist_wraps, knee_sleeves) rely on blank
+  /// meaning unknown, and the working-max variant logic falls back to
+  /// notes parsing when the structured value is blank.
+  switch_,
   /// Stopwatch input. Renders the field as a time-of-day text input with
   /// a Start button; once tapped, shows live elapsed time + one button
   /// per ladder. Each ladder button stamps `m:ss` (or `H:MM:SS` if past

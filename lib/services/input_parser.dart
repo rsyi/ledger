@@ -419,6 +419,8 @@ WidgetType _parseWidgetType(String s) {
       return WidgetType.dropdown;
     case 'autocomplete':
       return WidgetType.autocomplete;
+    case 'switch':
+      return WidgetType.switch_;
     default:
       throw FormatException('Unknown widget type: $s');
   }

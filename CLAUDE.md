@@ -309,7 +309,12 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   options) is committed locally but the PUSH is gated on the new APK
   (switch-widget dylib) being installed — trap #2 in reverse: pushing
   first would sync switch-widget schemas into an app whose dylib drops
-  the key. A background `adb wait-for-device` install was armed
-  2026-09-21; once the install lands, `git push` airledger-fitness.
-  The sheet columns + backfilled data are ALREADY live (harmless to
-  the old app — unknown columns are ignored).
+  the key. PENDING manual steps when the Pixel is next connected
+  (the 2026-09-21 wait-for-device watcher was stopped without firing):
+  (1) `adb -s 66260DLKX00010 install -r
+  ~/repos/ledger/build/app/outputs/flutter-apk/app-release.apk` — the
+  APK is already built with the new dylib + schemas (rebuild via
+  brand.dart if anything changed since); then (2) `git push` in
+  ~/repos/airledger-fitness. The sheet columns + backfilled data are
+  ALREADY live (harmless to the old app — unknown columns are
+  ignored).

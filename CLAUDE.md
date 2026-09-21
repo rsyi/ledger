@@ -103,6 +103,22 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   max_hr on Stop, wakelock. Pairing card on Integrations; max HR
   editable via card menu + tapping the BPM chip. Whoop API (for real
   max HR / recovery) would need user-created dev-app OAuth creds.
+- **Coach intent layers (v4, 2026-09-20)**: three layers per
+  docs (airledger) specs/2026-09-20-coach-intent-layers-spec.md.
+  INTENT: versioned coach/{program,phase,strategy}.yaml in
+  airledger-fitness (append-only versions; current = last non-pending;
+  strategy.yaml pending user seed text). routine.md RETIRED.
+  OUTCOME: lib/services/program_metrics.dart (§2.5 formulas, §6
+  backtest-gated — near_max amended to reps<=8, user-approved;
+  tool/coach_backtest.dart re-runs the gate) → nightly
+  tool/program_status_update.dart rewrites program_status +
+  coach_flags tabs (non-ledger; read-only view in app). Resolvers:
+  program_current.dart (Dart) + ledger-mcp src/program.ts (TS),
+  cross-checked via coach/fixtures/program_current_cases.yaml — edit
+  BOTH when program.yaml shape changes. MCP: get_coach_context v2
+  (<2,500 tokens; flags_open = last 2 wks only) + get_program_status.
+  Phases C (deviation capture) + D (set_strategy/set_phase pending
+  writes) NOT built — see the plan doc.
 - **Coach** (the big feature, v3 architecture):
   - `coach_chat` synced view rendered ONLY as chat: pinned tinted
     Coach row (unread accent via meta `coach_chat_last_read_ts`) +

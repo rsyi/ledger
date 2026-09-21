@@ -37,6 +37,7 @@ import '../services/transient_retry.dart';
 import '../services/warehouse_connector.dart';
 import '../services/program_current.dart';
 import '../services/program_provider.dart';
+import '../services/week_planner.dart';
 import 'apps_screen.dart';
 import 'chat_screen.dart';
 import 'coach_chat_screen.dart';
@@ -190,6 +191,21 @@ class _HomeScreenState extends State<HomeScreen> {
             .map(viewSchemaToEngineJson)
             .toList(),
       );
+      // Weekly auto-planner: generate this week's planned strength rows
+      // from coach/program.yaml. Fire-and-forget — ensureCurrentWeek is
+      // idempotent per week (meta-keyed) and swallows its own errors
+      // into the `week_planner_error` meta.
+      ViewSchema? strengthView;
+      for (final v in views) {
+        if (v.name == 'strength') strengthView = v;
+      }
+      if (github != null && strengthView != null) {
+        unawaited(WeekPlanner.ensureCurrentWeek(
+          repo: repo.repo,
+          provider: ProgramProvider(CoachBrain.githubFetcher(github)),
+          strengthView: strengthView,
+        ));
+      }
     }
     // Read-only views: connect a direct SheetsRepository that bypasses the
     // engine ledger entirely. Only established when at least one loaded view

@@ -97,6 +97,30 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   custom-scheme redirects). Reconcile re-ingests window values +
   day-set deletions. Known data issue: user should run one Full
   reconcile to fix a ghost 20.9 lb entry (2026-08-29).
+- **Macrofactor → meals (2026-09-21, built; needs on-device verify)**:
+  Macrofactor has no API — it exports nutrition to Android Health
+  Connect; `MacrofactorIntegration` (macrofactor.dart) reads HC
+  NUTRITION records through the injectable `HealthConnectGateway`
+  seam (real adapter = health_connect_gateway.dart over the `health`
+  plugin, PINNED 13.3.1 — 13.3.2's device_info_plus bump conflicts
+  with flutter_secure_storage 9.x over win32). Row-grained kaya
+  pattern: one meals row per HC record, ingest match_field `hc_id`
+  (HC uuid; meals.view.yml gained hc_id/carbs_g/fat_g 2026-09-21 —
+  ensure_sheet appends the new tab headers automatically). Owned:
+  hc_id/eaten_at/meal_type/calories/protein_g/carbs_g/fat_g; meal +
+  notes fill-if-blank (unnamed exports title as "Macrofactor
+  <slot>"). First pull 90d (HC caps reads ~30d pre-grant), then
+  rolling 14d reconcile; deletion diff uses RAW uuids scoped to the
+  window via meta `integration_macrofactor_id_days` (id→day map),
+  same wire-drift + mass-delete guards as Kaya. No source-app
+  filter. "Connected" = meta flag after the system grant sheet; pull
+  degrades to Reconnect if the grant is revoked in HC; disconnect
+  does NOT revoke (would drop all HC grants). Android: MainActivity
+  is now FlutterFragmentActivity (HC permission contract needs a
+  ComponentActivity), READ_NUTRITION + rationale filters +
+  activity-alias in the manifest, minSdk floor 26. NOT yet verified
+  on device: permission grant + first pull with Macrofactor's HC
+  export enabled.
 - **Whoop live HR**: BLE Heart Rate Broadcast (0x180D) →
   `HeartRateService` → timer widget: live BPM badge, auto-stamps
   zone4/zone5 at ladders' `hr_pct` % of meta `user_max_hr`, writes
@@ -226,7 +250,10 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   via Integrations card first); HR reconnect loop has no cancel UI;
   fullscreen timer swallows auto-stamp snackbars.
 - Whoop API integration (needs user dev-app registration).
-- Macrofactor via Health Connect → meals: still queued.
+- Macrofactor → meals: BUILT (2026-09-21, see feature state). User:
+  enable Macrofactor's Health Connect export, tap Connect on the
+  Integrations card (system sheet), confirm the first 90-day pull
+  lands in meals with sane eaten_at wall-clock times.
 - MCP worker's workers.dev subdomain is `ryime` (renamed from
   `airledger-mcp` 2026-09-13; old URLs are dead). Connector URL:
   `https://ledger-mcp.ryime.workers.dev/mcp/<token>`.

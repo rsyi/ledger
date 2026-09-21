@@ -203,6 +203,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// timeline rebuilds (LLM cache update, etc.).
   final Set<String> _expandedLoggedKeys = {};
 
+  /// Undo-logging mappings for this view: logged rowId → the planned
+  /// entry it was promoted from (see [PlanStore.undoMappings]). Drives
+  /// the Log-now snackbar's UNDO action and the "Revert to plan" button
+  /// on a logged row's expanded panel. Refreshed on every [_assemble].
+  Map<String, PlannedEntry> _undoMappings = {};
+
   /// Per-transaction QuickBooks push status, keyed by row `id`. Empty
   /// (and unused) unless this view has a [TimelineScreen.qboSpec]. An id
   /// absent from the map renders as pending. Refreshed after each load and
@@ -543,6 +549,11 @@ class _TimelineScreenState extends State<TimelineScreen> {
     final planned = widget.view.readOnly
         ? const <PlannedEntry>[]
         : await PlanStore.loadForDate(widget.view, _selectedDate);
+    // Refresh the undo-logging mappings alongside — cheap prefs read, and
+    // this also applies the store's lazy 14-day prune.
+    _undoMappings = widget.view.readOnly
+        ? {}
+        : await PlanStore.undoMappings(widget.view);
 
     // Batch grouping: when the view declares a repeat_group with a
     // group_key, fold contiguous-rows-sharing-a-group_key into single
@@ -691,6 +702,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
                           onDelete: widget.view.readOnly
                               ? (_) {}
                               : _delete,
+                          // "Revert to plan": only rows with a live
+                          // undo-logging mapping show the button.
+                          revertibleIds: widget.view.readOnly
+                              ? const {}
+                              : _undoMappings.keys.toSet(),
+                          onRevert: (item) => _revertToPlan(item.logged!),
                           readOnly: widget.view.readOnly,
                         ),
                       for (var i = 0; i < plannedRows.length; i++) ...[
@@ -1048,9 +1065,11 @@ class _TimelineScreenState extends State<TimelineScreen> {
           // re-syncs from Sheets so the UI matches truth.
           for (final r in item.batchRows!) {
             await widget.repository.delete(widget.view, r);
+            await _pruneUndoMapping(r);
           }
         } else {
           await widget.repository.delete(widget.view, item.logged!);
+          await _pruneUndoMapping(item.logged!);
         }
       }
       // The optimistic list is correct on screen, but the row cache still
@@ -1065,6 +1084,15 @@ class _TimelineScreenState extends State<TimelineScreen> {
       );
       _reload(fresh: true);
     }
+  }
+
+  /// A normally-deleted row can never be reverted — drop its undo-logging
+  /// mapping (no-op when it has none / no id).
+  Future<void> _pruneUndoMapping(Record row) async {
+    final rowId = row['id']?.toString();
+    if (rowId == null || !_undoMappings.containsKey(rowId)) return;
+    await PlanStore.removeUndo(widget.view, rowId);
+    _undoMappings.remove(rowId);
   }
 
   Future<void> _deleteTemplateGroup(String templateName) async {
@@ -1111,9 +1139,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
     if (group.isEmpty) return;
     var logged = 0;
     for (final item in group) {
-      // Skip rows already mid-flight from a per-row tap.
+      // Skip rows already mid-flight from a per-row tap. notify: false —
+      // one summary snackbar below instead of one per row (the undo
+      // mappings are still persisted, so per-row revert works from the
+      // expanded panel).
       if (_logNowInFlight.contains(item.planned!.localId)) continue;
-      await _logNow(item);
+      await _logNow(item, notify: false);
       logged++;
     }
     if (!mounted || logged == 0) return;
@@ -1134,7 +1165,11 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// template header) and just visually flips to "done". The Sheets `create`
   /// happens in the background; on failure we surface a snackbar and
   /// re-sync from the source of truth.
-  Future<void> _logNow(_Item item, {Map<String, Object?>? overrideValues}) async {
+  Future<void> _logNow(
+    _Item item, {
+    Map<String, Object?>? overrideValues,
+    bool notify = true,
+  }) async {
     if (!item.isPlanned) return;
     final planned = item.planned!;
     if (!_logNowInFlight.add(planned.localId)) return;
@@ -1193,10 +1228,35 @@ class _TimelineScreenState extends State<TimelineScreen> {
       setState(() => _items = Future.value(updated));
     }
 
+    final rowId = values['id']?.toString();
     try {
       try {
         await widget.repository.create(widget.view, values);
         await PlanStore.remove(widget.view, planned.localId);
+        // Undo-logging: remember which planned entry this row came from
+        // so the snackbar's UNDO / the expanded panel's "Revert to plan"
+        // can delete the row and restore the entry. Needs a row id (all
+        // ledger views have one; views without simply can't revert).
+        if (rowId != null) {
+          await PlanStore.putUndo(widget.view, rowId, planned);
+          _undoMappings[rowId] = planned;
+        }
+        if (notify && mounted) {
+          final label =
+              values['exercise']?.toString() ?? _titleFor(widget.view, values);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Logged $label'),
+              duration: const Duration(seconds: 4),
+              action: rowId == null
+                  ? null
+                  : SnackBarAction(
+                      label: 'UNDO',
+                      onPressed: () => _revertToPlan(values),
+                    ),
+            ),
+          );
+        }
         // UI shows the optimistic row; re-sync the cache (new row + shifted
         // __row indices) from truth in the background, no spinner.
         unawaited(_revalidate(_dateKey()));
@@ -1217,9 +1277,37 @@ class _TimelineScreenState extends State<TimelineScreen> {
     final hook = widget.view.postLog;
     final llm = widget.llm;
     final cache = widget.llmCache;
-    final rowId = values['id']?.toString();
     if (hook != null && llm != null && cache != null && rowId != null) {
       _runPostLogHook(hook, values, rowId, llm, cache);
+    }
+  }
+
+  /// Undo-logging: deletes the logged [row] and restores the planned entry
+  /// it was promoted from (see [PlanStore.undoMappings]), then drops the
+  /// mapping. Shared by the Log-now snackbar's UNDO action and the
+  /// expanded panel's "Revert to plan" button — both single-tap.
+  Future<void> _revertToPlan(Record row) async {
+    final rowId = row['id']?.toString();
+    if (rowId == null) return;
+    final entry =
+        _undoMappings[rowId] ?? (await PlanStore.undoMappings(widget.view))[rowId];
+    if (entry == null) return;
+    try {
+      // Delete by row values — the engine ledger resolves rows by id, so
+      // the optimistic __row=0 on a just-created row is irrelevant here.
+      await widget.repository.delete(widget.view, row);
+      await PlanStore.addAll(widget.view, [entry]);
+      await PlanStore.removeUndo(widget.view, rowId);
+      _undoMappings.remove(rowId);
+      if (!mounted) return;
+      setState(() => _expandedLoggedKeys.clear());
+      _reload(fresh: true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Revert failed: $e — refreshing')),
+      );
+      _reload(fresh: true);
     }
   }
 
@@ -2102,6 +2190,11 @@ class _CompletedSection extends StatelessWidget {
   final void Function(_Item) onLongPress;
   final void Function(_Item) onDelete;
 
+  /// Row ids with a live undo-logging mapping — their expanded panel gets
+  /// a "Revert to plan" button wired to [onRevert].
+  final Set<String> revertibleIds;
+  final void Function(_Item) onRevert;
+
   /// When true, swipe-to-delete and the Edit/Move buttons are hidden.
   final bool readOnly;
 
@@ -2117,6 +2210,8 @@ class _CompletedSection extends StatelessWidget {
     required this.onMove,
     required this.onLongPress,
     required this.onDelete,
+    this.revertibleIds = const {},
+    required this.onRevert,
     this.readOnly = false,
   });
 
@@ -2155,6 +2250,14 @@ class _CompletedSection extends StatelessWidget {
             onMove: () => onMove(item),
             onLongPress: () => onLongPress(item),
             onDelete: () => onDelete(item),
+            // Batches can't revert (they were never a single planned
+            // entry); singles only when a mapping exists for their id.
+            onRevert: !readOnly &&
+                    !item.isBatch &&
+                    item.logged != null &&
+                    revertibleIds.contains(item.values['id']?.toString())
+                ? () => onRevert(item)
+                : null,
           ),
         const Divider(height: 1),
       ],
@@ -2183,6 +2286,10 @@ class _CompactLoggedTile extends StatelessWidget {
   final VoidCallback onLongPress;
   final VoidCallback onDelete;
 
+  /// Non-null only when this row has a live undo-logging mapping — shows
+  /// "Revert to plan" in the expanded panel.
+  final VoidCallback? onRevert;
+
   const _CompactLoggedTile({
     required this.view,
     required this.item,
@@ -2193,6 +2300,7 @@ class _CompactLoggedTile extends StatelessWidget {
     required this.onMove,
     required this.onLongPress,
     required this.onDelete,
+    this.onRevert,
     this.readOnly = false,
   });
 
@@ -2292,6 +2400,7 @@ class _CompactLoggedTile extends StatelessWidget {
                 // the expanded panel is purely informational.
                 onEdit: readOnly ? null : onEdit,
                 onMove: readOnly ? null : onMove,
+                onRevert: readOnly ? null : onRevert,
               ),
             ],
           )
@@ -2337,11 +2446,17 @@ class _ExpandedDetails extends StatelessWidget {
   /// Null when the view is read-only or the item has no date field.
   final VoidCallback? onMove;
 
+  /// Null unless this row was promoted from a planned entry and still
+  /// has its undo-logging mapping — shows "Revert to plan" (single tap:
+  /// deletes the row, restores the planned entry).
+  final VoidCallback? onRevert;
+
   const _ExpandedDetails({
     required this.view,
     required this.item,
     this.onEdit,
     this.onMove,
+    this.onRevert,
   });
 
   @override
@@ -2399,6 +2514,16 @@ class _ExpandedDetails extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (onRevert != null)
+                  TextButton.icon(
+                    icon: const Icon(Icons.undo, size: 16),
+                    label: const Text('Revert to plan'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                    onPressed: onRevert,
+                  ),
                 if (onMove != null)
                   TextButton.icon(
                     icon: const Icon(Icons.calendar_today_outlined, size: 16),

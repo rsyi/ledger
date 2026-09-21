@@ -1,15 +1,20 @@
 /// Weekly auto-planner — generates the week's planned strength rows from
-/// the coach program (`coach/program.yaml` v3 `planned` keys) into the
-/// device-local PlanStore, where the timeline renders them with Log-now.
+/// the coach program (`coach/program.yaml` v4 `planned` + `weight_fill` +
+/// `warmup_protocol` keys) into the device-local PlanStore, where the
+/// timeline renders them with Log-now.
 ///
 /// Two layers:
 ///  - [buildWeekPlannedEntries]: pure core (zero Flutter/IO imports) —
-///    program map + week Monday in, PlannedEntry-shaped maps out. Each
-///    map carries ONLY `date` + `exercise` + `reps` — NEVER rpe, notes,
-///    or weight (planned rows must not fabricate performance data).
+///    program map + week Monday (+ per-lift reference e1rms) in,
+///    PlannedEntry-shaped maps out. Each map carries ONLY `date` +
+///    `exercise` + `reps` + (when computable) `weight` — NEVER rpe or
+///    notes (planned rows must not fabricate performance data), and
+///    weight is absent rather than guessed when no reference exists.
 ///  - [WeekPlanner.ensureCurrentWeek]: thin runner — weekly idempotence
-///    via the `week_planner_generated_monday` ledger meta key; writes
-///    through the same PlanStore path coach proposals use.
+///    via the `week_planner_generated_monday` ledger meta key (stamped
+///    `<monday>|plan_v2`; a mismatch regenerates the week today-forward,
+///    replacing only still-planned rows); writes through the same
+///    PlanStore path coach proposals use.
 library;
 
 import 'package:airledger_engine/airledger_engine.dart';
@@ -19,7 +24,11 @@ import '../models/planned_entry.dart';
 import '../models/view_schema.dart';
 import 'plan_store.dart';
 import 'program_current.dart' show currentVersion;
+import 'program_metrics.dart'
+    show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
 import 'program_provider.dart';
+import 'sheets_repository.dart' show Record;
+import 'warehouse_connector.dart';
 import 'week_plan.dart' show defaultWeekStart;
 
 const List<String> _weekdayKeys = [
@@ -54,14 +63,36 @@ Map<Object?, Object?>? _blockFor(Map<Object?, Object?> version, DateTime day) {
   return null;
 }
 
+/// Rounds [x] to the nearest multiple of [step] (5 lb by default in the
+/// program). Half rounds away from zero (Dart `num.round`).
+num _roundTo(num x, num step) {
+  final r = (x / step).round() * step;
+  // Prefer int weights (245, not 245.0) so sheets/e1rm math stays clean.
+  return r == r.roundToDouble() ? r.round() : r;
+}
+
 /// Expands the current program version's `planned` lifts into one map per
 /// SET for the ISO week containing [weekMonday] (any day of the week is
 /// accepted; it's normalised to Monday).
 ///
-/// Returned maps have exactly three keys:
+/// Returned maps have keys drawn from exactly {date, exercise, reps,
+/// weight} — never rpe or notes:
 ///   - `date`     — UTC-midnight [DateTime] of the entry's weekday
 ///   - `exercise` — the exact logged exercise name (metrics depend on it)
 ///   - `reps`     — planned reps for that one set
+///   - `weight`   — only when computable; never guessed.
+///
+/// Weight fill (program v4 `weight_fill`): a working set's weight is the
+/// lift's entry in [references] (42-day reference e1rm, see
+/// [liftReferencesAsOf]) × `pct_by_reps[reps]`, rounded to `rounding_lb`.
+/// Absent when the lift has no reference or the reps have no pct entry.
+///
+/// Warm-ups (program v4 `warmup_protocol`): each planned exercise's sets
+/// are preceded — once per exercise per day — by the ramp rows: fixed
+/// `weight_lb` steps as-is; `pct_top` steps at that fraction of the day's
+/// TOP working weight for the exercise, rounded, and dropped unless
+/// strictly above `min_above_lb` when declared (the deadlift 135 rule).
+/// The whole ramp is skipped when the working weight is unknown.
 ///
 /// `sets: N` items expand into N entries (one row per set convention).
 /// Alternation-aware: when a day's `planned` is an a/b map, parity comes
@@ -73,8 +104,9 @@ Map<Object?, Object?>? _blockFor(Map<Object?, Object?> version, DateTime day) {
 /// thrown on.
 List<Map<String, Object?>> buildWeekPlannedEntries(
   Map<Object?, Object?> program,
-  DateTime weekMonday,
-) {
+  DateTime weekMonday, {
+  Map<String, double> references = const {},
+}) {
   final version = currentVersion(program);
   if (version == null) return const [];
 
@@ -88,6 +120,59 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     final anchor = _parseDay(alternation['anchor_monday']);
     final weeks = monday.difference(anchor).inDays ~/ 7;
     parity = weeks.isEven ? 'a' : 'b';
+  }
+
+  // Weight-fill config (v4). Missing/malformed → no weights ever filled.
+  final weightFill = version['weight_fill'];
+  final pctByReps = weightFill is Map && weightFill['pct_by_reps'] is Map
+      ? weightFill['pct_by_reps'] as Map
+      : const {};
+  final fillRounding = weightFill is Map && weightFill['rounding_lb'] is num
+      ? weightFill['rounding_lb'] as num
+      : 5;
+
+  // Warm-up config (v4). Missing/malformed → no warm-up rows.
+  final warmup = version['warmup_protocol'];
+  final warmupRounding = warmup is Map && warmup['rounding_lb'] is num
+      ? warmup['rounding_lb'] as num
+      : 5;
+
+  /// Working weight for one planned set, or null (never guessed).
+  num? workingWeight(String exercise, num reps) {
+    final lift = mainLiftByExercise[exercise];
+    final ref = lift == null ? null : references[lift];
+    if (ref == null) return null;
+    final pct = pctByReps[reps] ?? pctByReps[reps.toInt()];
+    if (pct is! num) return null;
+    return _roundTo(ref * pct, fillRounding);
+  }
+
+  /// Warm-up rows for [exercise] on [day], ramping to [top] (the day's
+  /// top working weight). Empty when no protocol applies.
+  List<Map<String, Object?>> warmupRows(
+      DateTime day, String exercise, num top) {
+    if (warmup is! Map) return const [];
+    final lift = mainLiftByExercise[exercise];
+    final steps = (lift != null ? warmup[lift] : null) ?? warmup['default'];
+    if (steps is! List) return const [];
+    final rows = <Map<String, Object?>>[];
+    for (final step in steps) {
+      if (step is! Map) continue;
+      final reps = step['reps'];
+      if (reps is! num) continue;
+      num? w;
+      if (step['weight_lb'] is num) {
+        w = step['weight_lb'] as num;
+      } else if (step['pct_top'] is num) {
+        w = _roundTo((step['pct_top'] as num) * top, warmupRounding);
+        final minAbove = step['min_above_lb'];
+        if (minAbove is num && w <= minAbove) continue; // deadlift 135 rule
+      } else {
+        continue;
+      }
+      rows.add({'date': day, 'exercise': exercise, 'reps': reps, 'weight': w});
+    }
+    return rows;
   }
 
   final entries = <Map<String, Object?>>[];
@@ -106,6 +191,9 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     Object? planned = dayMap['planned'];
     if (planned is Map) planned = planned[parity]; // alternation day
     if (planned is! List) continue;
+
+    // Pass 1: expand working sets (with weights where computable).
+    final working = <Map<String, Object?>>[];
     for (final item in planned) {
       if (item is! Map) continue;
       final exercise = item['exercise'];
@@ -113,11 +201,39 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
       if (exercise is! String || exercise.isEmpty || reps is! num) continue;
       final rawSets = item['sets'];
       final sets = rawSets is num && rawSets >= 1 ? rawSets.toInt() : 1;
+      final weight = workingWeight(exercise, reps);
       for (var s = 0; s < sets; s++) {
-        // ONLY exercise + reps (+ date). Never rpe/notes/weight — those
-        // describe what happened, and nothing has happened yet.
-        entries.add({'date': day, 'exercise': exercise, 'reps': reps});
+        // ONLY exercise + reps + optional weight (+ date). Never
+        // rpe/notes — those describe what happened, and nothing has
+        // happened yet. Weight is filled only from a real reference.
+        working.add({
+          'date': day,
+          'exercise': exercise,
+          'reps': reps,
+          'weight': ?weight,
+        });
       }
+    }
+
+    // Pass 2: splice each exercise's warm-up ramp before its first
+    // working set. Top = the exercise's heaviest filled working weight
+    // this day; exercises with no filled weight get no warm-ups (we
+    // can't ramp toward an unknown top).
+    final tops = <String, num>{};
+    for (final w in working) {
+      final weight = w['weight'];
+      if (weight is! num) continue;
+      final ex = w['exercise'] as String;
+      if (tops[ex] == null || weight > tops[ex]!) tops[ex] = weight;
+    }
+    final warmedUp = <String>{};
+    for (final w in working) {
+      final ex = w['exercise'] as String;
+      final top = tops[ex];
+      if (top != null && warmedUp.add(ex)) {
+        entries.addAll(warmupRows(day, ex, top));
+      }
+      entries.add(w);
     }
   }
   return entries;
@@ -126,10 +242,16 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
 /// Thin runner around [buildWeekPlannedEntries]. Call fire-and-forget from
 /// the home-screen bootstrap after SyncScheduler.init; never throws.
 class WeekPlanner {
-  /// Ledger meta key holding the `yyyy-MM-dd` Monday of the last week we
-  /// generated. Matching value = this week is done, do nothing (so logged
-  /// or user-deleted rows are never touched or re-created).
+  /// Ledger meta key holding the generation stamp of the last week we
+  /// generated: `<yyyy-MM-dd monday>|plan_v2`. Matching stamp = this week
+  /// is done, do nothing (so logged or user-deleted rows are never touched
+  /// or re-created). A mismatched stamp for the same Monday (e.g. the
+  /// pre-weight `plan_v1` bare-monday value) triggers [regenerateWeek].
   static const metaGeneratedKey = 'week_planner_generated_monday';
+
+  /// Planner generation suffix in the meta stamp. Bump when the generated
+  /// row shape changes and existing weeks should be upgraded in place.
+  static const planVersion = 'plan_v2';
 
   /// Ledger meta key the runner writes the last swallowed error into.
   static const metaErrorKey = 'week_planner_error';
@@ -138,18 +260,88 @@ class WeekPlanner {
   /// / coach-proposal grouping: PlannedEntry.templateName).
   static const templateLabel = 'program: week plan';
 
-  /// Ensures the current week's planned rows exist (once per week).
+  /// Replaces the target week's remaining (still-planned) week-plan rows
+  /// with freshly generated ones, today-forward. Returns the entries it
+  /// added (already written to PlanStore).
+  ///
+  /// "Remaining" = entries still in PlanStore with our [templateLabel] and
+  /// a date inside the target week. Rows the user already logged were
+  /// removed from PlanStore at log time and live in the ledger — they are
+  /// never touched or re-created for past days (past = before [today]).
+  /// Planned entries from other templates/weeks are left alone.
+  ///
+  /// Split out from [ensureCurrentWeek] (which adds the meta stamping and
+  /// error swallowing) so the replace semantics are unit-testable without
+  /// an FFI-backed ledger repo.
+  static Future<List<PlannedEntry>> regenerateWeek({
+    required ViewSchema strengthView,
+    required Map<Object?, Object?> program,
+    required Map<String, double> references,
+    required DateTime targetMonday,
+    required DateTime today,
+  }) async {
+    final fmt = DateFormat('yyyy-MM-dd');
+    final monday = DateTime.utc(
+      targetMonday.year,
+      targetMonday.month,
+      targetMonday.day,
+    );
+    final weekDays = {
+      for (var i = 0; i < 7; i++) fmt.format(monday.add(Duration(days: i))),
+    };
+    await PlanStore.removeWhere(
+      strengthView,
+      (e) =>
+          e.templateName == templateLabel &&
+          weekDays.contains(fmt.format(e.date)),
+    );
+
+    final todayDay = DateTime.utc(today.year, today.month, today.day);
+    final entries = <PlannedEntry>[];
+    final built = buildWeekPlannedEntries(
+      program,
+      monday,
+      references: references,
+    );
+    for (final e in built) {
+      final date = e['date'] as DateTime;
+      if (date.isBefore(todayDay)) continue; // today-forward only
+      entries.add(PlannedEntry.create(
+        view: strengthView,
+        date: DateTime(date.year, date.month, date.day),
+        values: {
+          'exercise': e['exercise'],
+          'reps': e['reps'],
+          'weight': ?e['weight'],
+        },
+        templateName: templateLabel,
+      ));
+    }
+    if (entries.isNotEmpty) {
+      await PlanStore.addAll(strengthView, entries);
+    }
+    return entries;
+  }
+
+  /// Ensures the current week's planned rows exist (once per week per
+  /// [planVersion]).
   ///
   /// Week selection follows [defaultWeekStart]: the Monday of this ISO
   /// week — except on Sundays, when it targets the UPCOMING week (the
   /// app-wide "on Sunday you plan next week" convention).
   ///
-  /// First run mid-week only adds entries dated today or later — no
-  /// backfilling of already-past days. Skips silently (without marking
-  /// the week done) when program.yaml is missing or unparseable. Any
-  /// error is swallowed into the [metaErrorKey] meta.
+  /// Per-lift references come from the local strength history read
+  /// through [connector] (the same list path every screen uses); a failed
+  /// read aborts the run (error meta, retried next launch) rather than
+  /// generating a weightless week. First run mid-week only adds entries
+  /// dated today or later — no backfilling of already-past days. A stamp
+  /// mismatch for an already-generated week (planner upgrade) replaces
+  /// only the week's still-planned rows via [regenerateWeek]. Skips
+  /// silently (without stamping) when program.yaml is missing or
+  /// unparseable. Any error is swallowed into the [metaErrorKey] meta.
   static Future<void> ensureCurrentWeek({
     required EngineLedgerRepository repo,
+    required WarehouseConnector connector,
     required ProgramProvider provider,
     required ViewSchema strengthView,
     DateTime Function() now = DateTime.now,
@@ -158,30 +350,29 @@ class WeekPlanner {
       final today = now();
       final targetMonday = defaultWeekStart(today);
       final mondayStr = DateFormat('yyyy-MM-dd').format(targetMonday);
-      if (await repo.metaGet(metaGeneratedKey) == mondayStr) return;
+      final stamp = '$mondayStr|$planVersion';
+      if (await repo.metaGet(metaGeneratedKey) == stamp) return;
 
       final docs = await provider.load();
       final program = docs.program;
       if (program == null) return; // no/bad program.yaml: retry next launch
 
-      final todayDay = DateTime.utc(today.year, today.month, today.day);
-      final entries = <PlannedEntry>[];
-      for (final e in buildWeekPlannedEntries(program, targetMonday)) {
-        final date = e['date'] as DateTime;
-        if (date.isBefore(todayDay)) continue; // today-forward on first run
-        entries.add(PlannedEntry.create(
-          view: strengthView,
-          date: DateTime(date.year, date.month, date.day),
-          values: {'exercise': e['exercise'], 'reps': e['reps']},
-          templateName: templateLabel,
-        ));
-      }
-      if (entries.isNotEmpty) {
-        await PlanStore.addAll(strengthView, entries);
-      }
+      final rows = await connector.list(strengthView);
+      final references = liftReferencesAsOf(
+        [for (final r in rows) ?_strengthRow(r)],
+        today,
+      );
+
+      await regenerateWeek(
+        strengthView: strengthView,
+        program: program,
+        references: references,
+        targetMonday: targetMonday,
+        today: today,
+      );
       // Mark the week done even when empty (e.g. pre-program week) so we
       // don't re-evaluate on every launch.
-      await repo.metaSet(metaGeneratedKey, mondayStr);
+      await repo.metaSet(metaGeneratedKey, stamp);
     } catch (e) {
       try {
         await repo.metaSet(metaErrorKey, e.toString());
@@ -190,4 +381,30 @@ class WeekPlanner {
       }
     }
   }
+
+  /// Maps a ledger strength [Record] into a [StrengthRow] for reference
+  /// math. Null when the row lacks a parseable date/exercise/weight/reps
+  /// (isometric holds etc. — they never qualify anyway).
+  static StrengthRow? _strengthRow(Record r) {
+    final rawDate = r['date'];
+    final date = rawDate is DateTime
+        ? rawDate
+        : DateTime.tryParse(rawDate?.toString() ?? '');
+    final exercise = r['exercise']?.toString();
+    final weight = _num(r['weight']);
+    final reps = _num(r['reps']);
+    if (date == null || exercise == null || exercise.isEmpty) return null;
+    if (weight == null || reps == null) return null;
+    final rpe = _num(r['rpe']);
+    return StrengthRow(
+      date: date,
+      exercise: exercise,
+      weight: weight.toDouble(),
+      reps: reps.round(),
+      rpe: rpe?.toDouble(),
+    );
+  }
+
+  static num? _num(Object? v) =>
+      v is num ? v : num.tryParse(v?.toString() ?? '');
 }

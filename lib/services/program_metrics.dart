@@ -223,6 +223,50 @@ List<GradedSet> gradeSets(List<StrengthRow> rows) {
   return out;
 }
 
+/// Reference e1rm per lift ('squat'|'bench'|'deadlift'|'press') AS OF
+/// [asOf] — same §2.5 semantics as [gradeSets]: max Epley e1rm over
+/// qualifying sets (reps <= 8, weight > 0) in the 42 days ending on and
+/// including [asOf]; when that window is empty, carried forward from the
+/// window ending at the lift's most recent qualifying date. Lifts with no
+/// qualifying history at all are absent from the map — callers must treat
+/// a missing lift as "no reference" and never guess.
+///
+/// Used by the week planner's weight fill (program.yaml v4 `weight_fill`).
+Map<String, double> liftReferencesAsOf(List<StrengthRow> rows, DateTime asOf) {
+  final day = _day(asOf);
+  final qualifying = <String, List<(DateTime, double)>>{};
+  for (final r in rows) {
+    final lift = mainLiftByExercise[r.exercise];
+    if (lift == null || r.reps > 8 || r.weight <= 0) continue;
+    final d = _day(r.date);
+    if (d.isAfter(day)) continue; // future/planned rows never qualify
+    (qualifying[lift] ??= []).add((d, epleyE1rm(r.weight, r.reps)));
+  }
+  final out = <String, double>{};
+  qualifying.forEach((lift, q) {
+    double? maxIn(DateTime end) {
+      double? best;
+      for (final (d, e) in q) {
+        if (!d.isAfter(end) && _daysBetween(d, end) <= 41) {
+          if (best == null || e > best) best = e;
+        }
+      }
+      return best;
+    }
+
+    var reference = maxIn(day);
+    if (reference == null) {
+      // Carry-forward: reference as of the most recent qualifying date
+      // (matches gradeSets' lastRef chain — each carried value was
+      // computed from the window ending on a day that had sets).
+      final last = q.map((e) => e.$1).reduce((a, b) => a.isAfter(b) ? a : b);
+      reference = maxIn(last);
+    }
+    if (reference != null) out[lift] = reference;
+  });
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Weekly rollup (§2.5 per ISO week, Mon–Sun keyed by Monday)
 // ---------------------------------------------------------------------------

@@ -202,6 +202,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (github != null && strengthView != null) {
         unawaited(WeekPlanner.ensureCurrentWeek(
           repo: repo.repo,
+          connector: repo,
           provider: ProgramProvider(CoachBrain.githubFetcher(github)),
           strengthView: strengthView,
         ));

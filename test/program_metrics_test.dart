@@ -496,6 +496,92 @@ void main() {
       expect(ids(f2, '2025-01-06'), isNot(contains('WORKING_LOW')));
     });
 
+    group('phase-aware thresholds (targetsOf)', () {
+      // Block-0 cut targets_in_force (program.yaml v6 targets_block_0).
+      Map<String, Object?> cutTargets(DateTime _) => const {
+            'near_max_sets': 4,
+            'working_sets': null,
+            'working_sets_min_normal': null,
+            'bench_days': 2,
+          };
+
+      test('NEAR_MAX_LOW scopes to targets.near_max_sets (cut: 4)', () {
+        // 4 near-max sets meets the cut target — legacy would fire (<5).
+        final atTarget = evaluateFlags(
+          [wk('2026-09-21', nearMaxSets: 4, benchDays: 2)],
+          targetsOf: cutTargets,
+        );
+        expect(ids(atTarget, '2026-09-21'), isNot(contains('NEAR_MAX_LOW')));
+        // 3 is below the cut target — fires with the target in evidence.
+        final below = evaluateFlags(
+          [wk('2026-09-21', nearMaxSets: 3, benchDays: 2)],
+          targetsOf: cutTargets,
+        );
+        final hit = below[d('2026-09-21')]!
+            .singleWhere((f) => f.id == 'NEAR_MAX_LOW');
+        expect(hit.evidence['target'], 4);
+        expect(hit.action, contains('4 near-max sets'));
+      });
+
+      test('WORKING_LOW is OFF when the floor target is explicitly null '
+          '(no volume floor on a cut)', () {
+        final flags = evaluateFlags(
+          [wk('2026-09-21', workingSets: 3, nearMaxSets: 4, benchDays: 2)],
+          targetsOf: cutTargets,
+        );
+        expect(ids(flags, '2026-09-21'), isNot(contains('WORKING_LOW')));
+      });
+
+      test('WORKING_LOW still fires under a non-null floor target', () {
+        final flags = evaluateFlags(
+          [wk('2026-09-21', workingSets: 19, nearMaxSets: 6, benchDays: 2)],
+          targetsOf: (_) => const {
+            'near_max_sets': 6,
+            'working_sets': 28,
+            'working_sets_min_normal': 20,
+            'bench_days': 2,
+          },
+        );
+        final hit = flags[d('2026-09-21')]!
+            .singleWhere((f) => f.id == 'WORKING_LOW');
+        expect(hit.evidence['floor'], 20);
+      });
+
+      test('BENCH_ONCE scopes to targets.bench_days', () {
+        final flags = evaluateFlags(
+          [wk('2026-09-21', benchDays: 1, nearMaxSets: 4)],
+          targetsOf: cutTargets,
+        );
+        expect(ids(flags, '2026-09-21'), contains('BENCH_ONCE'));
+        final ok = evaluateFlags(
+          [wk('2026-09-21', benchDays: 2, nearMaxSets: 4)],
+          targetsOf: cutTargets,
+        );
+        expect(ids(ok, '2026-09-21'), isEmpty);
+      });
+
+      test('weeks without targets keep the legacy backtest thresholds', () {
+        // targetsOf returns null (pre-program) → near_max <5 / working
+        // <20 / bench <2, exactly as with no targetsOf at all.
+        final flags = evaluateFlags(
+          [wk('2025-01-06', nearMaxSets: 4, workingSets: 19, benchDays: 1)],
+          targetsOf: (_) => null,
+        );
+        expect(
+          ids(flags, '2025-01-06'),
+          containsAll(['NEAR_MAX_LOW', 'WORKING_LOW', 'BENCH_ONCE']),
+        );
+      });
+
+      test('light weeks stay exempt even with targets in force', () {
+        final flags = evaluateFlags(
+          [wk('2026-09-21', nearMaxSets: 0, benchDays: 0, weekType: 'light')],
+          targetsOf: cutTargets,
+        );
+        expect(ids(flags, '2026-09-21'), isEmpty);
+      });
+    });
+
     test('LONG_SETS at >= 2 long failure sets, any week type', () {
       final flags = evaluateFlags([
         wk('2025-01-06', longFailureSets: 2, weekType: 'light'),

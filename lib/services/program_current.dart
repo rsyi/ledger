@@ -160,8 +160,19 @@ ProgramSlice? programCurrent(
   }
 
   // Targets in force: weekly targets resolved for this block.
+  //
+  // Block-0 override (program.yaml v6 `targets_block_0`, mirroring the
+  // weekly_template_block_0 convention): a key PRESENT in the override
+  // replaces the base `targets` value for block-0 dates — including an
+  // explicit null, which means "no target in force" (phase-aware flag
+  // rules treat it as off); a key ABSENT falls through to base targets.
   final targets = version['targets'] as Map? ?? const {};
-  final climbingWk = targets['climbing_wk'] as Map? ?? const {};
+  final block0Targets =
+      blockN == 0 ? version['targets_block_0'] as Map? : null;
+  Object? target(String key) =>
+      (block0Targets != null && block0Targets.containsKey(key))
+          ? block0Targets[key]
+          : targets[key];
   final Object? gainRate;
   if (block.containsKey('rate')) {
     gainRate = block['rate'];
@@ -170,23 +181,29 @@ ProgramSlice? programCurrent(
   } else {
     gainRate = null; // reverse block: rate emerges from the kcal ramp.
   }
+  // climbing_wk: base is emphasis-keyed ({lifting_block, climbing_block});
+  // the block-0 override is a plain scalar (a cut block is neither).
+  final Object? climbingRaw = target('climbing_wk');
+  final Object? climbingSessions = climbingRaw is Map
+      ? (emphasis == 'climbing'
+          ? climbingRaw['climbing_block']
+          : climbingRaw['lifting_block'])
+      : climbingRaw;
   final targetsInForce = <String, Object?>{
-    'near_max_sets': targets['near_max_sets_wk'],
-    'working_sets': targets['working_sets_wk'],
-    'working_sets_min_normal': targets['working_sets_wk_min_normal'],
-    'bench_days': targets['bench_days_wk'],
-    'press_days': targets['press_days_wk'],
-    'squat_days': targets['squat_days_wk'],
-    'deadlift_days': targets['deadlift_days_wk'],
-    'climbing_sessions': emphasis == 'climbing'
-        ? climbingWk['climbing_block']
-        : climbingWk['lifting_block'],
-    'bike_4x4': targets['bike_4x4_wk'],
-    'muscle_up_sessions': targets['muscle_up_sessions_wk'],
+    'near_max_sets': target('near_max_sets_wk'),
+    'working_sets': target('working_sets_wk'),
+    'working_sets_min_normal': target('working_sets_wk_min_normal'),
+    'bench_days': target('bench_days_wk'),
+    'press_days': target('press_days_wk'),
+    'squat_days': target('squat_days_wk'),
+    'deadlift_days': target('deadlift_days_wk'),
+    'climbing_sessions': climbingSessions,
+    'bike_4x4': target('bike_4x4_wk'),
+    'muscle_up_sessions': target('muscle_up_sessions_wk'),
     'gain_rate_lb_wk': gainRate,
     'bodyweight_band_lb': (targets['bodyweight_lb'] as Map?)?['band'],
     'hard_cap_lb': version['hard_cap_lb'],
-    'protein_g_per_lb': targets['protein_g_per_lb'],
+    'protein_g_per_lb': target('protein_g_per_lb'),
   };
 
   final rules = (version['rules'] as List? ?? const [])

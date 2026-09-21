@@ -207,6 +207,7 @@ Future<void> main(List<String> args) async {
   }
 
   String? Function(DateTime) weekTypeResolver = (m) => null;
+  Map<String, Object?>? Function(DateTime) targetsResolver = (m) => null;
   if (programYaml != null && programEffectiveDate != null) {
     final py = programYaml; // non-null: inside `programYaml != null` guard
     final effDate = programEffectiveDate;
@@ -215,6 +216,13 @@ Future<void> main(List<String> args) async {
       if (monday.isBefore(effDate)) return null;
       final slice = programCurrent(py, phaseYaml, monday);
       return slice?.weekType;
+    };
+    // Phase-aware flag thresholds: hand evaluateFlags the week's
+    // targets_in_force (block-0 cut targets via v6 targets_block_0).
+    // Pre-program weeks stay null → legacy backtest thresholds.
+    targetsResolver = (DateTime monday) {
+      if (monday.isBefore(effDate)) return null;
+      return programCurrent(py, phaseYaml, monday)?.targetsInForce;
     };
   }
 
@@ -239,7 +247,8 @@ Future<void> main(List<String> args) async {
     notes: noteRows,
     weekTypeOf: weekTypeResolver,
   );
-  final flagsByWeek = evaluateFlags(weeks, phaseOf: phaseResolver);
+  final flagsByWeek =
+      evaluateFlags(weeks, phaseOf: phaseResolver, targetsOf: targetsResolver);
 
   // Only keep weeks from 2024-01-01 forward.
   final cutoff = DateTime.utc(2024, 1, 1);
@@ -299,13 +308,12 @@ Future<void> main(List<String> args) async {
       py == null ? null : programCurrent(py, phaseYaml, d)?.weekType;
 
   // TWO_SIGNALS → controller freeze: DELIBERATELY NOT WIRED (2026-09-21).
-  // The §2.6 volume flags (WORKING_LOW ~28 sets, NEAR_MAX_LOW ≥6) are
-  // bulk-calibrated and fire on essentially every block-0 cut week, so
-  // feeding coach_flags' TWO_SIGNALS into runWmChain would freeze all
-  // four lifts indefinitely — contradicting §3 (cut_early is NOT frozen).
-  // The evaluate() override itself is implemented + tested; re-wire this
-  // set (fire → freeze the FOLLOWING week, since a week's own rollup is
-  // partial mid-week) once the flag rules are phase-aware.
+  // The flag rules are phase-aware now (targets_block_0 via targetsOf:
+  // WORKING_LOW is off in block 0, NEAR_MAX_LOW right-sized to 4), so
+  // the original blocker — bulk-calibrated flags firing every cut week
+  // and freezing all four lifts — is gone. Wiring it (fire → freeze the
+  // FOLLOWING week, since a week's own rollup is partial mid-week) is
+  // still a deliberate follow-up, not a side effect of this change.
   final twoSignalsWeeks = <DateTime>{};
   final painNotes = [
     for (final n in noteRows)

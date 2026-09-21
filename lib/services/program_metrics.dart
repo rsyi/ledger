@@ -573,9 +573,21 @@ class FlagHit {
 /// WEIGHT_DRIFT / CLIMB_OVER / BLOCK_END need program data (block target
 /// line, climbing allowance, test-week comparisons) and are no-ops until the
 /// intent layer supplies them.
+///
+/// Phase-aware thresholds (2026-09-21): [targetsOf] returns the week's
+/// `targets_in_force` (programCurrent(...).targetsInForce) when a program
+/// covers that week, else null. When targets are in force:
+///   • NEAR_MAX_LOW fires below `near_max_sets` (block-0 cut: 4);
+///   • WORKING_LOW fires below `working_sets_min_normal` — an explicit
+///     null target turns the rule OFF (no volume floor on a cut);
+///   • BENCH_ONCE fires below `bench_days`.
+/// With no targets (pre-program history / backtest §6 windows) the legacy
+/// bulk-calibrated thresholds hold unchanged: near_max < 5, working < 20,
+/// bench_days < 2.
 Map<DateTime, List<FlagHit>> evaluateFlags(
   List<WeeklyMetrics> weeks, {
   String? Function(DateTime weekMonday)? phaseOf,
+  Map<String, Object?>? Function(DateTime weekMonday)? targetsOf,
 }) {
   final out = <DateTime, List<FlagHit>>{};
   bool normalScope(WeeklyMetrics w) =>
@@ -716,22 +728,46 @@ Map<DateTime, List<FlagHit>> evaluateFlags(
       }
     }
 
-    // NEAR_MAX_LOW — normal weeks, near_max_sets < 5.
-    if (normalScope(w) && w.nearMaxSets < 5) {
+    // Targets in force for this week (null pre-program → legacy
+    // bulk-calibrated thresholds; see doc comment).
+    final targets = targetsOf?.call(w.weekStart);
+    num? threshold(String key, num legacy) {
+      if (targets == null) return legacy;
+      final t = targets[key];
+      return t is num ? t : null; // explicit null target → rule off
+    }
+
+    // NEAR_MAX_LOW — normal weeks, near_max_sets below the target in
+    // force (legacy: < 5, per "every failed stretch had 4 or fewer").
+    final nmThreshold = threshold('near_max_sets', 5);
+    if (normalScope(w) && nmThreshold != null && w.nearMaxSets < nmThreshold) {
       fire(
         'NEAR_MAX_LOW',
-        {'near_max_sets': w.nearMaxSets},
-        'Heavy work is missing. Every productive stretch had 6+ near-max '
-            'sets a week; every failed one had 4 or fewer.',
+        {
+          'near_max_sets': w.nearMaxSets,
+          if (targets != null) 'target': nmThreshold,
+        },
+        targets == null
+            ? 'Heavy work is missing. Every productive stretch had 6+ '
+                'near-max sets a week; every failed one had 4 or fewer.'
+            : 'Heavy work is missing. This week\'s target is '
+                '$nmThreshold near-max sets.',
       );
     }
 
-    // WORKING_LOW — normal weeks, working_sets < 20.
-    if (normalScope(w) && w.workingSets < 20) {
+    // WORKING_LOW — normal weeks, working_sets below the floor in force
+    // (targets: working_sets_min_normal, null = no floor; legacy: < 20).
+    final wlThreshold = threshold('working_sets_min_normal', 20);
+    if (normalScope(w) && wlThreshold != null && w.workingSets < wlThreshold) {
+      final wlTarget = targets?['working_sets'];
       fire(
         'WORKING_LOW',
-        {'working_sets': w.workingSets},
-        'Working volume under 20. Target ~28.',
+        {
+          'working_sets': w.workingSets,
+          if (targets != null) 'floor': wlThreshold,
+        },
+        'Working volume under $wlThreshold. '
+        'Target ~${wlTarget is num ? wlTarget : 28}.',
       );
     }
 
@@ -745,11 +781,16 @@ Map<DateTime, List<FlagHit>> evaluateFlags(
       );
     }
 
-    // BENCH_ONCE — normal weeks, bench_days < 2.
-    if (normalScope(w) && w.benchDays < 2) {
+    // BENCH_ONCE — normal weeks, bench_days below the target in force
+    // (legacy: < 2; program targets keep this at 2 in every phase).
+    final bdThreshold = threshold('bench_days', 2);
+    if (normalScope(w) && bdThreshold != null && w.benchDays < bdThreshold) {
       fire(
         'BENCH_ONCE',
-        {'bench_days': w.benchDays},
+        {
+          'bench_days': w.benchDays,
+          if (targets != null) 'target': bdThreshold,
+        },
         'Bench once this week. Twice is the rule in every phase.',
       );
     }

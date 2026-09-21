@@ -283,6 +283,11 @@ class InputSpec {
   final String? placeholder;
   final bool editable;
 
+  /// If false, exercise-history autofill never copies this field's past
+  /// value into the form. Opt-out for subjective per-set fields (rpe,
+  /// notes) where a carried-over value is silently wrong data.
+  final bool autofill;
+
   /// If true, the field renders a clock-icon suffix button that stamps the
   /// current time (formatted like "3:54:00 PM") into the field on tap.
   /// Useful for "Start Time"-style columns.
@@ -324,6 +329,7 @@ class InputSpec {
     this.options,
     this.placeholder,
     this.editable = true,
+    this.autofill = true,
     this.nowButton = false,
     this.history = false,
     this.ladders,

@@ -99,6 +99,7 @@ Map<String, dynamic> _inputSpecToJson(InputSpec s) => {
       if (s.options != null) 'options': s.options,
       if (s.placeholder != null) 'placeholder': s.placeholder,
       'editable': s.editable,
+      'autofill': s.autofill,
       'now_button': s.nowButton,
       'history': s.history,
       if (s.ladders != null)
@@ -293,6 +294,7 @@ InputSpec? _inputSpec(Object? node) {
     options: (m['options'] as List?)?.map((s) => s.toString()).toList(),
     placeholder: m['placeholder'] as String?,
     editable: (m['editable'] as bool?) ?? true,
+    autofill: (m['autofill'] as bool?) ?? true,
     nowButton: (m['now_button'] as bool?) ?? false,
     history: (m['history'] as bool?) ?? false,
     ladders: _ladders(m['ladders']),

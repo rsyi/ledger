@@ -245,6 +245,9 @@ class _FormScreenState extends State<FormScreen> {
       // today's start_time with yesterday's.
       if (dim.input?.widget == WidgetType.timer) continue;
       if (dim.input?.nowButton == true) continue;
+      // Opted out per-schema (autofill: false) — subjective per-set
+      // fields like rpe/notes must never carry over (false-data risk).
+      if (dim.input?.autofill == false) continue;
       if (_timerLinkedFields.contains(dim.name)) continue;
       if (!match.containsKey(dim.name)) continue;
       final isRepeatTarget = _repeatFields.contains(dim.name);

@@ -38,6 +38,7 @@ import '../services/warehouse_connector.dart';
 import '../services/program_current.dart';
 import '../services/program_provider.dart';
 import '../services/week_planner.dart';
+import '../services/wm_store.dart';
 import 'apps_screen.dart';
 import 'chat_screen.dart';
 import 'coach_chat_screen.dart';
@@ -119,6 +120,13 @@ class _HomeScreenState extends State<HomeScreen> {
     final views = await SchemaLoader.loadAll();
     final keyJson =
         await rootBundle.loadString('assets/service-account.json');
+    // Working-max controller tabs (WM-2). Cheap to construct — auth is
+    // lazy (first snapshot()/append). Feeds the planner's v3 weights, the
+    // Week Plan prescription blocks, and the Integrations card.
+    final wmStore = WmStore(
+      spreadsheetId: assetConfig.spreadsheetId,
+      serviceAccountKeyJson: keyJson,
+    );
     final repo = await retryTransient(
       () => connectSheetsConnector(
         defaultSpreadsheetId: assetConfig.spreadsheetId,
@@ -205,6 +213,7 @@ class _HomeScreenState extends State<HomeScreen> {
           connector: repo,
           provider: ProgramProvider(CoachBrain.githubFetcher(github)),
           strengthView: strengthView,
+          wmSnapshotOf: wmStore.snapshot,
         ));
       }
     }
@@ -259,6 +268,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ? null
           : QboService(assetConfig.quickbooks!),
       readOnlyRepo: readOnlyRepo,
+      wmStore: wmStore,
     );
   }
 
@@ -517,6 +527,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   provider: ProgramProvider(
                                     CoachBrain.githubFetcher(github),
                                   ),
+                                  wmStore: data.wmStore,
                                 ),
                               ),
                             ),
@@ -643,7 +654,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () => Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (_) => const IntegrationsScreen(),
+                              builder: (_) => IntegrationsScreen(
+                                wmStore: data.wmStore,
+                              ),
                             ),
                           ),
                         ),
@@ -701,6 +714,10 @@ class _Bootstrap {
   /// non-null.
   final WarehouseConnector? readOnlyRepo;
 
+  /// Working-max controller tab store (WM-2): Week Plan prescription
+  /// blocks + the Integrations "Working maxes" card.
+  final WmStore? wmStore;
+
   _Bootstrap({
     required this.views,
     required this.repository,
@@ -715,6 +732,7 @@ class _Bootstrap {
     this.quickbooks,
     this.qboService,
     this.readOnlyRepo,
+    this.wmStore,
   });
 }
 

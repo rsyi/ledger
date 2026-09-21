@@ -1,13 +1,21 @@
 /// Week plan screen — shows the Mon–Sun intent for one ISO week, resolved
-/// via the coach intent layer (program.yaml + phase.yaml from GitHub).
+/// via the coach intent layer (program.yaml + phase.yaml from GitHub),
+/// plus the §4 working-max prescription block on heavy days (top-set
+/// options / back-offs / Saturday single + last readings) from the
+/// append-only controller tabs via [WmStore].
 library;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../services/program_current.dart';
+import '../services/program_metrics.dart' show mainLiftByExercise;
 import '../services/program_provider.dart';
 import '../services/week_plan.dart';
+import '../services/week_planner.dart' show buildWeekPlannedEntries;
+import '../services/wm_store.dart';
+import '../services/wm_tabs.dart';
+import '../services/working_max.dart';
 
 /// Full-screen week plan view.
 ///
@@ -15,9 +23,15 @@ import '../services/week_plan.dart';
 /// resolves each day of the selected ISO week via [buildWeekPlan], and
 /// renders a header card (block/phase summary) plus 7 day tiles. Left/right
 /// chevrons navigate between weeks; the default week follows
-/// [defaultWeekStart] (next week when opened on a Sunday).
+/// [defaultWeekStart] (next week when opened on a Sunday). When [wmStore]
+/// is present, day tiles carrying a planned top single for a main lift
+/// get that lift's prescription block; a failed/empty tab read simply
+/// hides the blocks.
 class WeekPlanScreen extends StatefulWidget {
   final ProgramProvider provider;
+
+  /// Working-max tab reader; null hides the prescription blocks.
+  final WmStore? wmStore;
 
   /// Today's date — injected so the widget is testable. Defaults to
   /// [DateTime.now] (local) at construction time.
@@ -26,6 +40,7 @@ class WeekPlanScreen extends StatefulWidget {
   const WeekPlanScreen({
     super.key,
     required this.provider,
+    this.wmStore,
     DateTime? today,
   }) : today = today ?? const _NowPlaceholder();
 
@@ -60,7 +75,9 @@ class _WeekPlanScreenState extends State<WeekPlanScreen> {
   Future<_PlanData?> _fetchPlan() async {
     try {
       final docs = await widget.provider.load();
-      return _PlanData(docs: docs);
+      // Best-effort: snapshot() itself returns null on failure.
+      final wm = await widget.wmStore?.snapshot();
+      return _PlanData(docs: docs, wm: wm);
     } catch (_) {
       return null;
     }
@@ -124,7 +141,25 @@ class _WeekPlanScreenState extends State<WeekPlanScreen> {
 
 class _PlanData {
   final IntentDocs docs;
-  _PlanData({required this.docs});
+  final WmSnapshot? wm;
+  _PlanData({required this.docs, this.wm});
+}
+
+/// One lift's §4 prescription for a day tile.
+class _LiftRx {
+  final Prescription rx;
+  final String variant;
+  final bool unconfirmed;
+
+  /// Last readings for the lift (up to three, newest last).
+  final List<ReadingRow> readings;
+
+  const _LiftRx({
+    required this.rx,
+    required this.variant,
+    required this.unconfirmed,
+    required this.readings,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +205,7 @@ class _WeekView extends StatelessWidget {
     }
 
     final todayUtc = DateTime.utc(today.year, today.month, today.day);
+    final rxByDay = _prescriptionsByDay(program, week);
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -184,9 +220,80 @@ class _WeekView extends StatelessWidget {
           _DayTile(
             day: day,
             isToday: day.date == todayUtc,
+            prescriptions: rxByDay[day.date] ?? const [],
           ),
       ],
     );
+  }
+
+  /// §4 prescriptions for the week's heavy days: a day is "heavy" for a
+  /// lift when the program plans a top single (reps == 1) for it. Weights
+  /// come from the CURRENT working max via [buildPrescription]; empty when
+  /// the tabs haven't been seeded, the lift has no working max, or no
+  /// policy covers the date.
+  Map<DateTime, List<_LiftRx>> _prescriptionsByDay(
+    Map<Object?, Object?> program,
+    List<DayPlan> week,
+  ) {
+    final wm = planData.wm;
+    if (wm == null || wm.workingMax.isEmpty) return const {};
+    final version = currentVersion(program);
+    if (version == null) return const {};
+    final policies = loadPolicies(version);
+    if (policies.isEmpty) return const {};
+
+    final maxes = currentWorkingMaxesByLift(wm.workingMax);
+    LoadPolicy? policyOn(DateTime d, ProgramSlice? slice) => policyForDate(
+          policies,
+          date: d,
+          block: slice?.block['number'] as int?,
+          weekType: slice?.weekType,
+        );
+    final sliceByDay = {for (final d in week) d.date: d.slice};
+    final caps = activeCapsByLift(
+      wm,
+      (d) => policyOn(d, sliceByDay[DateTime.utc(d.year, d.month, d.day)]),
+    );
+
+    // Heavy lifts per day from the planned skeleton (no weights needed).
+    final heavy = <DateTime, Set<String>>{};
+    for (final e in buildWeekPlannedEntries(program, weekStart)) {
+      if (e['reps'] != 1) continue;
+      final lift = mainLiftByExercise[e['exercise']];
+      if (lift == null) continue;
+      (heavy[e['date'] as DateTime] ??= {}).add(lift);
+    }
+
+    final out = <DateTime, List<_LiftRx>>{};
+    heavy.forEach((day, lifts) {
+      final policy = policyOn(day, sliceByDay[day]);
+      if (policy == null) return;
+      for (final lift in lifts) {
+        final max = maxes[lift];
+        if (max == null) continue;
+        final readings = [
+          for (final r in wm.readings)
+            if (r.lift == lift) r,
+        ]..sort((a, b) => a.date.compareTo(b.date));
+        (out[day] ??= []).add(_LiftRx(
+          rx: buildPrescription(
+            lift: lift,
+            policy: policy,
+            workingMax: max,
+            warmupProtocol: version['warmup_protocol'],
+            activeCapRpe: caps[lift],
+          ),
+          variant: currentWorkingMax(wm.workingMax, lift)?.variant ??
+              defaultVariantByLift[lift] ??
+              '',
+          unconfirmed: needsConfirmation(wm.workingMax, lift),
+          readings: readings.length <= 3
+              ? readings
+              : readings.sublist(readings.length - 3),
+        ));
+      }
+    });
+    return out;
   }
 }
 
@@ -351,7 +458,14 @@ class _DayTile extends StatelessWidget {
   final DayPlan day;
   final bool isToday;
 
-  const _DayTile({required this.day, required this.isToday});
+  /// §4 prescription blocks for the day's heavy lifts (empty = none).
+  final List<_LiftRx> prescriptions;
+
+  const _DayTile({
+    required this.day,
+    required this.isToday,
+    this.prescriptions = const [],
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -432,9 +546,85 @@ class _DayTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            Expanded(child: content),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  content,
+                  for (final rx in prescriptions) _RxBlock(rx: rx),
+                ],
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// One lift's §4 prescription block: policy + working max, top-set
+/// options for 1/2/3 reps, back-offs, the Saturday single where the
+/// policy allows, and the last (up to three) readings with decisions.
+class _RxBlock extends StatelessWidget {
+  final _LiftRx rx;
+  const _RxBlock({required this.rx});
+
+  static String _n(num v) =>
+      v == v.roundToDouble() ? v.round().toString() : v.toString();
+
+  static String _readingLine(ReadingRow r) {
+    const moves = {'raise', 'drop', 'reset', 'manual'};
+    final arrow = moves.contains(r.decision) ? '→${_n(r.wmAfter)}' : '';
+    return '${DateFormat('MMM d').format(r.date)}  '
+        '${_n(r.weightLb)}×${r.reps} @${_n(r.rpe)} · ${r.decision}$arrow';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final p = rx.rx;
+    final tops = [
+      for (final reps in const [1, 2, 3])
+        if (p.topSetOptions[reps] != null)
+          '${_n(p.topSetOptions[reps]!)}×$reps',
+    ].join(' · ');
+    final small = Theme.of(context)
+        .textTheme
+        .bodySmall
+        ?.copyWith(color: scheme.onSurfaceVariant);
+    return Container(
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${p.lift} · ${p.policyName} · WM ${_n(p.workingMax)} '
+            '${rx.variant}${rx.unconfirmed ? ' (unconfirmed seed)' : ''}',
+            style: Theme.of(context)
+                .textTheme
+                .labelMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 2),
+          Text('Top set: $tops', style: small),
+          Text(
+            'Back-offs: ${p.backOffSets}×${p.backOffReps} @ '
+            '${_n(p.backOffWeight)}'
+            '${p.saturdaySingle != null ? ' · Sat single '
+                '${_n(p.saturdaySingle!)} @8.5' : ''}',
+            style: small,
+          ),
+          if (rx.readings.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            for (final r in rx.readings)
+              Text(_readingLine(r), style: small),
+          ],
+        ],
       ),
     );
   }

@@ -21,6 +21,7 @@ import 'widgets/sync_status_button.dart';
 import 'integrations_screen.dart';
 import '../services/heart_rate_service.dart';
 import '../services/integrations/kaya_snapshot.dart';
+import '../services/integrations/macrofactor.dart';
 import '../services/integrations/registry.dart';
 import '../services/integrations/whoop.dart';
 import '../services/integrations/withings.dart';
@@ -167,8 +168,10 @@ class _HomeScreenState extends State<HomeScreen> {
       // Integrations first: the scheduler's app-start sync pulls due
       // sources before pushing the ledger.
       ViewSchema? weightView;
+      ViewSchema? mealsView;
       for (final v in views) {
         if (v.name == 'weight') weightView = v;
+        if (v.name == 'meals') mealsView = v;
       }
       // _initialize() re-runs on schema reload; tear down the previous
       // service's BLE connection + retry timer before replacing it.
@@ -192,7 +195,14 @@ class _HomeScreenState extends State<HomeScreen> {
           serviceAccountKeyJson: keyJson,
         ),
         WhoopIntegration(hr: hrService),
-        ComingSoonIntegration('Macrofactor', '→ meals (via Health Connect)'),
+        // Macrofactor exports nutrition to Health Connect; the
+        // integration reads HC nutrition records and ingests them as
+        // meals rows keyed by hc_id (row-grained kaya pattern).
+        if (mealsView != null)
+          MacrofactorIntegration(
+            repo: repo.repo,
+            mealsViewJson: viewSchemaToEngineJson(mealsView),
+          ),
       ]);
       await SyncScheduler.init(
         ledger: repo,

@@ -9,6 +9,7 @@
 library;
 
 import 'program_current.dart';
+import 'program_metrics.dart' show StrengthRow, epleyE1rm, mainLiftByExercise;
 import 'wm_tabs.dart';
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,50 @@ String fmtLb(num v) =>
     v == v.roundToDouble() ? v.round().toString() : v.toString();
 
 // ---------------------------------------------------------------------------
+// Strength: estimated-1RM numbers (dashboard STRENGTH card, spec §0)
+// ---------------------------------------------------------------------------
+
+/// Maps a ledger strength record into a [StrengthRow] for e1RM math.
+/// Null when the row lacks a parseable date/exercise/weight/reps
+/// (isometric holds, planned rows without weights — they never qualify
+/// anyway). Mirror of WeekPlanner's private mapper.
+StrengthRow? strengthRowFromRecord(Map<String, Object?> r) {
+  final rawDate = r['date'];
+  final date = rawDate is DateTime
+      ? rawDate
+      : DateTime.tryParse(rawDate?.toString() ?? '');
+  final exercise = r['exercise']?.toString();
+  final weight = asNum(r['weight']);
+  final reps = asNum(r['reps']);
+  if (date == null || exercise == null || exercise.isEmpty) return null;
+  if (weight == null || reps == null) return null;
+  return StrengthRow(
+    date: date,
+    exercise: exercise,
+    weight: weight,
+    reps: reps.round(),
+    rpe: asNum(r['rpe']),
+  );
+}
+
+/// All-time best estimated 1RM per lift ('squat'|'bench'|'deadlift'|
+/// 'press') over the FULL strength history. Epley with reps capped at
+/// 12 — the airlayer `max_e1rm_capped` measure's expression (the e1RM
+/// source of truth per the working-max spec header), deliberately NOT
+/// the 42-day reference's reps<=8 qualifier: an all-time best may be a
+/// rep PR. Lifts with no history are absent from the map.
+Map<String, double> allTimeBestE1rms(List<StrengthRow> rows) {
+  final out = <String, double>{};
+  for (final r in rows) {
+    final lift = mainLiftByExercise[r.exercise];
+    if (lift == null || r.weight <= 0 || r.reps <= 0) continue;
+    final e = epleyE1rm(r.weight, r.reps);
+    if ((out[lift] ?? 0) < e) out[lift] = e;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Tolerant cell parsing (program_status rows arrive as DateTime/num from
 // the sheet codec, but degrade to strings on hand-edited tabs)
 // ---------------------------------------------------------------------------
@@ -118,10 +163,7 @@ class StatusWeek {
 /// Picks the newest program_status row whose `week_monday` is at or
 /// before today's week. Rows may be in any order; future weeks are
 /// ignored. Null when nothing usable exists.
-StatusWeek? latestStatusWeek(
-  List<Map<String, Object?>> rows,
-  DateTime today,
-) {
+StatusWeek? latestStatusWeek(List<Map<String, Object?>> rows, DateTime today) {
   final currentMonday = _mondayOf(today);
   DateTime? best;
   Map<String, Object?>? bestRow;
@@ -229,13 +271,12 @@ String verdictChipText(String label) {
 String? templateOneLiner(ProgramSlice? slice, {int maxLen = 84}) {
   if (slice == null) return null;
   final morning = slice.todayTemplate['morning']?.toString().trim() ?? '';
-  final afternoon =
-      slice.todayTemplate['afternoon']?.toString().trim() ?? '';
+  final afternoon = slice.todayTemplate['afternoon']?.toString().trim() ?? '';
   final line = morning.isNotEmpty
       ? morning
       : afternoon.isNotEmpty
-          ? 'PM: $afternoon'
-          : '';
+      ? 'PM: $afternoon'
+      : '';
   if (line.isEmpty) return null;
   return line.length <= maxLen ? line : '${line.substring(0, maxLen)}…';
 }

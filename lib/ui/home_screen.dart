@@ -94,6 +94,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Reentrancy guard so overlapping ticks (slow network) don't stack.
   bool _polling = false;
 
+  /// Handle on the progress dashboard so pull-to-refresh can bust its
+  /// caches (wm_store / program docs / weight mirror / best-e1RM).
+  final _dashboardKey = GlobalKey<HomeDashboardState>();
+
   @override
   void initState() {
     super.initState();
@@ -125,8 +129,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // often than record a signature newer than the views we show.
     _appliedSig = await SchemaSync.cachedSignature();
     final views = await SchemaLoader.loadAll();
-    final keyJson =
-        await rootBundle.loadString('assets/service-account.json');
+    final keyJson = await rootBundle.loadString('assets/service-account.json');
     // Working-max controller tabs (WM-2). Cheap to construct — auth is
     // lazy (first snapshot()/append). Feeds the planner's v3 weights, the
     // Week Plan prescription blocks, and the Integrations card.
@@ -154,8 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // never touch the engine ledger or have their sheet tabs "ensured"
     // (that would rewrite headers on tabs like kaya_ascents that the app
     // doesn't own).
-    for (final view
-        in views.where((v) => v.hasInputOverlay && !v.readOnly)) {
+    for (final view in views.where((v) => v.hasInputOverlay && !v.readOnly)) {
       // Wrap the first network-touching calls: the engine's reqwest client
       // can hit a cold-start DNS failure on the first request after launch
       // (see retryTransient). A few short retries ride out the window that
@@ -180,47 +182,49 @@ class _HomeScreenState extends State<HomeScreen> {
       final hrService = HeartRateService(repo: repo.repo);
       HeartRateService.instance = hrService;
       await hrService.init();
-      IntegrationRegistry.init(integrations: [
-        if (weightView != null)
-          WithingsIntegration(
-            config: assetConfig.withings,
+      IntegrationRegistry.init(
+        integrations: [
+          if (weightView != null)
+            WithingsIntegration(
+              config: assetConfig.withings,
+              repo: repo.repo,
+              weightViewJson: viewSchemaToEngineJson(weightView),
+            ),
+          // Kaya: climbing data lives in the kaya_ascents tab for the MCP
+          // (user's choice — not synced into the ledger). The card's
+          // guided Sync opens Kaya for its email export, watches Gmail
+          // (gmail.readonly via Google sign-in), and replace-alls the tab.
+          // The full KayaIntegration (API pull → ingest) is dormant in
+          // kaya.dart.
+          KayaGmailIntegration(
+            config: assetConfig.kayaGmail,
             repo: repo.repo,
-            weightViewJson: viewSchemaToEngineJson(weightView),
+            gateway: GoogleSignInGmailGateway(
+              serverClientId: assetConfig.kayaGmail?.serverClientId ?? '',
+            ),
+            store: ServiceAccountKayaTabStore(
+              spreadsheetId: assetConfig.spreadsheetId,
+              serviceAccountKeyJson: keyJson,
+            ),
           ),
-        // Kaya: climbing data lives in the kaya_ascents tab for the MCP
-        // (user's choice — not synced into the ledger). The card's
-        // guided Sync opens Kaya for its email export, watches Gmail
-        // (gmail.readonly via Google sign-in), and replace-alls the tab.
-        // The full KayaIntegration (API pull → ingest) is dormant in
-        // kaya.dart.
-        KayaGmailIntegration(
-          config: assetConfig.kayaGmail,
-          repo: repo.repo,
-          gateway: GoogleSignInGmailGateway(
-            serverClientId: assetConfig.kayaGmail?.serverClientId ?? '',
-          ),
-          store: ServiceAccountKayaTabStore(
-            spreadsheetId: assetConfig.spreadsheetId,
-            serviceAccountKeyJson: keyJson,
-          ),
-        ),
-        WhoopIntegration(hr: hrService),
-        // Macrofactor exports nutrition to Health Connect; the
-        // integration reads HC nutrition records and ingests them as
-        // meals rows keyed by hc_id (row-grained kaya pattern).
-        if (mealsView != null)
-          MacrofactorIntegration(
-            repo: repo.repo,
-            mealsViewJson: viewSchemaToEngineJson(mealsView),
-          ),
-      ]);
+          WhoopIntegration(hr: hrService),
+          // Macrofactor exports nutrition to Health Connect; the
+          // integration reads HC nutrition records and ingests them as
+          // meals rows keyed by hc_id (row-grained kaya pattern).
+          if (mealsView != null)
+            MacrofactorIntegration(
+              repo: repo.repo,
+              mealsViewJson: viewSchemaToEngineJson(mealsView),
+            ),
+        ],
+      );
       await SyncScheduler.init(
         ledger: repo,
         viewsJson: views
-            .where((v) =>
-                v.hasInputOverlay &&
-                v.datasource == 'gsheets' &&
-                !v.readOnly)
+            .where(
+              (v) =>
+                  v.hasInputOverlay && v.datasource == 'gsheets' && !v.readOnly,
+            )
             .map(viewSchemaToEngineJson)
             .toList(),
       );
@@ -233,13 +237,15 @@ class _HomeScreenState extends State<HomeScreen> {
         if (v.name == 'strength') strengthView = v;
       }
       if (github != null && strengthView != null) {
-        unawaited(WeekPlanner.ensureCurrentWeek(
-          repo: repo.repo,
-          connector: repo,
-          provider: ProgramProvider(CoachBrain.githubFetcher(github)),
-          strengthView: strengthView,
-          wmSnapshotOf: wmStore.snapshot,
-        ));
+        unawaited(
+          WeekPlanner.ensureCurrentWeek(
+            repo: repo.repo,
+            connector: repo,
+            provider: ProgramProvider(CoachBrain.githubFetcher(github)),
+            strengthView: strengthView,
+            wmSnapshotOf: wmStore.snapshot,
+          ),
+        );
       }
     }
     // Read-only views: connect a direct SheetsRepository that bypasses the
@@ -247,8 +253,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // is read-only — avoids a superfluous auth round-trip on builds without
     // read-only views.
     WarehouseConnector? readOnlyRepo;
-    final hasReadOnlyViews =
-        views.any((v) => v.hasInputOverlay && v.readOnly);
+    final hasReadOnlyViews = views.any((v) => v.hasInputOverlay && v.readOnly);
     if (hasReadOnlyViews) {
       readOnlyRepo = await retryTransient(
         () => SheetsRepository.connectFromKey(
@@ -265,8 +270,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final llm = assetConfig.disablePostLog
         ? null
         : LlmClient(assetConfig.models);
-    final llmCache =
-        assetConfig.disablePostLog ? null : LlmResponseCache();
+    final llmCache = assetConfig.disablePostLog ? null : LlmResponseCache();
     // AnalyticsEngine = airlayer compiler + LocalDb SQLite cache. Used by
     // the chat's run_query tool. Best-effort: if the native lib fails to
     // load on this platform, the chat opens without run_query and the
@@ -372,8 +376,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final appName = snap.data?.appName ?? 'Airledger';
         final boot = snap.data;
         final github = boot?.github;
-        final chatModel =
-            boot == null ? null : _chatModel(boot.models);
+        final chatModel = boot == null ? null : _chatModel(boot.models);
         // Kiosk short-circuit: when config.yml declares `kiosk_view:` and a
         // view by that name exists, the home screen never renders — the app
         // boots directly into the timeline for that view with all
@@ -420,8 +423,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     MaterialPageRoute(
                       builder: (_) => ChatScreen(
                         model: chatModel,
-                        github:
-                            github == null ? null : GithubClient(github),
+                        github: github == null ? null : GithubClient(github),
                         analytics: boot?.analytics,
                       ),
                     ),
@@ -456,10 +458,12 @@ class _HomeScreenState extends State<HomeScreen> {
               // coach_chat is a chat, not a tracker — excluded here,
               // rendered as the pinned Coach row instead.
               final entryViews = data.views
-                  .where((v) =>
-                      v.hasInputOverlay &&
-                      !v.readOnly &&
-                      v.name != kCoachChatViewName)
+                  .where(
+                    (v) =>
+                        v.hasInputOverlay &&
+                        !v.readOnly &&
+                        v.name != kCoachChatViewName,
+                  )
                   .toList();
               // Read-only views show in a separate "Read-only" section
               // backed by a direct sheet read (no ledger writes). Only
@@ -467,8 +471,8 @@ class _HomeScreenState extends State<HomeScreen> {
               final readOnlyViews = data.readOnlyRepo == null
                   ? const <ViewSchema>[]
                   : data.views
-                      .where((v) => v.hasInputOverlay && v.readOnly)
-                      .toList();
+                        .where((v) => v.hasInputOverlay && v.readOnly)
+                        .toList();
               ViewSchema? coachView;
               for (final v in data.views) {
                 if (v.name == kCoachChatViewName) coachView = v;
@@ -497,12 +501,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     );
               // Progress-dashboard plumbing. weight is a normal entry
               // view (BODY reads it through airlayer); program_status is
-              // read-only (EXECUTION/ENGINE read it via readOnlyRepo).
+              // read-only (EXECUTION/ENGINE read it via readOnlyRepo);
+              // strength feeds the STRENGTH card's e1RM columns through
+              // its normal ledger connector.
               ViewSchema? weightView;
               ViewSchema? statusView;
+              ViewSchema? dashStrengthView;
               for (final v in data.views) {
                 if (v.name == 'weight') weightView = v;
                 if (v.name == 'program_status') statusView = v;
+                if (v.name == 'strength') dashStrengthView = v;
               }
               final programProvider = github == null
                   ? null
@@ -546,8 +554,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       llm: null,
                       llmCache: null,
                       chatModel: chatModel,
-                      github:
-                          github == null ? null : GithubClient(github),
+                      github: github == null ? null : GithubClient(github),
                       analytics: data.analytics,
                     ),
                   ),
@@ -557,6 +564,7 @@ class _HomeScreenState extends State<HomeScreen> {
               return Column(
                 children: [
                   HomeDashboard(
+                    key: _dashboardKey,
                     wmStore: data.wmStore,
                     provider: programProvider,
                     analytics: data.analytics,
@@ -566,14 +574,18 @@ class _HomeScreenState extends State<HomeScreen> {
                         : data.registry.forView(weightView),
                     statusView: statusView,
                     statusRepo: data.readOnlyRepo,
-                    onOpenProgram:
-                        programProvider == null ? null : openProgram,
-                    onOpenWeekPlan:
-                        programProvider == null ? null : openWeekPlan,
+                    strengthView: dashStrengthView,
+                    strengthRepo: dashStrengthView == null
+                        ? null
+                        : data.registry.forView(dashStrengthView),
+                    onOpenProgram: programProvider == null ? null : openProgram,
+                    onOpenWeekPlan: programProvider == null
+                        ? null
+                        : openWeekPlan,
                     onOpenStatus:
                         statusView == null || data.readOnlyRepo == null
-                            ? null
-                            : openStatusLedger,
+                        ? null
+                        : openStatusLedger,
                   ),
                   if (coachView != null)
                     _CoachRow(
@@ -601,8 +613,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               qboSpec: data.quickbooks?.specFor(view.name),
                               qboService:
                                   data.quickbooks?.specFor(view.name) == null
-                                      ? null
-                                      : data.qboService,
+                                  ? null
+                                  : data.qboService,
                               initialDate: date,
                               highlightKeys: highlight,
                             ),
@@ -611,131 +623,77 @@ class _HomeScreenState extends State<HomeScreen> {
                       },
                     ),
                   Expanded(
-                    child: ListView(
-                      children: [
-                        // Week plan tile — only shown when GitHub config is
-                        // present (program.yaml lives in the schemas repo).
-                        if (github != null) ...[
-                          _WeekPlanTile(
-                            fetchDoc: CoachBrain.githubFetcher(github),
-                            onTap: openWeekPlan,
-                          ),
-                          const Divider(height: 1),
-                          // Program tile — declared intent (phase/blocks)
-                          // vs observed reality (weight via airlayer).
-                          ListTile(
-                            leading: IconResolver.resolve(
-                              'target',
-                              size: 22,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant,
+                    // Pull-to-refresh: busts the dashboard's caches
+                    // (wm_store snapshot, program docs, weight mirror,
+                    // best-e1RM) and refires its card futures.
+                    child: RefreshIndicator(
+                      onRefresh: () async =>
+                          _dashboardKey.currentState?.reload(),
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          // Week plan tile — only shown when GitHub config is
+                          // present (program.yaml lives in the schemas repo).
+                          if (github != null) ...[
+                            _WeekPlanTile(
+                              fetchDoc: CoachBrain.githubFetcher(github),
+                              onTap: openWeekPlan,
                             ),
-                            title: const Text('Program'),
-                            subtitle: const Text(
-                                'Declared phase vs observed weight'),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: openProgram,
-                          ),
-                          const Divider(height: 1),
-                        ],
-                        // Trackers, collapsed into a compact "Ledgers"
-                        // section — the synthesis cards above are the
-                        // primary surface; the raw trackers stay one tap
-                        // away. Read-only views (direct sheet read, no
-                        // ledger writes) nest at the bottom of the same
-                        // section.
-                        ExpansionTile(
-                          leading: Icon(
-                            Icons.view_list_outlined,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant,
-                          ),
-                          title: const Text('Ledgers'),
-                          subtitle: Text(
-                            '${entryViews.length} trackers'
-                            '${readOnlyViews.isNotEmpty ? ' · ${readOnlyViews.length} read-only' : ''}',
-                          ),
-                          shape: const Border(),
-                          collapsedShape: const Border(),
-                          children: [
-                            for (final view in entryViews)
-                              ListTile(
-                                dense: true,
-                                visualDensity: VisualDensity.compact,
-                                contentPadding: const EdgeInsets.only(
-                                    left: 28, right: 16),
-                                leading: IconResolver.resolve(
-                                  view.icon,
-                                  size: 20,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant,
-                                ),
-                                title: Text(view.name),
-                                subtitle: view.description == null
-                                    ? null
-                                    : Text(
-                                        view.description!,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                trailing:
-                                    const Icon(Icons.chevron_right),
-                                onTap: () => Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => TimelineScreen(
-                                      view: view,
-                                      repository:
-                                          data.registry.forView(view),
-                                      llm: data.llm,
-                                      llmCache: data.llmCache,
-                                      chatModel: chatModel,
-                                      github: github == null
-                                          ? null
-                                          : GithubClient(github),
-                                      analytics: data.analytics,
-                                      qboSpec: data.quickbooks
-                                          ?.specFor(view.name),
-                                      qboService:
-                                          data.quickbooks
-                                                      ?.specFor(view.name) ==
-                                                  null
-                                              ? null
-                                              : data.qboService,
-                                    ),
-                                  ),
-                                ),
+                            const Divider(height: 1),
+                            // Program tile — declared intent (phase/blocks)
+                            // vs observed reality (weight via airlayer).
+                            ListTile(
+                              leading: IconResolver.resolve(
+                                'target',
+                                size: 22,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
                               ),
-                            if (readOnlyViews.isNotEmpty) ...[
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                    28, 8, 16, 2),
-                                child: Text(
-                                  'Read-only',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .labelSmall
-                                      ?.copyWith(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                ),
+                              title: const Text('Program'),
+                              subtitle: const Text(
+                                'Declared phase vs observed weight',
                               ),
-                              for (final view in readOnlyViews)
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: openProgram,
+                            ),
+                            const Divider(height: 1),
+                          ],
+                          // Trackers, collapsed into a compact "Ledgers"
+                          // section — the synthesis cards above are the
+                          // primary surface; the raw trackers stay one tap
+                          // away. Read-only views (direct sheet read, no
+                          // ledger writes) nest at the bottom of the same
+                          // section.
+                          ExpansionTile(
+                            leading: Icon(
+                              Icons.view_list_outlined,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                            title: const Text('Ledgers'),
+                            subtitle: Text(
+                              '${entryViews.length} trackers'
+                              '${readOnlyViews.isNotEmpty ? ' · ${readOnlyViews.length} read-only' : ''}',
+                            ),
+                            shape: const Border(),
+                            collapsedShape: const Border(),
+                            children: [
+                              for (final view in entryViews)
                                 ListTile(
                                   dense: true,
                                   visualDensity: VisualDensity.compact,
                                   contentPadding: const EdgeInsets.only(
-                                      left: 28, right: 16),
+                                    left: 28,
+                                    right: 16,
+                                  ),
                                   leading: IconResolver.resolve(
                                     view.icon,
                                     size: 20,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
                                   ),
                                   title: Text(view.name),
                                   subtitle: view.description == null
@@ -745,64 +703,134 @@ class _HomeScreenState extends State<HomeScreen> {
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
-                                  trailing:
-                                      const Icon(Icons.chevron_right),
-                                  onTap: () =>
-                                      Navigator.of(context).push(
+                                  trailing: const Icon(Icons.chevron_right),
+                                  onTap: () => Navigator.of(context).push(
                                     MaterialPageRoute(
                                       builder: (_) => TimelineScreen(
                                         view: view,
-                                        repository: data.readOnlyRepo!,
-                                        // No post-log hooks on
-                                        // read-only views.
-                                        llm: null,
-                                        llmCache: null,
+                                        repository: data.registry.forView(view),
+                                        llm: data.llm,
+                                        llmCache: data.llmCache,
                                         chatModel: chatModel,
                                         github: github == null
                                             ? null
                                             : GithubClient(github),
                                         analytics: data.analytics,
+                                        qboSpec: data.quickbooks?.specFor(
+                                          view.name,
+                                        ),
+                                        qboService:
+                                            data.quickbooks?.specFor(
+                                                  view.name,
+                                                ) ==
+                                                null
+                                            ? null
+                                            : data.qboService,
                                       ),
                                     ),
                                   ),
                                 ),
+                              if (readOnlyViews.isNotEmpty) ...[
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    28,
+                                    8,
+                                    16,
+                                    2,
+                                  ),
+                                  child: Text(
+                                    'Read-only',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelSmall
+                                        ?.copyWith(
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.onSurfaceVariant,
+                                        ),
+                                  ),
+                                ),
+                                for (final view in readOnlyViews)
+                                  ListTile(
+                                    dense: true,
+                                    visualDensity: VisualDensity.compact,
+                                    contentPadding: const EdgeInsets.only(
+                                      left: 28,
+                                      right: 16,
+                                    ),
+                                    leading: IconResolver.resolve(
+                                      view.icon,
+                                      size: 20,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                                    ),
+                                    title: Text(view.name),
+                                    subtitle: view.description == null
+                                        ? null
+                                        : Text(
+                                            view.description!,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () => Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => TimelineScreen(
+                                          view: view,
+                                          repository: data.readOnlyRepo!,
+                                          // No post-log hooks on
+                                          // read-only views.
+                                          llm: null,
+                                          llmCache: null,
+                                          chatModel: chatModel,
+                                          github: github == null
+                                              ? null
+                                              : GithubClient(github),
+                                          analytics: data.analytics,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ],
-                          ],
-                        ),
-                        const Divider(height: 1),
-                        // Apps tile.
-                        ListTile(
-                          leading: const Icon(Icons.bar_chart),
-                          title: const Text('Apps'),
-                          subtitle: const Text(
-                              'Interactive analytics from .app.yml'),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => AppsScreen(
-                                views: data.views,
-                                repository: data.repository,
+                          ),
+                          const Divider(height: 1),
+                          // Apps tile.
+                          ListTile(
+                            leading: const Icon(Icons.bar_chart),
+                            title: const Text('Apps'),
+                            subtitle: const Text(
+                              'Interactive analytics from .app.yml',
+                            ),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => AppsScreen(
+                                  views: data.views,
+                                  repository: data.repository,
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        const Divider(height: 1),
-                        // Integrations tile.
-                        ListTile(
-                          leading: const Icon(Icons.sync_alt),
-                          title: const Text('Integrations'),
-                          subtitle: const Text(
-                              'Withings and other sources → ledger'),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => IntegrationsScreen(
-                                wmStore: data.wmStore,
+                          const Divider(height: 1),
+                          // Integrations tile.
+                          ListTile(
+                            leading: const Icon(Icons.sync_alt),
+                            title: const Text('Integrations'),
+                            subtitle: const Text(
+                              'Withings and other sources → ledger',
+                            ),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    IntegrationsScreen(wmStore: data.wmStore),
                               ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ],
@@ -962,7 +990,9 @@ class _CoachRowState extends State<_CoachRow> {
         if (widget.ledger != null) {
           try {
             lastRead = await coachThreadLastRead(widget.ledger!, e.key);
-          } catch (_) {/* treat as missing */}
+          } catch (_) {
+            /* treat as missing */
+          }
         }
         if (lastRead == null ||
             lastRead.isEmpty ||
@@ -979,7 +1009,9 @@ class _CoachRowState extends State<_CoachRow> {
         _relTime = _relativeTime(newestTs);
         _unread = unread;
       });
-    } catch (_) {/* keep whatever the row currently shows */}
+    } catch (_) {
+      /* keep whatever the row currently shows */
+    }
   }
 
   static String _firstLine(String text) {
@@ -1023,8 +1055,7 @@ class _CoachRowState extends State<_CoachRow> {
         ? null
         : [_preview!, ?_relTime].join(' · ');
     return Material(
-      color: scheme.primaryContainer
-          .withValues(alpha: _unread ? 1.0 : 0.45),
+      color: scheme.primaryContainer.withValues(alpha: _unread ? 1.0 : 0.45),
       child: ListTile(
         leading: IconResolver.resolve(
           'bot',
@@ -1103,16 +1134,18 @@ class _WeekPlanTileState extends State<_WeekPlanTile> {
 
       final now = DateTime.now();
       // On Sundays show tomorrow's (Monday) template — that's the upcoming day.
-      final refDate =
-          now.weekday == DateTime.sunday ? now.add(const Duration(days: 1)) : now;
+      final refDate = now.weekday == DateTime.sunday
+          ? now.add(const Duration(days: 1))
+          : now;
 
       final slice = programCurrent(program, docs.phase, refDate);
       if (slice == null) return;
 
       final morning = slice.todayTemplate['morning']?.toString().trim() ?? '';
       if (morning.isNotEmpty) {
-        final preview =
-            morning.length > 60 ? '${morning.substring(0, 60)}…' : morning;
+        final preview = morning.length > 60
+            ? '${morning.substring(0, 60)}…'
+            : morning;
         if (mounted) setState(() => _subtitle = preview);
       } else {
         if (mounted) setState(() => _subtitle = 'This week: ${slice.weekType}');

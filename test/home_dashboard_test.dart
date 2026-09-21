@@ -39,6 +39,17 @@ final _statusView = ViewSchema(
   ],
 );
 
+final _strengthView = ViewSchema(
+  name: 'strength',
+  datasource: 'gsheets',
+  table: 'strength',
+  entities: const [],
+  measures: const [],
+  dimensions: [
+    Dimension(name: 'date', type: DimensionType.date, expr: 'date'),
+  ],
+);
+
 Widget _wrap(Widget child) =>
     MaterialApp(home: Scaffold(body: SingleChildScrollView(child: child)));
 
@@ -67,8 +78,99 @@ void main() {
     expect(find.text('EXECUTION'), findsOneWidget);
     expect(find.text('ENGINE'), findsOneWidget);
     expect(find.text('no weigh-in data'), findsOneWidget);
-    expect(find.text('no working maxes yet'), findsOneWidget);
+    expect(find.text('no strength data yet'), findsOneWidget);
     expect(find.text('no status data'), findsNWidgets(2));
+  });
+
+  testWidgets('STRENGTH renders est-1RM / WM / best columns from the '
+      'strength ledger even without a wm store', (tester) async {
+    HomeDashboardState.clearBestE1rmCache();
+    final strengthRepo = _FakeStatusRepo([
+      {
+        'date': DateTime(2026, 9, 21),
+        'exercise': 'Barbell Squat',
+        'weight': 300,
+        'reps': 1, // e1rm 310 — inside the 42-day window
+      },
+      {
+        'date': DateTime(2025, 1, 6),
+        'exercise': 'Barbell Squat',
+        'weight': 320,
+        'reps': 1, // e1rm ~330.7 — all-time best, outside the window
+      },
+    ]);
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      strengthView: _strengthView,
+      strengthRepo: strengthRepo,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+    expect(find.text('e1RM'), findsOneWidget); // column headers
+    expect(find.text('WM'), findsOneWidget);
+    expect(find.text('best'), findsOneWidget);
+    expect(find.text('310'), findsOneWidget); // 42-day reference
+    expect(find.text('331'), findsOneWidget); // all-time best (rounded)
+  });
+
+  testWidgets('tapping a card opens its detail sheet; Open action present',
+      (tester) async {
+    HomeDashboardState.clearBestE1rmCache();
+    final repo = _FakeStatusRepo([
+      {
+        'week_monday': DateTime(2026, 9, 21),
+        'working_sets': 14,
+        'near_max_sets': 3,
+        'bench_days': 1,
+        'flags': 'NEAR_MAX_LOW',
+      },
+    ]);
+    var openedStatus = false;
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      statusView: _statusView,
+      statusRepo: repo,
+      onOpenStatus: () => openedStatus = true,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('EXECUTION'));
+    await tester.pumpAndSettle();
+    // Detail sheet: definitions + current values + flags.
+    expect(
+      find.textContaining('sets at ≥ 80% of your reference e1RM'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('heavy quota'), findsOneWidget);
+    expect(find.text('NEAR_MAX_LOW'), findsOneWidget);
+    // The onward action navigates only from the sheet.
+    await tester.tap(find.text('Open status ledger'));
+    await tester.pumpAndSettle();
+    expect(openedStatus, isTrue);
+  });
+
+  testWidgets('STRENGTH detail sheet explains WM vs est 1RM', (tester) async {
+    HomeDashboardState.clearBestE1rmCache();
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      strengthView: _strengthView,
+      strengthRepo: _FakeStatusRepo([
+        {
+          'date': DateTime(2026, 9, 21),
+          'exercise': 'Barbell Squat',
+          'weight': 300,
+          'reps': 1,
+        },
+      ]),
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('STRENGTH'));
+    await tester.pumpAndSettle();
+    expect(find.text('WM (working max)'), findsOneWidget);
+    expect(
+      find.textContaining('not your measured max'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('trailing 42 days'), findsOneWidget);
   });
 
   testWidgets('EXECUTION/ENGINE render status-row numbers and flag chip',

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/services/home_synthesis.dart';
 import 'package:airledger/services/program_current.dart';
+import 'package:airledger/services/program_metrics.dart' show StrengthRow;
 import 'package:airledger/services/wm_tabs.dart';
 
 WorkingMaxRow wm(
@@ -282,6 +283,71 @@ void main() {
     test('null when the day is empty or slice missing', () {
       expect(templateOneLiner(slice()), isNull);
       expect(templateOneLiner(null), isNull);
+    });
+  });
+
+  group('strengthRowFromRecord', () {
+    test('maps date/exercise/weight/reps/rpe, tolerating string cells', () {
+      final r = strengthRowFromRecord({
+        'date': '2026-09-21',
+        'exercise': 'Barbell Squat',
+        'weight': '275',
+        'reps': 3,
+        'rpe': 8.0,
+      })!;
+      expect(r.exercise, 'Barbell Squat');
+      expect(r.weight, 275);
+      expect(r.reps, 3);
+      expect(r.rpe, 8.0);
+      expect(r.date, DateTime(2026, 9, 21));
+    });
+
+    test('null on missing date/exercise/weight/reps (planned rows, holds)',
+        () {
+      expect(strengthRowFromRecord({'exercise': 'Barbell Squat'}), isNull);
+      expect(strengthRowFromRecord({'date': '2026-09-21'}), isNull);
+      expect(
+        strengthRowFromRecord({
+          'date': '2026-09-21',
+          'exercise': 'Plank',
+          'weight': null, // isometric hold — no weight
+          'reps': 1,
+        }),
+        isNull,
+      );
+    });
+  });
+
+  group('allTimeBestE1rms', () {
+    StrengthRow s(String ex, double w, int reps) => StrengthRow(
+          date: DateTime(2025, 1, 1),
+          exercise: ex,
+          weight: w,
+          reps: reps,
+        );
+
+    test('max Epley e1RM per lift over the full history', () {
+      final best = allTimeBestE1rms([
+        s('Barbell Squat', 300, 1), // e1rm 310
+        s('Barbell Squat', 275, 5), // e1rm ~320.8 — rep PR wins
+        s('Flat Barbell Bench Press', 225, 1), // 232.5
+        s('Overhead Press', 135, 3), // 148.5
+      ]);
+      expect(best['squat'], closeTo(320.8, 0.1));
+      expect(best['bench'], closeTo(232.5, 0.01));
+      expect(best['press'], closeTo(148.5, 0.01));
+      expect(best.containsKey('deadlift'), isFalse);
+    });
+
+    test('reps cap at 12 (max_e1rm_capped expression) and junk is skipped',
+        () {
+      final best = allTimeBestE1rms([
+        s('Barbell Deadlift', 300, 20), // capped: 300 * 1.4 = 420
+        s('Barbell Deadlift', 0, 5), // weight <= 0 skipped
+        s('Bicep Curl', 500, 1), // not a main lift
+      ]);
+      expect(best['deadlift'], closeTo(420, 0.01));
+      expect(best.length, 1);
     });
   });
 }

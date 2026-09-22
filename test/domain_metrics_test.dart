@@ -426,12 +426,23 @@ void main() {
           today: today,
         ),
       ) as MetricSeries;
-      // Weeks of Sep 14 + Sep 21 remain; the reference equals the
-      // value as of the `from` week (flat bw + carried lifts → same
-      // value throughout here).
-      expect(d.points, hasLength(2));
-      expect(d.points.first.day, DateTime(2026, 9, 14));
-      expect(d.goal, closeTo(d.points.first.value, 1e-9));
+      // The window keeps an 8-week lead-in before `from` (the walk-in
+      // baseline must be visible for the reference line to mean
+      // anything; a from-date in the current week would otherwise
+      // render a single dot). All fixture weeks fall inside the
+      // lead-in, so every week survives; the reference still anchors
+      // to the value AS OF the `from` week.
+      final fromWeeks =
+          d.points.where((p) => !p.day.isBefore(DateTime(2026, 9, 14)));
+      expect(fromWeeks, hasLength(2));
+      expect(
+        d.points
+            .every((p) => !p.day.isBefore(DateTime(2026, 9, 14 - 7 * 8))),
+        isTrue,
+      );
+      final refWeek =
+          d.points.lastWhere((p) => !p.day.isAfter(DateTime(2026, 9, 14)));
+      expect(d.goal, closeTo(refWeek.value, 1e-9));
     });
 
     test('wilks without weigh-ins degrades honestly', () {

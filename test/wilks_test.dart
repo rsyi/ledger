@@ -435,4 +435,77 @@ void main() {
       expect(current.carried, ['bench', 'deadlift']);
     });
   });
+
+  group('wilksPointsLb', () {
+    // Independently computed (python3, direct power form, 2026-09-22):
+    //   315 lb at 165 lb bw → 121.97756160079403
+    //   377 lb at 192 lb bw → 133.4584122788316
+    //   310 lb at 165 lb bw → 120.04140982935286
+    test('matches independently computed known values', () {
+      expect(wilksPointsLb(315, 165), closeTo(121.97756160079403, 1e-9));
+      expect(wilksPointsLb(377, 192), closeTo(133.4584122788316, 1e-9));
+      expect(wilksPointsLb(310, 165), closeTo(120.04140982935286, 1e-9));
+    });
+
+    test('agrees with the coefficient identity (lb → kg round trip)', () {
+      // 500 kg at 74 kg bw is the canonical score example; feed the
+      // same masses in lb and the points must match exactly.
+      expect(
+        wilksPointsLb(500 / kgPerLb, 74 / kgPerLb),
+        closeTo(429.97430360707364, 1e-9),
+      );
+    });
+
+    test('heavier bodyweight → fewer points for the same lift', () {
+      expect(wilksPointsLb(315, 192), lessThan(wilksPointsLb(315, 165)));
+    });
+  });
+
+  group('contemporaneousBodyweightLbs', () {
+    final weighIns = [
+      _bw('2024-12-03', 190),
+      _bw('2024-12-20', 194), // Dec '24 mean 192
+      _bw('2026-09-18', 164),
+      _bw('2026-09-21', 166), // Sep '26 mean 165
+    ];
+
+    test("uses the date's own calendar-month mean when present", () {
+      expect(
+        contemporaneousBodyweightLbs(weighIns, DateTime(2024, 12, 15)),
+        closeTo(192, 1e-9),
+      );
+      expect(
+        contemporaneousBodyweightLbs(weighIns, DateTime(2026, 9, 22)),
+        closeTo(165, 1e-9),
+      );
+    });
+
+    test('whole-month mean: weigh-ins later in the month still count', () {
+      // Same monthly-mean semantics as monthlyWilksSeries — Dec 1 sees
+      // the full December mean, not just weigh-ins up to Dec 1.
+      expect(
+        contemporaneousBodyweightLbs(weighIns, DateTime(2024, 12, 1)),
+        closeTo(192, 1e-9),
+      );
+    });
+
+    test('carries the nearest earlier month across a gap', () {
+      // Mar '25 has no weigh-ins; Dec '24 is the newest earlier month.
+      expect(
+        contemporaneousBodyweightLbs(weighIns, DateTime(2025, 3, 10)),
+        closeTo(192, 1e-9),
+      );
+    });
+
+    test('null before the first weigh-in month (never guesses)', () {
+      expect(
+        contemporaneousBodyweightLbs(weighIns, DateTime(2024, 6, 1)),
+        isNull,
+      );
+      expect(
+        contemporaneousBodyweightLbs(const [], DateTime(2026, 1, 1)),
+        isNull,
+      );
+    });
+  });
 }

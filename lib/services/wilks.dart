@@ -109,6 +109,42 @@ double wilks2020MaleCoeff(double bodyweightKg) {
   return 600 / (a + x * (b + x * (c + x * (d + x * (e + x * f)))));
 }
 
+/// Wilks points of ONE lift in lb at a bodyweight in lb:
+/// weight_kg × coeff(bw_kg). The home STRENGTH card's per-lift
+/// normalization (2026-09-22): a lift done at a heavier bodyweight is
+/// worth fewer points, which is what makes an old fat-bulk PR
+/// comparable to today's cut numbers.
+double wilksPointsLb(double weightLbs, double bodyweightLbs) =>
+    weightLbs * kgPerLb * wilks2020MaleCoeff(bodyweightLbs * kgPerLb);
+
+/// Contemporaneous bodyweight (lbs) AS OF [date] — the same monthly
+/// bodyweight machinery as [monthlyWilksSeries]: the mean of [date]'s
+/// calendar-month weigh-ins (the WHOLE month, even weigh-ins after
+/// [date] — a month is one bodyweight era here), else the nearest
+/// EARLIER month's mean carried forward across gaps. Null when no
+/// weigh-in exists in or before [date]'s month — never guesses.
+///
+/// This is what prices an all-time PR in Wilks points at the
+/// bodyweight it was actually lifted at (contemporaneous bw), not at
+/// today's.
+double? contemporaneousBodyweightLbs(
+  List<WeightRow> weighIns,
+  DateTime date,
+) {
+  final target = DateTime(date.year, date.month);
+  final sum = <DateTime, double>{};
+  final n = <DateTime, int>{};
+  for (final w in weighIns) {
+    final mo = DateTime(w.date.year, w.date.month);
+    if (mo.isAfter(target)) continue;
+    sum[mo] = (sum[mo] ?? 0) + w.weightLbs;
+    n[mo] = (n[mo] ?? 0) + 1;
+  }
+  if (sum.isEmpty) return null;
+  final best = sum.keys.reduce((a, b) => a.isAfter(b) ? a : b);
+  return sum[best]! / n[best]!;
+}
+
 /// One weekly Wilks point.
 class WilksWeek {
   /// The week's start day (ISO Monday by default; the configured

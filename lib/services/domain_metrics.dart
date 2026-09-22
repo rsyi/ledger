@@ -444,19 +444,13 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
           'no squat/bench/deadlift sets with reps ≤ 5 yet',
         );
       }
-      // `window_years:` (2026-09-22): clip the monthly trend to its
-      // trailing 12×n points (4 years → 48). Null → full history
-      // (2026-09-22 earlier that day: "wilks should be tracked for
-      // longer" — the window is user-tunable from dashboards.yaml, and
-      // the tooltip carries the year either way).
-      final wy = m.windowYears;
-      final cutoff = wy == null
-          ? null
-          : DateTime(inputs.today.year, inputs.today.month - (12 * wy - 1));
+      // `window_years:` no longer clips HERE (2026-09-22, range
+      // selectors): the series carries full computable history and
+      // MetricChart turns window_years into the DEFAULT range chip
+      // (4 → '4Y'), so "All" can genuinely widen past it. The chart
+      // clips client-side by date — same data, user-tunable window.
       final points = [
-        for (final mo in months)
-          if (cutoff == null || !mo.monthStart.isBefore(cutoff))
-            (day: mo.monthStart, value: mo.wilks),
+        for (final mo in months) (day: mo.monthStart, value: mo.wilks),
       ];
       // `from` anchors the dashed REFERENCE at the WEEKLY value as of
       // that date — the Wilks the cut was walked into with (327.5 on

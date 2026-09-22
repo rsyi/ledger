@@ -77,11 +77,11 @@ class MetricConfig {
   /// (back-compat: older configs simply get no floor line).
   final double? floorPct;
 
-  /// Trailing plot window in YEARS (yaml `window_years: 4`) — clips a
-  /// monthly series to its last `12 × n` points (wilks_series: 48
-  /// monthly points over 4 years). User-tunable from dashboards.yaml;
-  /// null / absent / non-positive → full history (the pre-2026-09-22
-  /// behavior).
+  /// Default plot window in YEARS (yaml `window_years: 4`) — since the
+  /// range selectors (2026-09-22) this seeds the chart's DEFAULT range
+  /// chip ('4Y') on a full-history monthly series instead of clipping
+  /// the computed data; the user can still widen to All. User-tunable
+  /// from dashboards.yaml; null / absent / non-positive → default All.
   final int? windowYears;
 
   const MetricConfig({

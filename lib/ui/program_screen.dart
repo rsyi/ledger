@@ -1053,6 +1053,7 @@ class _WilksCard extends StatelessWidget {
                 series: data,
                 today: today,
                 goalNote: config.goalNote,
+                windowYears: config.windowYears,
               ),
               _ => Text(
                 data is MetricUnavailable ? data.message : 'unavailable',

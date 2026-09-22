@@ -486,6 +486,7 @@ class _MetricBlock extends StatelessWidget {
             today: today,
             goalNote: config.goalNote,
             height: chartHeight,
+            windowYears: config.windowYears,
           ),
           MetricBars(bars: final bars, note: final note) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,

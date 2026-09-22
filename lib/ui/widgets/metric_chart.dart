@@ -10,18 +10,29 @@ import 'package:intl/intl.dart';
 
 import '../../services/domain_metrics.dart' show MetricSeries;
 import 'chart_bottom_axis.dart';
+import 'chart_range.dart';
 import 'pinned_tooltip_line_chart.dart';
 
 /// Compact series chart: raw points (faint), optional smoothed line
 /// (solid), optional flat goal line (dashed tertiary), optional
 /// acceptable-drop floor line (dotted error color — the "act if you
-/// sink under this" line, e.g. wilks_series' cut floor). Window = the
-/// trailing 84 days; widens to full history when the window holds
-/// fewer than two points (sparse series like caliper body-fat) or when
-/// the series asks for it ([MetricSeries.fullHistory] — monthly
-/// trends). Same fl_chart machinery as the Program screen's weight
-/// chart, shrunk to header size.
-class MetricChart extends StatelessWidget {
+/// sink under this" line, e.g. wilks_series' cut floor).
+///
+/// Windowing (2026-09-22): a compact range-chip row above the plot
+/// re-windows the SAME already-loaded series client-side (clip by
+/// date — no refetch). Daily series get `1M · 3M · 1Y · All` with a 3M
+/// default (≈ the old fixed 84-day window); full-history monthly
+/// series (wilks) get `3M · 6M · 1Y · <window_years>Y · All`,
+/// defaulting to the dashboards.yaml `window_years:` chip. Chips whose
+/// window would be empty or identical to All are hidden
+/// ([visibleRanges]); a hidden default widens to the next larger chip
+/// ([resolveRange] — the old "sparse series show full history"
+/// behavior). Goal/floor/band lines and the bottom-axis tick keeper
+/// re-span to the selected window; the pinned tooltip clears on range
+/// switch (the chart is re-keyed). The selection is per-chart
+/// IN-MEMORY state only — it survives Log/Trends toggles via the
+/// domain screen's IndexedStack and intentionally is not persisted.
+class MetricChart extends StatefulWidget {
   final MetricSeries series;
   final DateTime today;
   final String? goalNote;
@@ -31,13 +42,26 @@ class MetricChart extends StatelessWidget {
   /// the old squeezed-above-the-ledger layout never had.
   final double height;
 
+  /// dashboards.yaml `window_years:` for full-history series — seeds
+  /// the default range chip (4 → a selected '4Y'); null → All.
+  final int? windowYears;
+
   const MetricChart({
     super.key,
     required this.series,
     required this.today,
     this.goalNote,
     this.height = 130,
+    this.windowYears,
   });
+
+  @override
+  State<MetricChart> createState() => _MetricChartState();
+}
+
+class _MetricChartState extends State<MetricChart> {
+  /// User's chip choice; null until tapped → the per-series default.
+  ChartRange? _selected;
 
   static double _x(DateTime d) =>
       DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch / 86400000;
@@ -45,16 +69,25 @@ class MetricChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final series = widget.series;
+    final today = widget.today;
 
-    var windowStart = DateTime(today.year, today.month, today.day - 84);
-    var points = [
-      for (final p in series.points)
-        if (!p.day.isBefore(windowStart)) p,
-    ];
-    if (series.fullHistory || points.length < 2) {
-      points = series.points;
-      if (points.isNotEmpty) windowStart = points.first.day;
-    }
+    final ranges = series.fullHistory
+        ? monthlyChartRanges(widget.windowYears)
+        : dailyChartRanges;
+    final preferred = series.fullHistory
+        ? (widget.windowYears == null
+              ? ChartRange.all
+              : ChartRange.years(widget.windowYears!))
+        : ChartRange.m3;
+    final visible = visibleRanges(
+      points: series.points,
+      ranges: ranges,
+      today: today,
+    );
+    final range = resolveRange(visible, _selected ?? preferred);
+    final points = clipSeriesToRange(series.points, range, today);
+
     if (points.isEmpty) {
       return Text(
         '(no data in range)',
@@ -64,13 +97,18 @@ class MetricChart extends StatelessWidget {
         ),
       );
     }
+    // Fixed chips span their whole nominal window (a 3M chip is a
+    // 3-month axis even when the left weeks are empty); All hugs the
+    // data.
+    final windowStart = range.startFor(today) ?? points.first.day;
     final avg = [
       for (final p in series.avg)
         if (!p.day.isBefore(windowStart)) p,
     ];
 
-    final xMin = _x(windowStart);
+    var xMin = _x(windowStart);
     final xMax = _x(today);
+    if (xMax - xMin < 1) xMin = xMax - 1; // single-point-today guard
     final rawSpots = [for (final p in points) FlSpot(_x(p.day), p.value)];
     final avgSpots = [for (final p in avg) FlSpot(_x(p.day), p.value)];
     final goal = series.goal;
@@ -113,12 +151,24 @@ class MetricChart extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (visible.length > 1)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: ChartRangeSelector(
+              ranges: visible,
+              selected: range,
+              onChanged: (r) => setState(() => _selected = r),
+            ),
+          ),
         SizedBox(
-          height: height,
+          height: widget.height,
           // LayoutBuilder: the bottom-axis tick keeper needs the plot's
           // pixel width to estimate label overlap (chart_bottom_axis).
           child: LayoutBuilder(
             builder: (context, constraints) => PinnedTooltipLineChart(
+              // Re-key on range switch: the spot indices change under
+              // the pin, so the pinned tooltip clears with the window.
+              key: ValueKey(range),
               data: LineChartData(
                 minX: xMin,
                 maxX: xMax,
@@ -240,7 +290,7 @@ class MetricChart extends StatelessWidget {
             ),
           ),
         ),
-        if (goal != null || floor != null || hasBand || goalNote != null)
+        if (goal != null || floor != null || hasBand || widget.goalNote != null)
           Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text(
@@ -254,7 +304,7 @@ class MetricChart extends StatelessWidget {
                 if (hasBand)
                   'goal ${bandLow.round()}–${bandHigh.round()}'
                       '${series.unit == null ? '' : ' ${series.unit}'}',
-                ?goalNote,
+                ?widget.goalNote,
               ].join(' · '),
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,

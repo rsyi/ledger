@@ -474,9 +474,9 @@ void main() {
       expect(d.fullHistory, isTrue);
     });
 
-    test('wilks_series window_years clips the monthly trend to its '
-        'trailing 12×n points; null keeps full history', () {
-      // History back to Jul 2024 — 27 monthly points unclipped.
+    test('wilks_series carries FULL history regardless of window_years — '
+        'the chart applies window_years as its default range chip', () {
+      // History back to Jul 2024 — 27 monthly points.
       final rows2 = [
         row('Barbell Squat', 300, 1, '2024-07-06'),
         row('Flat Barbell Bench Press', 200, 3, '2024-07-08'),
@@ -498,18 +498,16 @@ void main() {
       final full = compute();
       expect(full.points.first.day, DateTime(2024, 7, 1));
       expect(full.points, hasLength(27)); // Jul 2024 .. Sep 2026
-      // window_years: 1 → the trailing 12 months (Oct 2025 .. Sep 2026).
-      final clipped = compute(windowYears: 1);
-      expect(clipped.points, hasLength(12));
-      expect(clipped.points.first.day, DateTime(2025, 10, 1));
-      expect(clipped.points.last.day, DateTime(2026, 9, 1));
-      // The clip is display-only: the retained points' values match.
+      // Since the range selectors (2026-09-22) window_years no longer
+      // clips the computed series — the chip layer clips client-side,
+      // so "All" can genuinely show everything.
+      final windowed = compute(windowYears: 1);
+      expect(windowed.points, hasLength(27));
+      expect(windowed.points.first.day, DateTime(2024, 7, 1));
       expect(
-        clipped.points.last.value,
+        windowed.points.last.value,
         closeTo(full.points.last.value, 1e-9),
       );
-      // A window wider than history behaves like full history.
-      expect(compute(windowYears: 4).points, hasLength(27));
     });
 
     test('wilks_series without from/floor_pct: no reference, no floor', () {

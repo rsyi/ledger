@@ -48,7 +48,11 @@ void main() {
 
     test('clips by date, start-inclusive', () {
       final clipped = clipSeriesToRange(series, ChartRange.m3, today);
-      expect(clipped, [p(2026, 7, 1, 21), p(2026, 8, 1, 22), p(2026, 9, 1, 23)]);
+      expect(clipped, [
+        p(2026, 7, 1, 21),
+        p(2026, 8, 1, 22),
+        p(2026, 9, 1, 23),
+      ]);
       // A point exactly on the window start is kept.
       final edge = clipSeriesToRange(
         [p(2026, 6, 22, 5), p(2026, 9, 1, 6)],
@@ -116,10 +120,7 @@ void main() {
 
   group('resolveRange', () {
     test('keeps the preferred range when visible', () {
-      expect(
-        resolveRange(dailyChartRanges, ChartRange.m3),
-        ChartRange.m3,
-      );
+      expect(resolveRange(dailyChartRanges, ChartRange.m3), ChartRange.m3);
     });
 
     test('widens to the next larger chip when preferred is hidden', () {
@@ -130,10 +131,7 @@ void main() {
     });
 
     test('falls back to All', () {
-      expect(
-        resolveRange([ChartRange.all], ChartRange.m3),
-        ChartRange.all,
-      );
+      expect(resolveRange([ChartRange.all], ChartRange.m3), ChartRange.all);
       expect(resolveRange(const [], ChartRange.m3), ChartRange.all);
       // Preferred All with only fixed chips visible → widest fixed chip.
       expect(

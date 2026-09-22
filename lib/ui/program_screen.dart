@@ -27,6 +27,7 @@ library;
 
 import 'package:fl_chart/fl_chart.dart';
 import 'widgets/chart_bottom_axis.dart';
+import 'widgets/chart_range.dart';
 import 'widgets/pinned_tooltip_line_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -781,11 +782,17 @@ class _Stat extends StatelessWidget {
 
 /// Weight chart: daily weigh-ins (faint dots), trailing 7-day average
 /// (solid line), and the current block's target line (dashed, from→to
-/// across the block's dates). X spans ~3 weeks before the block through
-/// the block's end so early-block views still show recent history.
-/// Static (no zoom) — this is an overview; the domain dashboards carry
-/// the richer charts.
-class _WeightChart extends StatelessWidget {
+/// across the block's dates).
+///
+/// Range chips `Block · 3M · 1Y · All` (2026-09-22) re-window the same
+/// loaded series client-side. Block — the default, and the chart's
+/// original fixed window — spans ~3 weeks before the block through the
+/// block's end so early-block views still show recent history; the
+/// trailing chips end at today instead. Chips that would be empty or
+/// identical to All hide; the pinned tooltip clears on range switch.
+/// The selection is in-memory widget state only (resets on screen
+/// re-entry; deliberately not persisted).
+class _WeightChart extends StatefulWidget {
   final List<WeightRow> daily;
   final DateTime today;
   final DateTime? blockStart;
@@ -802,21 +809,64 @@ class _WeightChart extends StatelessWidget {
     required this.targetTo,
   });
 
+  @override
+  State<_WeightChart> createState() => _WeightChartState();
+}
+
+class _WeightChartState extends State<_WeightChart> {
+  /// The block window — months=null like All, distinguished by label;
+  /// windowing special-cases it before the trailing-months helpers.
+  static const _blockRange = ChartRange('Block', null);
+
+  ChartRange? _selected;
+
   static double _x(DateTime d) =>
       DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch / 86400000;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final daily = widget.daily;
+    final today = widget.today;
+    final blockStart = widget.blockStart;
+    final blockEnd = widget.blockEnd;
+    final targetFrom = widget.targetFrom;
+    final targetTo = widget.targetTo;
 
-    // Window: 21 days before the block (or before today when no block)
-    // through the block end (or today).
-    final windowStart = (blockStart ?? today).subtract(
-      const Duration(days: 21),
-    );
-    final windowEnd = blockEnd ?? today;
-    final xMin = _x(windowStart);
+    final seriesPoints = [
+      for (final w in daily) (day: w.date, value: w.weightLbs),
+    ];
+    final hasBlock = blockStart != null && blockEnd != null;
+    final chips = [
+      if (hasBlock) _blockRange,
+      ...visibleRanges(
+        points: seriesPoints,
+        ranges: const [ChartRange.m3, ChartRange.y1, ChartRange.all],
+        today: today,
+      ),
+    ];
+    var range = _selected ?? (hasBlock ? _blockRange : ChartRange.m3);
+    if (!chips.contains(range)) {
+      range = resolveRange(chips, range == _blockRange ? ChartRange.m3 : range);
+    }
+
+    // Window: Block = 21 days before the block through the block end
+    // (the original fixed view); trailing chips end at today; All hugs
+    // the data.
+    final DateTime windowStart;
+    final DateTime windowEnd;
+    if (range == _blockRange) {
+      windowStart = blockStart!.subtract(const Duration(days: 21));
+      windowEnd = blockEnd!;
+    } else {
+      windowStart =
+          range.startFor(today) ??
+          (seriesPoints.isEmpty ? today : seriesPoints.first.day);
+      windowEnd = today;
+    }
+    var xMin = _x(windowStart);
     final xMax = _x(windowEnd);
+    if (xMax - xMin < 1) xMin = xMax - 1;
 
     final visibleDaily = [
       for (final w in daily)
@@ -838,16 +888,32 @@ class _WeightChart extends StatelessWidget {
             blockEnd != null &&
             targetFrom != null &&
             targetTo != null
-        ? [
-            FlSpot(_x(blockStart!), targetFrom!),
-            FlSpot(_x(blockEnd!), targetTo!),
-          ]
+        ? [FlSpot(_x(blockStart), targetFrom), FlSpot(_x(blockEnd), targetTo)]
         : const <FlSpot>[];
 
+    // Selector rendered even over an empty window so a data gap can
+    // always be escaped by switching range.
+    final selector = chips.length > 1
+        ? Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: ChartRangeSelector(
+              ranges: chips,
+              selected: range,
+              onChanged: (r) => setState(() => _selected = r),
+            ),
+          )
+        : null;
+
     if (dailySpots.isEmpty && targetSpots.isEmpty) {
-      return const SizedBox(
-        height: 100,
-        child: Center(child: Text('(no weigh-ins in this window)')),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ?selector,
+          const SizedBox(
+            height: 100,
+            child: Center(child: Text('(no weigh-ins in this window)')),
+          ),
+        ],
       );
     }
 
@@ -860,106 +926,120 @@ class _WeightChart extends StatelessWidget {
     final yMax = ys.reduce((a, b) => a > b ? a : b);
     final yPad = ((yMax - yMin).abs() * 0.1).clamp(0.5, 5.0);
 
-    return SizedBox(
-      height: 240,
-      // LayoutBuilder: the bottom-axis tick keeper needs the plot's
-      // pixel width to estimate label overlap (chart_bottom_axis).
-      child: LayoutBuilder(
-        builder: (context, constraints) => PinnedTooltipLineChart(
-          data: LineChartData(
-            minX: xMin,
-            maxX: xMax,
-            minY: yMin - yPad,
-            maxY: yMax + yPad,
-            clipData: const FlClipData.all(),
-            gridData: const FlGridData(show: true, drawVerticalLine: false),
-            borderData: FlBorderData(show: false),
-            titlesData: FlTitlesData(
-              rightTitles: const AxisTitles(),
-              topTitles: const AxisTitles(),
-              leftTitles: AxisTitles(
-                sideTitles: SideTitles(
-                  showTitles: true,
-                  reservedSize: 40,
-                  getTitlesWidget: (value, meta) => Text(
-                    value.toStringAsFixed(0),
-                    style: const TextStyle(fontSize: 10),
-                  ),
-                ),
-              ),
-              // Explicit non-overlapping date ticks (endpoints + month
-              // starts) — see chart_bottom_axis.dart.
-              bottomTitles: AxisTitles(
-                sideTitles: dateBottomTitles(
-                  minX: xMin,
-                  maxX: xMax,
-                  plotWidth: (constraints.maxWidth - 40).clamp(1, 10000),
-                  style: const TextStyle(fontSize: 9),
-                  reservedSize: 28,
-                ),
-              ),
-            ),
-            lineBarsData: [
-              // Daily weigh-ins: faint dots, hairline connection.
-              if (dailySpots.isNotEmpty)
-                LineChartBarData(
-                  spots: dailySpots,
-                  isCurved: false,
-                  barWidth: 1,
-                  color: scheme.primary.withValues(alpha: 0.25),
-                  dotData: FlDotData(
-                    show: true,
-                    getDotPainter: (spot, pct, bar, i) => FlDotCirclePainter(
-                      radius: 2,
-                      color: scheme.primary.withValues(alpha: 0.35),
-                      strokeWidth: 0,
-                    ),
-                  ),
-                ),
-              // 7-day average: the real signal.
-              if (avgSpots.isNotEmpty)
-                LineChartBarData(
-                  spots: avgSpots,
-                  isCurved: false,
-                  barWidth: 2.5,
-                  color: scheme.primary,
-                  dotData: const FlDotData(show: false),
-                ),
-              // Block target line: dashed from→to across the block dates.
-              if (targetSpots.isNotEmpty)
-                LineChartBarData(
-                  spots: targetSpots,
-                  isCurved: false,
-                  barWidth: 1.5,
-                  color: scheme.tertiary,
-                  dashArray: [6, 4],
-                  dotData: const FlDotData(show: false),
-                ),
-            ],
-            lineTouchData: LineTouchData(
-              enabled: true,
-              touchTooltipData: LineTouchTooltipData(
-                getTooltipColor: (_) => Colors.black.withValues(alpha: 0.55),
-                fitInsideHorizontally: true,
-                fitInsideVertically: true,
-                getTooltipItems: (spots) => [
-                  for (final s in spots)
-                    LineTooltipItem(
-                      '${DateFormat('MMM d').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
-                      '${s.y.toStringAsFixed(1)}',
-                      const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        height: 1.3,
-                        fontFeatures: [FontFeature.tabularFigures()],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ?selector,
+        SizedBox(
+          height: 240,
+          // LayoutBuilder: the bottom-axis tick keeper needs the plot's
+          // pixel width to estimate label overlap (chart_bottom_axis).
+          child: LayoutBuilder(
+            builder: (context, constraints) => PinnedTooltipLineChart(
+              // Re-key on range switch so the pinned tooltip clears
+              // with the window (spot indices shift under the pin).
+              key: ValueKey(range),
+              data: LineChartData(
+                minX: xMin,
+                maxX: xMax,
+                minY: yMin - yPad,
+                maxY: yMax + yPad,
+                clipData: const FlClipData.all(),
+                gridData: const FlGridData(show: true, drawVerticalLine: false),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  rightTitles: const AxisTitles(),
+                  topTitles: const AxisTitles(),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 40,
+                      getTitlesWidget: (value, meta) => Text(
+                        value.toStringAsFixed(0),
+                        style: const TextStyle(fontSize: 10),
                       ),
                     ),
+                  ),
+                  // Explicit non-overlapping date ticks (endpoints + month
+                  // starts) — see chart_bottom_axis.dart.
+                  bottomTitles: AxisTitles(
+                    sideTitles: dateBottomTitles(
+                      minX: xMin,
+                      maxX: xMax,
+                      plotWidth: (constraints.maxWidth - 40).clamp(1, 10000),
+                      style: const TextStyle(fontSize: 9),
+                      reservedSize: 28,
+                    ),
+                  ),
+                ),
+                lineBarsData: [
+                  // Daily weigh-ins: faint dots, hairline connection.
+                  if (dailySpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: dailySpots,
+                      isCurved: false,
+                      barWidth: 1,
+                      color: scheme.primary.withValues(alpha: 0.25),
+                      dotData: FlDotData(
+                        show: true,
+                        getDotPainter: (spot, pct, bar, i) =>
+                            FlDotCirclePainter(
+                              radius: 2,
+                              color: scheme.primary.withValues(alpha: 0.35),
+                              strokeWidth: 0,
+                            ),
+                      ),
+                    ),
+                  // 7-day average: the real signal.
+                  if (avgSpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: avgSpots,
+                      isCurved: false,
+                      barWidth: 2.5,
+                      color: scheme.primary,
+                      dotData: const FlDotData(show: false),
+                    ),
+                  // Block target line: dashed from→to across the block dates.
+                  if (targetSpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: targetSpots,
+                      isCurved: false,
+                      barWidth: 1.5,
+                      color: scheme.tertiary,
+                      dashArray: [6, 4],
+                      dotData: const FlDotData(show: false),
+                    ),
                 ],
+                lineTouchData: LineTouchData(
+                  enabled: true,
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) =>
+                        Colors.black.withValues(alpha: 0.55),
+                    fitInsideHorizontally: true,
+                    fitInsideVertically: true,
+                    getTooltipItems: (spots) => [
+                      for (final s in spots)
+                        LineTooltipItem(
+                          // Multi-year windows (1Y spanning a New Year /
+                          // All) carry the year so old points can't read
+                          // as recent.
+                          '${DateFormat(windowStart.year != windowEnd.year ? "MMM d ''yy" : 'MMM d').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
+                          '${s.y.toStringAsFixed(1)}',
+                          const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            height: 1.3,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
         ),
-      ),
+      ],
     );
   }
 }

@@ -47,8 +47,7 @@ class ChartRange {
   static const all = ChartRange('All', null);
 
   /// An n-year chip ('4Y'), for dashboards.yaml `window_years:`.
-  static ChartRange years(int n) =>
-      n == 1 ? y1 : ChartRange('${n}Y', n * 12);
+  static ChartRange years(int n) => n == 1 ? y1 : ChartRange('${n}Y', n * 12);
 
   /// Window start for [today]; null = unbounded (All).
   DateTime? startFor(DateTime today) => months == null
@@ -76,14 +75,13 @@ const dailyChartRanges = [
 ];
 
 /// Chip set for monthly-cadence full-history series (wilks_series):
-/// 3M · 6M · 1Y · <window_years>Y · All. The window_years chip (when
+/// 3M · 6M · 1Y · `<window_years>Y` · All. The window_years chip (when
 /// declared and not already in the set) is the chart's default — the
 /// same trailing window computeMetric used to hard-clip to before the
 /// selector existed.
 List<ChartRange> monthlyChartRanges(int? windowYears) {
   final ranges = [ChartRange.m3, ChartRange.m6, ChartRange.y1];
-  if (windowYears != null &&
-      !ranges.any((r) => r.months == windowYears * 12)) {
+  if (windowYears != null && !ranges.any((r) => r.months == windowYears * 12)) {
     ranges.add(ChartRange.years(windowYears));
   }
   ranges.sort((a, b) => a.months!.compareTo(b.months!));
@@ -174,17 +172,14 @@ class ChartRangeSelector extends StatelessWidget {
       alignment: Alignment.centerRight,
       child: SegmentedButton<ChartRange>(
         segments: [
-          for (final r in ranges)
-            ButtonSegment(value: r, label: Text(r.label)),
+          for (final r in ranges) ButtonSegment(value: r, label: Text(r.label)),
         ],
         selected: {selected},
         onSelectionChanged: (s) => onChanged(s.first),
         showSelectedIcon: false,
         style: const ButtonStyle(
           visualDensity: VisualDensity(horizontal: -4, vertical: -4),
-          padding: WidgetStatePropertyAll(
-            EdgeInsets.symmetric(horizontal: 7),
-          ),
+          padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 7)),
           textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 10)),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),

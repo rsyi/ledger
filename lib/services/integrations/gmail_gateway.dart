@@ -206,8 +206,15 @@ class GoogleSignInGmailGateway implements GmailGateway {
     if (email == null || _account == null) {
       throw StateError('Not connected to Google — tap Connect first');
     }
-    final headers = await _account!.authorizationClient
+    var headers = await _account!.authorizationClient
         .authorizationHeaders(const [kGmailReadonlyScope]);
+    // A lapsed cached authorization returns null; re-prompt before
+    // giving up. Every pull trigger is foreground (app-start, resume,
+    // local write, manual), so the one-tap sheet is acceptable here.
+    headers ??= await _account!.authorizationClient.authorizationHeaders(
+      const [kGmailReadonlyScope],
+      promptIfNecessary: true,
+    );
     if (headers == null) {
       throw StateError(
           'Gmail authorization expired — disconnect and reconnect');

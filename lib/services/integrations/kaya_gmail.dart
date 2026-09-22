@@ -482,9 +482,14 @@ class KayaGmailIntegration implements GuidedSyncIntegration {
       package: kKayaPackage,
       flags: [Flag.FLAG_ACTIVITY_NEW_TASK],
     );
-    if (await intent.canResolveActivity() != true) {
+    // Don't pre-check canResolveActivity: on Android 11+ it returns
+    // false for explicit-package MAIN/LAUNCHER intents even when the
+    // <queries> declaration is present and launch() succeeds. Attempt
+    // the launch and let the real failure speak.
+    try {
+      await intent.launch();
+    } catch (_) {
       throw StateError('Kaya app ($kKayaPackage) is not installed');
     }
-    await intent.launch();
   }
 }

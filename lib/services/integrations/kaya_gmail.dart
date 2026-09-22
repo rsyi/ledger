@@ -476,10 +476,16 @@ class KayaGmailIntegration implements GuidedSyncIntegration {
   /// Opens Kaya's launcher activity. Requires the manifest `<queries>`
   /// entry for [kKayaPackage] (Android 11+ package visibility).
   static Future<void> _defaultLaunchKaya() async {
+    // Component-explicit: package-only MAIN/LAUNCHER intents surface an
+    // app chooser on some Android versions instead of launching Kaya
+    // directly. Kaya's launcher activity has been .MainActivity since
+    // at least 2026; if a Kaya update ever renames it, the catch below
+    // reports not-installed and we revisit.
     const intent = AndroidIntent(
       action: 'android.intent.action.MAIN',
       category: 'android.intent.category.LAUNCHER',
       package: kKayaPackage,
+      componentName: 'com.project9a.redpoint.MainActivity',
       flags: [Flag.FLAG_ACTIVITY_NEW_TASK],
     );
     // Don't pre-check canResolveActivity: on Android 11+ it returns

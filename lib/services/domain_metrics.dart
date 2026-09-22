@@ -25,7 +25,7 @@ library;
 
 import 'domain_config.dart';
 import 'home_synthesis.dart'
-    show allTimeBestE1rms, fmtLb, synthesisLifts;
+    show allTimeBestE1rms, fmtLb, fmtMonthTag, synthesisLifts;
 import 'program_metrics.dart'
     show StrengthRow, WeightRow, liftReferencesAsOf, mainLiftByExercise,
         weekStartOf;
@@ -165,6 +165,29 @@ Map<String, ({double value, DateTime date})> allTimeBestWeights(
     }
   }
   return out;
+}
+
+/// The heaviest weight ACTUALLY lifted per main lift INSIDE a date
+/// window (inclusive on both ends) — [allTimeBestWeights]' conventions
+/// (any reps ≥ 1, ties keep the newer date, non-main exercises
+/// dropped) bounded to `[start, end]`. Feeds the home STRENGTH card's
+/// "last bulk" column (2026-09-22, user: "show my numbers from my last
+/// bulk"); the window itself comes from dashboards.yaml `last_bulk`
+/// (domain_config parseLastBulkWindow).
+Map<String, ({double value, DateTime date})> bestWeightsInWindow(
+  List<StrengthRow> rows, {
+  required DateTime start,
+  required DateTime end,
+}) {
+  final startDay = DateTime(start.year, start.month, start.day);
+  return allTimeBestWeights(
+    [
+      for (final r in rows)
+        if (!DateTime(r.date.year, r.date.month, r.date.day).isBefore(startDay))
+          r,
+    ],
+    end,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -526,8 +549,7 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
         benchmarkNote: bench == null
             ? null
             : 'best ever ${bench.wilks.toStringAsFixed(1)} · '
-                '${_monthAbbr[bench.monthStart.month - 1]} '
-                "'${(bench.monthStart.year % 100).toString().padLeft(2, '0')}",
+                '${fmtMonthTag(bench.monthStart)}',
         unit: m.unit,
         fullHistory: true,
       );
@@ -613,11 +635,6 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       return MetricUnavailable('unknown metric "${m.id}"');
   }
 }
-
-const _monthAbbr = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-];
 
 // ---------------------------------------------------------------------------
 // Headline strip

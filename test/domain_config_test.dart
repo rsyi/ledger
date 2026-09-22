@@ -239,6 +239,55 @@ domains:
     });
   });
 
+  group('parseLastBulkWindow', () {
+    test('parses the explicit window (start derived from the weigh-in '
+        'trough, user-editable)', () {
+      final w = parseLastBulkWindow('''
+domains:
+  - name: strength
+    views: [strength]
+last_bulk:
+  start: "2025-02-05"
+  end: "2025-10-06"
+  label: "2025 bulk"
+''');
+      expect(w, isNotNull);
+      expect(w!.start, DateTime(2025, 2, 5));
+      expect(w.end, DateTime(2025, 10, 6));
+      expect(w.label, '2025 bulk');
+    });
+
+    test('label defaults to "last bulk" when absent', () {
+      final w = parseLastBulkWindow(
+        'last_bulk: { start: "2025-02-05", end: "2025-10-06" }\n',
+      );
+      expect(w!.label, 'last bulk');
+    });
+
+    test('absent section / malformed dates / inverted window → null '
+        '(the card omits the column, never breaks)', () {
+      expect(parseLastBulkWindow(null), isNull);
+      expect(parseLastBulkWindow('domains: []\n'), isNull);
+      expect(parseLastBulkWindow('last_bulk: nonsense\n'), isNull);
+      expect(
+        parseLastBulkWindow('last_bulk: { start: "soon", end: "2025-10-06" }'),
+        isNull,
+      );
+      expect(
+        parseLastBulkWindow('last_bulk: { start: "2025-02-05" }'),
+        isNull,
+      );
+      expect(
+        // start after end is no window at all
+        parseLastBulkWindow(
+          'last_bulk: { start: "2025-10-06", end: "2025-02-05" }',
+        ),
+        isNull,
+      );
+      expect(parseLastBulkWindow('not: [valid yaml'), isNull);
+    });
+  });
+
   group('DomainConfigProvider', () {
     setUp(DocCache.clear);
     tearDown(DocCache.clear);

@@ -24,33 +24,38 @@
 ///   BODY      bw 7-day avg + weekly rate vs the declared target + the
 ///             Program screen's declared-vs-observed verdict, condensed
 ///             to a chip.
-///   STRENGTH  per lift, TWO columns (rebuild 2026-09-22 — user: "only
-///             show recent e1rm strength against my all-time tops, and
-///             also show the wilks calculations for each"): recent
+///   STRENGTH  per lift, TWO columns (rebuild 2026-09-22, twice —
+///             user: "just show my numbers from my last bulk here"
+///             and "relegate all-time to the click-in view"): recent
 ///             e1RM (best capped e1RM in the last 14 days of real work
 ///             — light weeks + sub-0.75-effort sets excluded, window
 ///             widens until it finds something and the age tag tells
 ///             the story; DISPLAY-ONLY — the §2.5 42-day reference is
-///             unchanged internally) vs the all-time top — the
-///             heaviest weight ACTUALLY lifted over full strength
-///             history (any reps ≥ 1, a 405×2 counts as 405; user
-///             2026-09-22: "the all-time top should be based on my
-///             actual 1RM not my e1RM" — domain_metrics
-///             allTimeBestWeights, cached per session; same convention
-///             as the Wilks chart benchmark). Each value carries its
+///             unchanged internally) vs the LAST-BULK top — the
+///             heaviest weight ACTUALLY lifted inside dashboards.yaml
+///             `last_bulk` (any reps ≥ 1, a 405×2 counts as 405 —
+///             domain_metrics bestWeightsInWindow; window start
+///             derived from the weigh-in trough, services/
+///             bulk_window.dart, but explicit + user-editable in the
+///             config; NO window → the column is omitted). The
+///             ALL-TIME top (allTimeBestWeights, session-cached, same
+///             actual convention) moved to the DETAIL SHEET — per-lift
+///             lines above the explainer copy. Each value carries its
 ///             per-lift Wilks points (wilksPointsLb): recent priced at
-///             CURRENT bodyweight (7-day avg), the all-time top at the
-///             CONTEMPORANEOUS bodyweight — the monthly mean as of the
-///             PR's month — which is what makes an old fat-bulk PR
-///             comparable. Every number carries a "3d"/"2w"/"5mo" age
-///             tag. The WORKING MAX column moved OFF this card (it
-///             lives on the Program tab's Configuration card; the
-///             detail sheet says so). The card is tagged "top: actual"
-///             (the recent column header already says e1RM; the
-///             sheet's basis entry spells out "recent: e1RM · top:
-///             actual") — two bases on one card, and only the top
-///             shares the Wilks trend chart's actual-max basis. Pain
-///             caps show as a labeled chip.
+///             CURRENT bodyweight (7-day avg), the historical tops at
+///             the CONTEMPORANEOUS bodyweight — the monthly mean as of
+///             the PR's month — which is what makes an old fat-bulk PR
+///             comparable. When-tags: recent wears an age ("3d"/"2w"),
+///             the bulk/all-time tops wear their PR MONTH ("Jun '25" —
+///             clearer for year-old data; the Wilks benchmark's
+///             vocabulary). The WORKING MAX column moved OFF this card
+///             (it lives on the Program tab's Configuration card; the
+///             detail sheet says so). The card is tagged "bulk:
+///             actual" (the recent column header already says e1RM;
+///             the sheet's basis entry spells out "recent: e1RM ·
+///             bulk & top: actual") — two bases on one card, and only
+///             the actual tops share the Wilks trend chart's
+///             actual-max basis. Pain caps show as a labeled chip.
 ///   EXECUTION this week's working / near-max / bench counts vs the
 ///             program targets, + fired-flag count. Data: the current
 ///             program_status row (read-only sheet path).
@@ -78,8 +83,10 @@ import 'package:intl/intl.dart';
 
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
-import '../services/domain_config.dart' show DomainConfigProvider;
-import '../services/domain_metrics.dart' show allTimeBestWeights;
+import '../services/domain_config.dart'
+    show DomainConfigProvider, parseLastBulkWindow;
+import '../services/domain_metrics.dart'
+    show allTimeBestWeights, bestWeightsInWindow;
 import '../services/home_synthesis.dart';
 import '../services/phase_eigenvectors.dart';
 import '../services/program_current.dart';
@@ -213,10 +220,11 @@ class _EngineData {
 /// its per-lift Wilks points (null when no bodyweight covers the date).
 typedef _LiftValue = ({double value, DateTime date, double? wilks});
 
-/// STRENGTH card data (rebuild 2026-09-22): recent e1RM vs all-time
-/// top per lift, each with an age tag and Wilks points. [trends] stays
-/// only for pain caps — the working-max COLUMN moved to the Program
-/// tab's Configuration card.
+/// STRENGTH card data (rebuild 2026-09-22, twice): recent e1RM vs
+/// LAST-BULK top per lift on the card (user: "just show my numbers
+/// from my last bulk here"), the all-time top relegated to the detail
+/// sheet. [trends] stays only for pain caps — the working-max COLUMN
+/// moved to the Program tab's Configuration card.
 class _StrengthData {
   /// WM snapshot per lift — the card reads ONLY painCap from it now.
   final List<LiftTrend> trends;
@@ -229,8 +237,20 @@ class _StrengthData {
   /// All-time top per lift: the heaviest weight ACTUALLY lifted (any
   /// reps ≥ 1 — a 405×2 counts as 405; NOT an e1RM) over full history,
   /// session-cached. Wilks priced at the CONTEMPORANEOUS bodyweight —
-  /// the monthly mean as of the month the PR was set.
+  /// the monthly mean as of the month the PR was set. DETAIL-SHEET
+  /// ONLY since the last-bulk column took its card slot.
   final Map<String, _LiftValue> best;
+
+  /// Last-bulk top per lift: the heaviest weight ACTUALLY lifted
+  /// inside [bulkWindow] — same conventions and contemporaneous-bw
+  /// Wilks pricing as [best], different window. Empty when
+  /// [bulkWindow] is null.
+  final Map<String, _LiftValue> lastBulk;
+
+  /// dashboards.yaml `last_bulk:` window (start derived from the
+  /// weigh-in trough, user-editable). Null → the card omits the
+  /// last-bulk column and shows only recent e1RM.
+  final ({DateTime start, DateTime end, String label})? bulkWindow;
 
   /// The bodyweight (lb) the recent column's Wilks is priced at:
   /// 7-day average, falling back to the current month's mean. Null →
@@ -241,10 +261,12 @@ class _StrengthData {
     required this.trends,
     required this.recent,
     required this.best,
+    required this.lastBulk,
+    required this.bulkWindow,
     required this.currentBwLbs,
   });
 
-  bool get isEmpty => recent.isEmpty && best.isEmpty;
+  bool get isEmpty => recent.isEmpty && best.isEmpty && lastBulk.isEmpty;
 }
 
 class HomeDashboardState extends State<HomeDashboard> {
@@ -522,15 +544,12 @@ class HomeDashboardState extends State<HomeDashboard> {
         );
       }
     }
-    // All-time top = heaviest weight ACTUALLY lifted (2026-09-22 —
-    // user: "the all-time top should be based on my actual 1RM not my
-    // e1RM"): domain_metrics allTimeBestWeights, any reps ≥ 1, same
-    // convention as the Wilks chart benchmark (405×2 → 405).
-    final bestRaw = rows.isEmpty
-        ? const <String, ({double value, DateTime date})>{}
-        : (_bestWeightCache ??= allTimeBestWeights(rows, _today));
-    final best = <String, _LiftValue>{
-      for (final e in bestRaw.entries)
+    // Actual-weight tops (any reps ≥ 1, 405×2 → 405 — the Wilks chart
+    // benchmark's convention), each priced at CONTEMPORANEOUS bw.
+    Map<String, _LiftValue> priced(
+      Map<String, ({double value, DateTime date})> raw,
+    ) => {
+      for (final e in raw.entries)
         e.key: (
           value: e.value.value,
           date: e.value.date,
@@ -540,10 +559,33 @@ class HomeDashboardState extends State<HomeDashboard> {
           },
         ),
     };
+    // All-time top = heaviest weight ACTUALLY lifted (2026-09-22 —
+    // user: "the all-time top should be based on my actual 1RM not my
+    // e1RM") — detail-sheet only since the last-bulk column took its
+    // card slot (same day: "relegate all-time to the click-in view").
+    final best = priced(
+      rows.isEmpty
+          ? const {}
+          : (_bestWeightCache ??= allTimeBestWeights(rows, _today)),
+    );
+    // Last-bulk top: same actual-weight convention bounded to the
+    // dashboards.yaml `last_bulk` window (start derived from the
+    // weigh-in trough — services/bulk_window.dart — but explicit and
+    // user-editable in the config). No window → no column, gracefully.
+    final window = parseLastBulkWindow(
+      await _guard(() async => widget.dashboards?.loadRaw()),
+    );
+    final lastBulk = window == null || rows.isEmpty
+        ? const <String, _LiftValue>{}
+        : priced(
+            bestWeightsInWindow(rows, start: window.start, end: window.end),
+          );
     return _StrengthData(
       trends: liftTrends(snap, _today),
       recent: recent,
       best: best,
+      lastBulk: lastBulk,
+      bulkWindow: window,
       currentBwLbs: currentBw,
     );
   }
@@ -769,8 +811,13 @@ class HomeDashboardState extends State<HomeDashboard> {
   Future<void> _openStrengthSheet() async {
     final d = await _strength;
     // One line per lift so the wilks tag stays attached to its number:
-    // "squat 315 · 121.4w (2d)".
-    String liftLines(Map<String, _LiftValue> m) => m.isEmpty
+    // "squat 315 · 121.4w (2d)" / "(Jun '25)" — age tags for the
+    // recent column, PR-month tags for the historical tops (the card
+    // columns' own when-vocabulary).
+    String liftLines(
+      Map<String, _LiftValue> m,
+      String Function(DateTime) when,
+    ) => m.isEmpty
         ? '—'
         : synthesisLifts
               .where(m.containsKey)
@@ -778,20 +825,22 @@ class HomeDashboardState extends State<HomeDashboard> {
                 (l) =>
                     '$l ${fmtLb(m[l]!.value.roundToDouble())}'
                     '${m[l]!.wilks == null ? '' : ' · ${m[l]!.wilks!.toStringAsFixed(1)}w'}'
-                    ' (${fmtAge(m[l]!.date, _today)})',
+                    ' (${when(m[l]!.date)})',
               )
               .join('\n');
+    String age(DateTime dt) => fmtAge(dt, _today);
     final capped = [
       for (final t in d?.trends ?? const <LiftTrend>[])
         if (t.painCap) t.lift,
     ];
     final bw = d?.currentBwLbs;
+    final window = d?.bulkWindow;
     await _showDetailSheet(
       title: 'Strength',
       entries: [
         _DetailEntry(
           label: 'recent e1RM',
-          value: liftLines(d?.recent ?? const {}),
+          value: liftLines(d?.recent ?? const {}, age),
           explain:
               'What you\'ve actually shown recently: the best '
               'estimated 1RM over the last 14 days of real work — '
@@ -802,31 +851,50 @@ class HomeDashboardState extends State<HomeDashboard> {
               'is the lift\'s Wilks points at your current bodyweight'
               '${bw == null ? '' : ' (${bw.toStringAsFixed(1)} lb)'}.',
         ),
+        if (window != null)
+          _DetailEntry(
+            label: 'last bulk',
+            value: liftLines(d?.lastBulk ?? const {}, fmtMonthTag),
+            explain:
+                'The heaviest weight you ACTUALLY lifted per lift '
+                'during the ${window.label} '
+                '(${DateFormat('MMM d yyyy').format(window.start)} – '
+                '${DateFormat('MMM d yyyy').format(window.end)}) — the '
+                'high-water mark the cut is defending. The window '
+                'comes from dashboards.yaml `last_bulk`: the end is '
+                'the declared cut, the start was derived from the '
+                'bodyweight trough before the bulk\'s run-up (edit the '
+                'dates there if it looks off). Wilks points use the '
+                'bodyweight you carried the month each top was set.',
+          ),
         _DetailEntry(
           label: 'all-time top',
-          value: liftLines(d?.best ?? const {}),
+          value: liftLines(d?.best ?? const {}, fmtMonthTag),
           explain:
               'The heaviest weight you\'ve ACTUALLY lifted (any reps '
               '≥ 1 — a 405×2 counts as 405; no Epley, no estimates) '
               'over the full strength history — your actual 1RM '
               'ceiling, on the same actual-max convention as the '
-              'Wilks trend chart\'s benchmark. Its Wilks points use '
-              'the bodyweight you carried THE MONTH the top was set '
-              '(contemporaneous, from the monthly weigh-in means) — '
-              'that\'s what makes an old bulk-weight top comparable '
-              'to today\'s cut numbers. No weigh-in history covering '
-              'that month → the wilks tag is omitted.',
+              'Wilks trend chart\'s benchmark. Lives here rather than '
+              'on the card since the last-bulk column took its slot '
+              '(2026-09-22). Its Wilks points use the bodyweight you '
+              'carried THE MONTH the top was set (contemporaneous, '
+              'from the monthly weigh-in means) — that\'s what makes '
+              'an old bulk-weight top comparable to today\'s cut '
+              'numbers. No weigh-in history covering that month → the '
+              'wilks tag is omitted.',
         ),
         _DetailEntry(
           label: 'basis',
-          value: 'recent: e1RM · top: actual',
+          value: 'recent: e1RM · bulk & top: actual',
           explain:
-              'Two bases on one card: the recent column is an '
-              'ESTIMATED 1RM (Epley, reps capped at 12) — what you\'ve '
-              'shown lately; the all-time top is ACTUAL weight lifted '
-              '— the same actual-max basis as the Wilks trend chart '
-              'and its best-ever benchmark. A recent e1RM can sit '
-              'above an actual top without you ever having lifted it.',
+              'Two bases here: the recent column is an ESTIMATED 1RM '
+              '(Epley, reps capped at 12) — what you\'ve shown lately; '
+              'the last-bulk and all-time tops are ACTUAL weight '
+              'lifted — the same actual-max basis as the Wilks trend '
+              'chart and its best-ever benchmark. A recent e1RM can '
+              'sit above an actual top without you ever having lifted '
+              'it.',
         ),
         _DetailEntry(
           label: 'working max',
@@ -997,18 +1065,24 @@ class HomeDashboardState extends State<HomeDashboard> {
     return _SynthCard(
       label: 'Strength',
       onTap: _openStrengthSheet,
-      // Subtle basis tag (2026-09-22: two bases since the all-time
-      // column moved to actual weight): the "recent e1RM" column
-      // header already names its basis, so the tag carries the other
-      // half — the top is the heaviest weight ACTUALLY lifted, the
-      // Wilks trend chart's actual-max basis. Kept short: the full
-      // 'recent: e1RM · top: actual' overflows the half-width card
-      // (the sheet's basis entry spells it out).
-      trailingBuilder: (context) => Text(
-        'top: actual',
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
+      // Subtle basis tag (2026-09-22: two bases on one card): the
+      // "recent e1RM" column header already names its basis, so the
+      // tag carries the other half — the last-bulk top is the
+      // heaviest weight ACTUALLY lifted in the window, the Wilks
+      // trend chart's actual-max basis. Kept short: anything longer
+      // overflows the half-width card (the sheet's basis entry spells
+      // it out). No bulk column configured → no tag to carry.
+      trailingBuilder: (context) => FutureBuilder<_StrengthData?>(
+        future: _strength,
+        builder: (context, snap) {
+          if (snap.data?.bulkWindow == null) return const SizedBox.shrink();
+          return Text(
+            'bulk: actual',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          );
+        },
       ),
       child: FutureBuilder<_StrengthData?>(
         future: _strength,
@@ -1024,15 +1098,20 @@ class HomeDashboardState extends State<HomeDashboard> {
             for (final t in d.trends)
               if (t.painCap) t.lift,
           ];
+          // Second column only when dashboards.yaml declares the
+          // last-bulk window (absent → single recent column; the
+          // all-time top lives in the detail sheet either way).
+          final hasBulk = d.bulkWindow != null;
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _LiftHeaderRow(),
+              _LiftHeaderRow(second: hasBulk ? 'last bulk' : null),
               for (final lift in synthesisLifts)
                 _LiftNumbersRow(
                   lift: lift,
                   recent: d.recent[lift],
-                  best: d.best[lift],
+                  bulk: hasBulk ? d.lastBulk[lift] : null,
+                  showBulk: hasBulk,
                   today: _today,
                 ),
               if (capped.isNotEmpty) ...[
@@ -1513,7 +1592,10 @@ class _VerdictChip extends StatelessWidget {
 /// pass 2026-09-22: labelSmall (11sp) in onSurfaceVariant — the old
 /// 9sp outline-colored tags were illegible on the dark theme.
 class _LiftHeaderRow extends StatelessWidget {
-  const _LiftHeaderRow();
+  /// Second column label ('last bulk') — null renders the single
+  /// recent-e1RM column (no `last_bulk:` window configured).
+  final String? second;
+  const _LiftHeaderRow({this.second});
 
   @override
   Widget build(BuildContext context) {
@@ -1533,36 +1615,43 @@ class _LiftHeaderRow extends StatelessWidget {
               style: style,
             ),
           ),
-          Expanded(
-            child: Text(
-              'all-time top',
-              textAlign: TextAlign.right,
-              style: style,
+          if (second != null)
+            Expanded(
+              child: Text(second!, textAlign: TextAlign.right, style: style),
             ),
-          ),
         ],
       ),
     );
   }
 }
 
-/// One lift's two columns, aligned under the header: recent e1RM
-/// (14-day best of real work) vs all-time top, each rendered as
-/// `315 · 121.4w · 2d` — pounds, per-lift Wilks points (current bw
-/// for recent, contemporaneous bw for the all-time top), and an age
-/// tag saying when it was set (a stale value can never masquerade as
-/// current). Readability pass 2026-09-22: numbers at bodySmall (12sp),
-/// Wilks + age tags at labelSmall (11sp) onSurfaceVariant — nothing
-/// below Material's 11sp legibility floor, no outline-on-dark text.
+/// One lift's columns, aligned under the header: recent e1RM (14-day
+/// best of real work) vs the LAST-BULK top (2026-09-22 — the all-time
+/// top moved to the detail sheet), each `315 · 121.4w · <when>` —
+/// pounds, per-lift Wilks points (current bw for recent,
+/// contemporaneous bw for the bulk top), and a WHEN tag: age ("2d")
+/// for the recent number, the PR month ("Jun '25") for the bulk top —
+/// a year-old date reads better as a month than as "15mo", and it
+/// matches the Wilks benchmark's "best ever … · May '24" vocabulary
+/// (the sheet's all-time lines use the same month tags). Readability
+/// pass 2026-09-22: numbers at bodySmall (12sp), Wilks + when tags at
+/// labelSmall (11sp) onSurfaceVariant — nothing below Material's 11sp
+/// legibility floor, no outline-on-dark text.
 class _LiftNumbersRow extends StatelessWidget {
   final String lift;
   final _LiftValue? recent;
-  final _LiftValue? best;
+  final _LiftValue? bulk;
+
+  /// Whether the bulk column exists at all — a lift with no bulk-window
+  /// history still needs its '—' placeholder to keep the grid aligned,
+  /// but an unconfigured window renders no second column anywhere.
+  final bool showBulk;
   final DateTime today;
   const _LiftNumbersRow({
     required this.lift,
     required this.recent,
-    required this.best,
+    required this.bulk,
+    required this.showBulk,
     required this.today,
   });
 
@@ -1577,7 +1666,7 @@ class _LiftNumbersRow extends StatelessWidget {
       color: scheme.onSurfaceVariant,
       fontFeatures: const [FontFeature.tabularFigures()],
     );
-    Widget cell(_LiftValue? v) => Expanded(
+    Widget cell(_LiftValue? v, String Function(DateTime) when) => Expanded(
       child: v == null
           ? Text('—', textAlign: TextAlign.right, style: tagStyle)
           : Text.rich(
@@ -1590,10 +1679,7 @@ class _LiftNumbersRow extends StatelessWidget {
                       text: ' · ${v.wilks!.toStringAsFixed(1)}w',
                       style: tagStyle,
                     ),
-                  TextSpan(
-                    text: ' · ${fmtAge(v.date, today)}',
-                    style: tagStyle,
-                  ),
+                  TextSpan(text: ' · ${when(v.date)}', style: tagStyle),
                 ],
               ),
               textAlign: TextAlign.right,
@@ -1614,8 +1700,8 @@ class _LiftNumbersRow extends StatelessWidget {
               ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
-          cell(recent),
-          cell(best),
+          cell(recent, (d) => fmtAge(d, today)),
+          if (showBulk) cell(bulk, fmtMonthTag),
         ],
       ),
     );

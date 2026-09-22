@@ -74,6 +74,50 @@ void main() {
     });
   });
 
+  group('bestWeightsInWindow', () {
+    test('heaviest actual weight per lift INSIDE the window; outside '
+        'rows (both sides) excluded; inclusive bounds', () {
+      final best = bestWeightsInWindow(
+        [
+          row('Barbell Squat', 355, 1, '2025-01-20'), // before start
+          row('Barbell Squat', 335, 1, '2025-02-05'), // on start — counts
+          row('Barbell Squat', 345, 2, '2025-06-01'),
+          row('Barbell Squat', 350, 1, '2025-10-06'), // on end — counts
+          row('Barbell Squat', 365, 1, '2025-11-01'), // after end
+          row('Flat Barbell Bench Press', 250, 1, '2025-12-01'), // after
+        ],
+        start: DateTime(2025, 2, 5),
+        end: DateTime(2025, 10, 6),
+      );
+      expect(best, {'squat': (value: 350.0, date: DateTime(2025, 10, 6))});
+    });
+
+    test('same conventions as allTimeBestWeights: any reps ≥ 1, ties '
+        'keep the newer date, non-mains dropped', () {
+      final best = bestWeightsInWindow(
+        [
+          row('Barbell Squat', 345, 5, '2025-03-01'), // 345×5 counts as 345
+          row('Barbell Squat', 345, 1, '2025-07-01'), // tie, newer — wins
+          row('Lat Pulldown', 999, 1, '2025-05-01'),
+        ],
+        start: DateTime(2025, 2, 5),
+        end: DateTime(2025, 10, 6),
+      );
+      expect(best, {'squat': (value: 345.0, date: DateTime(2025, 7, 1))});
+    });
+
+    test('nothing in the window → empty map', () {
+      expect(
+        bestWeightsInWindow(
+          [row('Barbell Squat', 315, 1, '2026-01-01')],
+          start: DateTime(2025, 2, 5),
+          end: DateTime(2025, 10, 6),
+        ),
+        isEmpty,
+      );
+    });
+  });
+
   group('bodyFatSeriesFromRecords', () {
     test('coalesces caliper > omron > withings, averages per day', () {
       final series = bodyFatSeriesFromRecords([

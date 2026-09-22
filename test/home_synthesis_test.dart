@@ -380,6 +380,16 @@ void main() {
     });
   });
 
+  group('fmtMonthTag', () {
+    test("PR-month tag — the wilks chart benchmark's vocabulary", () {
+      expect(fmtMonthTag(DateTime(2025, 4, 12)), "Apr '25");
+      expect(fmtMonthTag(DateTime(2024, 12, 31)), "Dec '24");
+    });
+    test('single-digit years zero-pad', () {
+      expect(fmtMonthTag(DateTime(2107, 1, 1)), "Jan '07");
+    });
+  });
+
   group('recentBestE1rm', () {
     // gradeSets needs history: seed a reference, then recent work.
     List<StrengthRow> rows() => [

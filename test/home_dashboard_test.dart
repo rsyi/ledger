@@ -94,9 +94,25 @@ void main() {
     expect(find.text('no status data'), findsNWidgets(2));
   });
 
-  testWidgets('STRENGTH renders recent-e1RM vs all-time-top columns with '
-      'wilks points and age tags; working max is gone', (tester) async {
+  // dashboards.yaml with the explicit last-bulk window (start derived
+  // from the weigh-in trough; no `phases:` → the legacy grid renders).
+  Future<String?> lastBulkFetcher(String path) async =>
+      path == 'app/dashboards.yaml'
+          ? '''
+domains:
+  - name: strength
+    views: [strength]
+last_bulk:
+  start: "2025-02-05"
+  end: "2025-10-06"
+  label: "2025 bulk"
+'''
+          : null;
+
+  testWidgets('STRENGTH renders recent-e1RM vs last-bulk columns with '
+      'wilks points; all-time is off the card', (tester) async {
     HomeDashboardState.clearBestWeightCache();
+    DomainConfigProvider.clearCache();
     final strengthRepo = _FakeStatusRepo([
       {
         'date': DateTime(2026, 9, 21),
@@ -105,17 +121,26 @@ void main() {
         'reps': 1, // e1rm 310 — recent (2d old at `today`)
       },
       {
+        'date': DateTime(2025, 6, 10),
+        'exercise': 'Barbell Squat',
+        'weight': 315,
+        'reps': 2, // actual 315 — the last-bulk top (inside the window)
+      },
+      {
         'date': DateTime(2025, 1, 6),
         'exercise': 'Barbell Squat',
         'weight': 320,
-        'reps': 1, // actual 320 — the all-time top, long outside the window
+        'reps': 1, // actual 320 — all-time top, BEFORE the bulk window
       },
     ]);
     // Current bw: 7-day mean 165 (Sep 17–23). Contemporaneous bw for
-    // the Jan '25 PR: that month's mean, (174+176)/2 = 175.
+    // the Jun '25 bulk top: (184+186)/2 = 185; for the Jan '25
+    // all-time top: (174+176)/2 = 175.
     final weightRepo = _FakeStatusRepo([
       for (var i = 17; i <= 23; i++)
         {'date': DateTime(2026, 9, i), 'weight_lbs': 165.0},
+      {'date': DateTime(2025, 6, 5), 'weight_lbs': 184.0},
+      {'date': DateTime(2025, 6, 20), 'weight_lbs': 186.0},
       {'date': DateTime(2025, 1, 2), 'weight_lbs': 174.0},
       {'date': DateTime(2025, 1, 28), 'weight_lbs': 176.0},
     ]);
@@ -124,30 +149,63 @@ void main() {
       strengthRepo: strengthRepo,
       weightView: _weightView,
       weightRepo: weightRepo,
+      dashboards: DomainConfigProvider(lastBulkFetcher),
       today: DateTime(2026, 9, 23),
     )));
     await tester.pumpAndSettle();
-    // Two columns only (2026-09-22 rebuild) + the basis tag; the
-    // working-max column moved to Program › Configuration.
+    // Two columns (2026-09-22, second rebuild): recent e1RM + the
+    // last-bulk top; the all-time top moved to the detail sheet and
+    // the working-max column to Program › Configuration.
     expect(find.text('recent e1RM'), findsOneWidget);
-    expect(find.text('all-time top'), findsOneWidget);
+    expect(find.text('last bulk'), findsOneWidget);
+    expect(find.text('all-time top'), findsNothing);
     expect(find.text('working max'), findsNothing);
     // Basis tag: compact on the card (the recent header already says
     // e1RM); the sheet's basis entry carries the full two-basis note.
-    expect(find.text('top: actual'), findsOneWidget);
-    // Cells: lb · wilks (current bw 165 / contemporaneous bw 175) · age.
-    // Recent = e1RM (310 = 300×(1+1/30)); the all-time top = ACTUAL
-    // weight lifted (320, NOT its ~330.7 e1RM — 2026-09-22, "the
-    // all-time top should be based on my actual 1RM not my e1RM").
-    // wilksPointsLb(310, 165) = 120.04…; wilksPointsLb(320, 175) =
-    // 119.45… (both independently computed in wilks_test.dart).
+    expect(find.text('bulk: actual'), findsOneWidget);
+    // Cells: lb · wilks · when. Recent = e1RM (310 = 300×(1+1/30)) at
+    // current bw 165 with an AGE tag; last bulk = ACTUAL top inside
+    // the window (315 — the 315×2 counts as 315; NOT the 320 all-time,
+    // which predates the window) at its contemporaneous Jun-'25 bw 185
+    // with a PR-MONTH tag. wilksPointsLb(310, 165) = 120.04…;
+    // wilksPointsLb(315, 185) = 113.82… (both independently computed
+    // in wilks_test.dart).
     expect(
       find.textContaining('310 · 120.0w · 2d', findRichText: true),
       findsOneWidget,
     );
     expect(
-      find.textContaining('320 · 119.5w · 21mo', findRichText: true),
+      find.textContaining("315 · 113.8w · Jun '25", findRichText: true),
       findsOneWidget,
+    );
+    // The all-time 320 renders nowhere on the card.
+    expect(find.textContaining('320', findRichText: true), findsNothing);
+  });
+
+  testWidgets('no last_bulk config → the card renders the single recent '
+      'column, no bulk header, no basis tag', (tester) async {
+    HomeDashboardState.clearBestWeightCache();
+    DomainConfigProvider.clearCache();
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      strengthView: _strengthView,
+      strengthRepo: _FakeStatusRepo([
+        {
+          'date': DateTime(2026, 9, 21),
+          'exercise': 'Barbell Squat',
+          'weight': 300,
+          'reps': 1,
+        },
+      ]),
+      // No dashboards provider at all — the pre-last_bulk world.
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+    expect(find.text('recent e1RM'), findsOneWidget);
+    expect(find.text('last bulk'), findsNothing);
+    expect(find.text('bulk: actual'), findsNothing);
+    expect(
+      find.textContaining('310 · 2d', findRichText: true),
+      findsOneWidget, // no weigh-ins served → no wilks tag either
     );
   });
 
@@ -187,9 +245,11 @@ void main() {
     expect(openedStatus, isTrue);
   });
 
-  testWidgets('STRENGTH detail sheet explains the two columns, both wilks '
-      'bases, and where the working max went', (tester) async {
+  testWidgets('STRENGTH detail sheet: last-bulk window explained, the '
+      'all-time top now lives HERE (per-lift line above its explainer), '
+      'both wilks bases, and where the working max went', (tester) async {
     HomeDashboardState.clearBestWeightCache();
+    DomainConfigProvider.clearCache();
     await tester.pumpWidget(_wrap(HomeDashboard(
       strengthView: _strengthView,
       strengthRepo: _FakeStatusRepo([
@@ -199,15 +259,35 @@ void main() {
           'weight': 300,
           'reps': 1,
         },
+        {
+          'date': DateTime(2025, 6, 10),
+          'exercise': 'Barbell Squat',
+          'weight': 315,
+          'reps': 2,
+        },
+        {
+          'date': DateTime(2025, 1, 6),
+          'exercise': 'Barbell Squat',
+          'weight': 320,
+          'reps': 1,
+        },
       ]),
+      dashboards: DomainConfigProvider(lastBulkFetcher),
       today: DateTime(2026, 9, 23),
     )));
     await tester.pumpAndSettle();
     await tester.tap(find.text('STRENGTH'));
     await tester.pumpAndSettle();
-    // Column labels appear in the card header AND the sheet.
+    // Card columns appear in the header AND the sheet; the all-time
+    // top is sheet-only (relegated 2026-09-22 — "relegate all-time to
+    // the click-in view").
     expect(find.text('recent e1RM'), findsNWidgets(2));
-    expect(find.text('all-time top'), findsNWidgets(2));
+    expect(find.text('last bulk'), findsNWidgets(2));
+    expect(find.text('all-time top'), findsOneWidget);
+    // The all-time VALUE line sits in the sheet (no weigh-ins served →
+    // no wilks tag), month-tagged like the card's bulk column.
+    expect(find.textContaining("squat 320 (Jan '25)"), findsOneWidget);
+    expect(find.textContaining("squat 315 (Jun '25)"), findsOneWidget);
     // The copy explains each number's semantics + the wilks pricing.
     expect(
       find.textContaining('last 14 days of real work'),
@@ -218,17 +298,25 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('contemporaneous'), findsOneWidget);
-    // The all-time top is ACTUAL weight (405×2 → 405 convention); the
-    // basis entry names both bases — recent e1RM = Epley estimate, top
-    // = actual, sharing the Wilks trend chart's actual-max basis.
-    expect(find.textContaining('ACTUALLY lifted'), findsOneWidget);
+    // The last-bulk entry names its window + provenance (derived
+    // start, user-editable in dashboards.yaml).
+    expect(
+      find.textContaining('2025 bulk (Feb 5 2025 – Oct 6 2025)'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('derived from the bodyweight trough'),
+        findsOneWidget);
+    // Actual-weight conventions (405×2 → 405); the basis entry names
+    // both bases — recent e1RM = Epley estimate, bulk & all-time =
+    // actual, sharing the Wilks trend chart's actual-max basis.
+    expect(find.textContaining('ACTUALLY lifted'), findsNWidgets(2));
     expect(find.textContaining('405×2 counts as 405'), findsOneWidget);
     expect(find.textContaining('reps capped at'), findsOneWidget);
     expect(find.textContaining('actual-max basis'), findsOneWidget);
     // The compact tag stays on the card; the sheet's basis entry
     // carries the full two-basis note.
-    expect(find.text('top: actual'), findsOneWidget);
-    expect(find.text('recent: e1RM · top: actual'), findsOneWidget);
+    expect(find.text('bulk: actual'), findsOneWidget);
+    expect(find.text('recent: e1RM · bulk & top: actual'), findsOneWidget);
     // Working max: no column, just the pointer to its new home.
     expect(find.text('working max'), findsOneWidget); // sheet entry only
     expect(find.text('Program › Configuration'), findsOneWidget);

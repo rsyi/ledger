@@ -154,6 +154,19 @@ String fmtAge(DateTime date, DateTime today) {
   return '${(d / 365.25).round()}y';
 }
 
+const _monthAbbr = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', //
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/// "Apr '25" — the month a PR was set, for values old enough that an
+/// age delta ("17mo") stops meaning anything. Same vocabulary as the
+/// Wilks trend chart's benchmark caption ("best ever 364.7 · May '24");
+/// the STRENGTH card's last-bulk column and the detail sheet's all-time
+/// lines use it (2026-09-22).
+String fmtMonthTag(DateTime d) =>
+    "${_monthAbbr[d.month - 1]} '${(d.year % 100).toString().padLeft(2, '0')}";
+
 /// Recent e1RM — the STRENGTH card's display metric (2026-09-22): the
 /// lift's best capped e1RM over the trailing [windowDays] (14) days of
 /// REAL work. Excluded from "real work", per the documented rule:

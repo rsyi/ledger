@@ -257,6 +257,43 @@ List<String> _parseHeadline(Object? raw) {
   return lo <= hi ? (low: lo, high: hi) : (low: hi, high: lo);
 }
 
+/// The home STRENGTH card's "last bulk" window — dashboards.yaml's
+/// top-level `last_bulk:` section (2026-09-22, user: "show my numbers
+/// from my last bulk"):
+///
+/// ```yaml
+/// last_bulk:
+///   start: "2025-02-05"   # derived from the weigh-in trough
+///   end: "2025-10-06"     # the declared cut (phase.yaml v1)
+///   label: "2025 bulk"
+/// ```
+///
+/// The card shows the heaviest weight ACTUALLY lifted per lift inside
+/// [start, end]. `start` is derived (services/bulk_window.dart — the
+/// 7-day-avg weigh-in trough before the run-up) but lives here
+/// EXPLICITLY so the user can edit it. Back-compat by construction:
+/// absent section, unparseable dates, or start ≥ end → null, and the
+/// card simply omits the column.
+({DateTime start, DateTime end, String label})? parseLastBulkWindow(
+  String? raw,
+) {
+  if (raw == null || raw.trim().isEmpty) return null;
+  Object? doc;
+  try {
+    doc = loadYaml(raw);
+  } catch (_) {
+    return null;
+  }
+  if (doc is! Map) return null;
+  final section = doc['last_bulk'];
+  if (section is! Map) return null;
+  final start = DateTime.tryParse(section['start']?.toString() ?? '');
+  final end = DateTime.tryParse(section['end']?.toString() ?? '');
+  if (start == null || end == null || !start.isBefore(end)) return null;
+  final label = section['label']?.toString().trim() ?? '';
+  return (start: start, end: end, label: label.isEmpty ? 'last bulk' : label);
+}
+
 /// `list_fields:` entries — bare string, or map with `field` (+ `unit`).
 /// Blank / field-less entries are skipped.
 List<DomainListField> _parseListFields(Object? raw) {

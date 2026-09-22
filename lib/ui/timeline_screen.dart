@@ -682,7 +682,24 @@ class _TimelineScreenState extends State<TimelineScreen> {
                   }
                   final items = snap.data ?? [];
                   if (items.isEmpty) {
-                    return const Center(child: Text('No entries.'));
+                    // Say what to do next — read-only surfaces can only
+                    // browse dates, writable ones can add.
+                    final dated = widget.view.dateField != null;
+                    return Center(
+                      child: Text(
+                        _readOnly
+                            ? (dated
+                                  ? 'Nothing logged on this day.\n'
+                                        'Browse other dates with the bar above.'
+                                  : 'Nothing here yet.')
+                            : 'Nothing logged ${dated ? 'on this day ' : ''}yet.'
+                                  '\nTap + to add an entry.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    );
                   }
                   // Split into logged vs planned. Logged go in a compact,
                   // collapsible "completed" section at the top so the user
@@ -827,11 +844,15 @@ class _TimelineScreenState extends State<TimelineScreen> {
             },
             tooltip: 'Chat about this view',
           ),
-        IconButton(
-          icon: const Icon(Icons.list_alt),
-          onPressed: _openTemplates,
-          tooltip: 'Templates',
-        ),
+        // Templates exist to STAGE entries — meaningless on a read-only
+        // surface (kaya_ascents, integration-domain date browsing), so
+        // the icon hides there instead of opening a dead end.
+        if (!_readOnly)
+          IconButton(
+            icon: const Icon(Icons.list_alt),
+            onPressed: _openTemplates,
+            tooltip: 'Templates',
+          ),
         // "Update": push not-yet-pushed transactions to QuickBooks as
         // inventory changes. Only shown when this view is QBO-mapped.
         if (_qboEnabled)

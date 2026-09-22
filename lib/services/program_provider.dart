@@ -9,6 +9,7 @@ library;
 import 'package:yaml/yaml.dart';
 
 import 'coach_brain.dart' show CoachDocFetcher;
+import 'doc_cache.dart';
 
 /// Parsed trio of intent YAML files. All three fields are nullable: the
 /// caller should handle missing/malformed docs gracefully.
@@ -31,15 +32,12 @@ class ProgramProvider {
   final DateTime Function() now;
 
   /// TTL shared with CoachBrain so both components agree on freshness.
-  static const cacheTtl = Duration(hours: 1);
+  static const cacheTtl = DocCache.ttl;
 
-  /// Same static cache as [CoachBrain._docCache] — the two share a single
-  /// process-wide map because it's keyed by path, avoiding double fetches
-  /// when the coach brain and the week plan screen both warm up together.
-  static final Map<String, ({DateTime at, String content})> _cache = {};
-
-  /// Test hook — clears the provider's private cache entries.
-  static void clearCache() => _cache.clear();
+  /// Test hook + pull-to-refresh bust — clears the shared [DocCache]
+  /// (which also busts the domain-dashboard config; the two refresh
+  /// together by design).
+  static void clearCache() => DocCache.clear();
 
   ProgramProvider(this.fetchDoc, {this.now = DateTime.now});
 
@@ -54,19 +52,7 @@ class ProgramProvider {
     ];
     final parsed = <String, Map<Object?, Object?>?>{};
     for (final path in paths) {
-      final at = now();
-      final cached = _cache[path];
-      String? raw;
-      if (cached != null && at.difference(cached.at) < cacheTtl) {
-        raw = cached.content;
-      } else {
-        try {
-          raw = await fetchDoc(path);
-        } catch (_) {
-          raw = null;
-        }
-        if (raw != null) _cache[path] = (at: at, content: raw);
-      }
+      final raw = await DocCache.fetch(path, fetchDoc, now: now);
       if (raw == null) {
         parsed[path] = null;
       } else {

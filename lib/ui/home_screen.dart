@@ -27,6 +27,7 @@ import '../services/integrations/registry.dart';
 import '../services/integrations/whoop.dart';
 import '../services/integrations/withings.dart';
 import '../services/coach_brain.dart';
+import '../services/domain_config.dart';
 import '../services/github_client.dart';
 import '../services/icon_resolver.dart';
 import '../services/llm_client.dart';
@@ -62,7 +63,11 @@ const kCoachChatViewName = 'coach_chat';
 ///      This superseded the old per-view "today counts" strip
 ///      (today_dashboard.dart, removed 2026-09-21).
 ///   2. The pinned Coach row + Week plan / Program tiles
-///   3. The tracker list, collapsed into a "Ledgers" section
+///   3. The tracker list, grouped by `app/dashboards.yaml` into a LOG
+///      section (entry domains) and a CONNECTED section (integration
+///      domains — read-only, read-friendly). Views the config doesn't
+///      claim still list under LOG so nothing becomes unreachable;
+///      missing/bad config falls back to the flat "Ledgers" section.
 ///   4. "Apps" + "Integrations" entries at the bottom
 ///
 /// Database + schemas are baked into the APK at build time (via
@@ -97,6 +102,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Handle on the progress dashboard so pull-to-refresh can bust its
   /// caches (wm_store / program docs / weight mirror / best-e1RM).
   final _dashboardKey = GlobalKey<HomeDashboardState>();
+
+  /// Handle on the LOG/CONNECTED sections so pull-to-refresh re-pulls
+  /// app/dashboards.yaml (1 h cache otherwise).
+  final _domainsKey = GlobalKey<_DomainSectionsState>();
 
   @override
   void initState() {
@@ -532,6 +541,38 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }
 
+              // Shared timeline opener for tracker rows. Read-only views
+              // ride the direct-sheet repo with no post-log hooks; entry
+              // views get the full plumbing (LLM, QBO when mapped).
+              void openView(ViewSchema view) {
+                final readOnly = view.readOnly;
+                final repo = readOnly
+                    ? data.readOnlyRepo
+                    : data.registry.forView(view);
+                if (repo == null) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => TimelineScreen(
+                      view: view,
+                      repository: repo,
+                      llm: readOnly ? null : data.llm,
+                      llmCache: readOnly ? null : data.llmCache,
+                      chatModel: chatModel,
+                      github: github == null ? null : GithubClient(github),
+                      analytics: data.analytics,
+                      qboSpec: readOnly
+                          ? null
+                          : data.quickbooks?.specFor(view.name),
+                      qboService:
+                          readOnly ||
+                              data.quickbooks?.specFor(view.name) == null
+                          ? null
+                          : data.qboService,
+                    ),
+                  ),
+                );
+              }
+
               void openWeekPlan() {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -629,8 +670,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     // (wm_store snapshot, program docs, weight mirror,
                     // best-e1RM) and refires its card futures.
                     child: RefreshIndicator(
-                      onRefresh: () async =>
-                          _dashboardKey.currentState?.reload(),
+                      onRefresh: () async => Future.wait([
+                        ?_dashboardKey.currentState?.reload(),
+                        ?_domainsKey.currentState?.reload(),
+                      ]),
                       child: ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
                         children: [
@@ -661,141 +704,22 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                             const Divider(height: 1),
                           ],
-                          // Trackers, collapsed into a compact "Ledgers"
-                          // section — the synthesis cards above are the
-                          // primary surface; the raw trackers stay one tap
-                          // away. Read-only views (direct sheet read, no
-                          // ledger writes) nest at the bottom of the same
-                          // section.
-                          ExpansionTile(
-                            leading: Icon(
-                              Icons.view_list_outlined,
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onSurfaceVariant,
-                            ),
-                            title: const Text('Ledgers'),
-                            subtitle: Text(
-                              '${entryViews.length} trackers'
-                              '${readOnlyViews.isNotEmpty ? ' · ${readOnlyViews.length} read-only' : ''}',
-                            ),
-                            shape: const Border(),
-                            collapsedShape: const Border(),
-                            children: [
-                              for (final view in entryViews)
-                                ListTile(
-                                  dense: true,
-                                  visualDensity: VisualDensity.compact,
-                                  contentPadding: const EdgeInsets.only(
-                                    left: 28,
-                                    right: 16,
+                          // Trackers, grouped into LOG (entry domains)
+                          // and CONNECTED (integration domains) per
+                          // app/dashboards.yaml. Unclaimed views still
+                          // list under LOG; missing/bad config falls
+                          // back to the flat "Ledgers" expandable.
+                          _DomainSections(
+                            key: _domainsKey,
+                            provider: github == null
+                                ? null
+                                : DomainConfigProvider(
+                                    CoachBrain.githubFetcher(github),
                                   ),
-                                  leading: IconResolver.resolve(
-                                    view.icon,
-                                    size: 20,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.onSurfaceVariant,
-                                  ),
-                                  title: Text(view.name),
-                                  subtitle: view.description == null
-                                      ? null
-                                      : Text(
-                                          view.description!,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                  trailing: const Icon(Icons.chevron_right),
-                                  onTap: () => Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => TimelineScreen(
-                                        view: view,
-                                        repository: data.registry.forView(view),
-                                        llm: data.llm,
-                                        llmCache: data.llmCache,
-                                        chatModel: chatModel,
-                                        github: github == null
-                                            ? null
-                                            : GithubClient(github),
-                                        analytics: data.analytics,
-                                        qboSpec: data.quickbooks?.specFor(
-                                          view.name,
-                                        ),
-                                        qboService:
-                                            data.quickbooks?.specFor(
-                                                  view.name,
-                                                ) ==
-                                                null
-                                            ? null
-                                            : data.qboService,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              if (readOnlyViews.isNotEmpty) ...[
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    28,
-                                    8,
-                                    16,
-                                    2,
-                                  ),
-                                  child: Text(
-                                    'Read-only',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelSmall
-                                        ?.copyWith(
-                                          color: Theme.of(
-                                            context,
-                                          ).colorScheme.onSurfaceVariant,
-                                        ),
-                                  ),
-                                ),
-                                for (final view in readOnlyViews)
-                                  ListTile(
-                                    dense: true,
-                                    visualDensity: VisualDensity.compact,
-                                    contentPadding: const EdgeInsets.only(
-                                      left: 28,
-                                      right: 16,
-                                    ),
-                                    leading: IconResolver.resolve(
-                                      view.icon,
-                                      size: 20,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.onSurfaceVariant,
-                                    ),
-                                    title: Text(view.name),
-                                    subtitle: view.description == null
-                                        ? null
-                                        : Text(
-                                            view.description!,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                    trailing: const Icon(Icons.chevron_right),
-                                    onTap: () => Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => TimelineScreen(
-                                          view: view,
-                                          repository: data.readOnlyRepo!,
-                                          // No post-log hooks on
-                                          // read-only views.
-                                          llm: null,
-                                          llmCache: null,
-                                          chatModel: chatModel,
-                                          github: github == null
-                                              ? null
-                                              : GithubClient(github),
-                                          analytics: data.analytics,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ],
+                            entryViews: entryViews,
+                            readOnlyViews: readOnlyViews,
+                            onOpenDomain: (domain, view) => openView(view),
+                            onOpenView: openView,
                           ),
                           const Divider(height: 1),
                           // Apps tile.
@@ -1098,6 +1022,216 @@ class _CoachRowState extends State<_CoachRow> {
         ),
         onTap: _open,
       ),
+    );
+  }
+}
+
+/// Tracker rows grouped by `app/dashboards.yaml` (see
+/// services/domain_config.dart):
+///
+///   LOG        entry-paradigm domains (tap → domain screen with the
+///              full timeline affordances), followed by any loaded view
+///              the config doesn't claim — nothing becomes unreachable.
+///   CONNECTED  integration-paradigm domains (read-only, read-friendly).
+///
+/// The config is fetched from GitHub with the shared 1 h cache;
+/// [reload] (pull-to-refresh) busts it. While loading, and whenever the
+/// config is missing/malformed, the widget renders the pre-redesign
+/// "Ledgers" ExpansionTile fallback so a bad push can never hide the
+/// trackers.
+class _DomainSections extends StatefulWidget {
+  /// Null when the build has no `github:` config — fallback only.
+  final DomainConfigProvider? provider;
+
+  /// Writable trackers (input overlay, not read-only, not coach_chat).
+  final List<ViewSchema> entryViews;
+
+  /// Read-only trackers (rendered only when readOnlyRepo exists).
+  final List<ViewSchema> readOnlyViews;
+
+  /// Tap on a domain row — [view] is the domain's primary view.
+  final void Function(DomainConfig domain, ViewSchema view) onOpenDomain;
+
+  /// Tap on an unclaimed view row (and every fallback row).
+  final void Function(ViewSchema view) onOpenView;
+
+  const _DomainSections({
+    super.key,
+    required this.provider,
+    required this.entryViews,
+    required this.readOnlyViews,
+    required this.onOpenDomain,
+    required this.onOpenView,
+  });
+
+  @override
+  State<_DomainSections> createState() => _DomainSectionsState();
+}
+
+class _DomainSectionsState extends State<_DomainSections> {
+  Future<List<DomainConfig>?>? _load;
+
+  @override
+  void initState() {
+    super.initState();
+    _load = widget.provider?.load();
+  }
+
+  /// Pull-to-refresh: bust the shared doc cache and refetch. (The home
+  /// dashboard's reload busts the same cache — double-clearing is
+  /// harmless.)
+  Future<void> reload() async {
+    final provider = widget.provider;
+    if (provider == null) return;
+    DomainConfigProvider.clearCache();
+    final next = provider.load();
+    setState(() => _load = next);
+    await next;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final load = _load;
+    if (load == null) return _fallback(context);
+    return FutureBuilder<List<DomainConfig>?>(
+      future: load,
+      builder: (context, snap) {
+        final domains = snap.data;
+        // Loading OR missing/bad config → the flat Ledgers section.
+        if (snap.connectionState != ConnectionState.done ||
+            domains == null ||
+            domains.isEmpty) {
+          return _fallback(context);
+        }
+        return _sections(context, domains);
+      },
+    );
+  }
+
+  Widget _sections(BuildContext context, List<DomainConfig> domains) {
+    final byName = {
+      for (final v in widget.entryViews) v.name: v,
+      for (final v in widget.readOnlyViews) v.name: v,
+    };
+    // Every view any domain mentions counts as claimed even when the
+    // domain's primary view is missing on this build — a half-loaded
+    // domain shouldn't duplicate rows.
+    final claimed = <String>{
+      for (final d in domains) ...d.views.where(byName.containsKey),
+    };
+    final log = <Widget>[];
+    final connected = <Widget>[];
+    for (final d in domains) {
+      final view = byName[d.primaryView];
+      if (view == null) continue; // view absent on this build
+      final tile = _domainTile(context, d, view);
+      (d.paradigm == DomainParadigm.integration ? connected : log).add(tile);
+    }
+    // Unclaimed views keep their old row shape under LOG.
+    for (final v in [...widget.entryViews, ...widget.readOnlyViews]) {
+      if (!claimed.contains(v.name)) log.add(_viewTile(context, v));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (log.isNotEmpty) ...[_sectionHeader(context, 'Log'), ...log],
+        if (connected.isNotEmpty) ...[
+          _sectionHeader(context, 'Connected'),
+          ...connected,
+        ],
+      ],
+    );
+  }
+
+  Widget _sectionHeader(BuildContext context, String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
+      child: Text(
+        text.toUpperCase(),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          letterSpacing: 1.2,
+          fontWeight: FontWeight.w700,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
+  Widget _domainTile(BuildContext context, DomainConfig d, ViewSchema view) {
+    return ListTile(
+      leading: IconResolver.resolve(
+        d.icon ?? view.icon,
+        size: 22,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+      title: Text(d.name),
+      subtitle: view.description == null
+          ? null
+          : Text(
+              view.description!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => widget.onOpenDomain(d, view),
+    );
+  }
+
+  /// Dense row for a view the config doesn't claim — same shape the
+  /// Ledgers expandable used.
+  Widget _viewTile(BuildContext context, ViewSchema view) {
+    return ListTile(
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      contentPadding: const EdgeInsets.only(left: 28, right: 16),
+      leading: IconResolver.resolve(
+        view.icon,
+        size: 20,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+      title: Text(view.name),
+      subtitle: view.description == null
+          ? null
+          : Text(
+              view.description!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => widget.onOpenView(view),
+    );
+  }
+
+  /// Pre-redesign flat list: the "Ledgers" ExpansionTile with read-only
+  /// views nested at the bottom.
+  Widget _fallback(BuildContext context) {
+    return ExpansionTile(
+      leading: Icon(
+        Icons.view_list_outlined,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+      title: const Text('Ledgers'),
+      subtitle: Text(
+        '${widget.entryViews.length} trackers'
+        '${widget.readOnlyViews.isNotEmpty ? ' · ${widget.readOnlyViews.length} read-only' : ''}',
+      ),
+      shape: const Border(),
+      collapsedShape: const Border(),
+      children: [
+        for (final view in widget.entryViews) _viewTile(context, view),
+        if (widget.readOnlyViews.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(28, 8, 16, 2),
+            child: Text(
+              'Read-only',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          for (final view in widget.readOnlyViews) _viewTile(context, view),
+        ],
+      ],
     );
   }
 }

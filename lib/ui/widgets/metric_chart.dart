@@ -220,7 +220,11 @@ class MetricChart extends StatelessWidget {
                     getTooltipItems: (spots) => [
                       for (final s in spots)
                         LineTooltipItem(
-                          '${DateFormat('MMM d').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
+                          // Multi-year windows (full-history / windowed
+                          // Wilks) carry the year — "Sep 22 '25" — so a
+                          // point three years back can't read as recent;
+                          // single-year windows stay compact.
+                          '${DateFormat(windowStart.year != today.year ? "MMM d ''yy" : 'MMM d').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
                           '${s.y.toStringAsFixed(1)}',
                           const TextStyle(
                             color: Colors.white,

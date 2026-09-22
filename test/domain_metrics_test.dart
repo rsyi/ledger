@@ -474,6 +474,44 @@ void main() {
       expect(d.fullHistory, isTrue);
     });
 
+    test('wilks_series window_years clips the monthly trend to its '
+        'trailing 12×n points; null keeps full history', () {
+      // History back to Jul 2024 — 27 monthly points unclipped.
+      final rows2 = [
+        row('Barbell Squat', 300, 1, '2024-07-06'),
+        row('Flat Barbell Bench Press', 200, 3, '2024-07-08'),
+        row('Barbell Deadlift', 400, 1, '2024-07-10'),
+        row('Barbell Squat', 325, 1, '2026-09-01'),
+      ];
+      final daily = [
+        WeightRow(date: DateTime(2024, 7, 5), weightLbs: 166),
+        WeightRow(date: DateTime(2026, 9, 2), weightLbs: 164),
+      ];
+      MetricSeries compute({int? windowYears}) => computeMetric(
+            MetricConfig(id: 'wilks_series', windowYears: windowYears),
+            DomainMetricInputs(
+              strengthRows: rows2,
+              weightDaily: daily,
+              today: today, // 2026-09-21
+            ),
+          ) as MetricSeries;
+      final full = compute();
+      expect(full.points.first.day, DateTime(2024, 7, 1));
+      expect(full.points, hasLength(27)); // Jul 2024 .. Sep 2026
+      // window_years: 1 → the trailing 12 months (Oct 2025 .. Sep 2026).
+      final clipped = compute(windowYears: 1);
+      expect(clipped.points, hasLength(12));
+      expect(clipped.points.first.day, DateTime(2025, 10, 1));
+      expect(clipped.points.last.day, DateTime(2026, 9, 1));
+      // The clip is display-only: the retained points' values match.
+      expect(
+        clipped.points.last.value,
+        closeTo(full.points.last.value, 1e-9),
+      );
+      // A window wider than history behaves like full history.
+      expect(compute(windowYears: 4).points, hasLength(27));
+    });
+
     test('wilks_series without from/floor_pct: no reference, no floor', () {
       final daily = [
         for (var i = 0; i < 21; i++)

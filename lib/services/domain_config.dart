@@ -77,6 +77,13 @@ class MetricConfig {
   /// (back-compat: older configs simply get no floor line).
   final double? floorPct;
 
+  /// Trailing plot window in YEARS (yaml `window_years: 4`) — clips a
+  /// monthly series to its last `12 × n` points (wilks_series: 48
+  /// monthly points over 4 years). User-tunable from dashboards.yaml;
+  /// null / absent / non-positive → full history (the pre-2026-09-22
+  /// behavior).
+  final int? windowYears;
+
   const MetricConfig({
     required this.id,
     this.kind = MetricKind.stat,
@@ -88,6 +95,7 @@ class MetricConfig {
     this.lifts = const [],
     this.from,
     this.floorPct,
+    this.windowYears,
   });
 }
 
@@ -198,6 +206,7 @@ List<MetricConfig> _parseMetrics(Object? raw) {
     if (id.isEmpty) continue;
     final goal = m['goal'];
     final floorPct = m['floor_pct'];
+    final windowYears = m['window_years'];
     final lifts = m['lifts'];
     out.add(
       MetricConfig(
@@ -217,6 +226,9 @@ List<MetricConfig> _parseMetrics(Object? raw) {
             : const [],
         from: DateTime.tryParse(m['from']?.toString() ?? ''),
         floorPct: floorPct is num ? floorPct.toDouble() : null,
+        windowYears: windowYears is num && windowYears > 0
+            ? windowYears.toInt()
+            : null,
       ),
     );
   }

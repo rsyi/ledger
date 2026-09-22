@@ -27,6 +27,7 @@ domains:
         kind: series
         from: "2026-09-21"
         floor_pct: 2.5
+        window_years: 4
         goal_note: "hold within 2.5% of cut start"
   - name: weight
     paradigm: entry
@@ -95,6 +96,8 @@ void main() {
       expect(strength.metrics[2].from, isNull); // absent key → null
       expect(strength.metrics[3].floorPct, 2.5);
       expect(strength.metrics[2].floorPct, isNull); // absent key → null
+      expect(strength.metrics[3].windowYears, 4);
+      expect(strength.metrics[2].windowYears, isNull); // absent → full
 
       final weight = domains[1];
       // No headline declared → empty (UI defaults kick in downstream).
@@ -215,6 +218,24 @@ domains:
 ''')!;
       expect(domains.single.paradigm, DomainParadigm.entry);
       expect(domains.single.metrics.single.kind, MetricKind.stat);
+    });
+
+    test('window_years: non-positive / garbage → null (full history)', () {
+      List<MetricConfig> parse(String v) => parseDomainConfigs('''
+domains:
+  - name: x
+    paradigm: entry
+    views: [x]
+    metrics:
+      - id: wilks_series
+        kind: series
+        window_years: $v
+''')!.single.metrics;
+      expect(parse('0').single.windowYears, isNull);
+      expect(parse('-2').single.windowYears, isNull);
+      expect(parse('banana').single.windowYears, isNull);
+      expect(parse('"4"').single.windowYears, isNull); // strings rejected
+      expect(parse('2').single.windowYears, 2);
     });
   });
 

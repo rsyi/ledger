@@ -197,8 +197,10 @@ class HomeDashboardState extends State<HomeDashboard> {
     }
     _wm = _guard(() async => widget.wmStore?.snapshot(force: force));
     _docs = _guard(() async => widget.provider?.load());
+    // Not gated on analytics: loadDailyWeighIns falls back to a direct
+    // ledger read when the airlayer path is unavailable or empty.
     _weights = _guard(
-      () async => widget.analytics == null
+      () async => widget.weightView == null
           ? null
           : loadDailyWeighIns(
               analytics: widget.analytics,

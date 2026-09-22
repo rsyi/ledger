@@ -7,6 +7,7 @@ import '../../models/view_schema.dart';
 import '../../services/list_display_render.dart';
 import '../../services/sheets_repository.dart';
 import '../../services/warehouse_connector.dart';
+import 'pinned_tooltip_line_chart.dart';
 
 /// Opens a modal bottom sheet listing past records that share [dim]'s
 /// current [value]. Sorted by `view.dateField` descending (newest first)
@@ -467,8 +468,8 @@ class _TrendChart extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: LineChart(
-              LineChartData(
+            child: PinnedTooltipLineChart(
+              data: LineChartData(
                 minX: xMin,
                 maxX: xMax,
                 minY: yMin - yPad,

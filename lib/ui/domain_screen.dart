@@ -36,6 +36,7 @@ import '../services/qbo_service.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
 import 'timeline_screen.dart';
+import 'widgets/pinned_tooltip_line_chart.dart';
 
 /// Metric ids that need mapped strength rows.
 const _strengthMetricIds = {
@@ -528,8 +529,8 @@ class _MetricChart extends StatelessWidget {
       children: [
         SizedBox(
           height: 130,
-          child: LineChart(
-            LineChartData(
+          child: PinnedTooltipLineChart(
+            data: LineChartData(
               minX: xMin,
               maxX: xMax,
               minY: yMin - yPad,

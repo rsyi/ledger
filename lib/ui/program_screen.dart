@@ -20,6 +20,7 @@
 library;
 
 import 'package:fl_chart/fl_chart.dart';
+import 'widgets/pinned_tooltip_line_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -765,8 +766,8 @@ class _WeightChart extends StatelessWidget {
 
     return SizedBox(
       height: 240,
-      child: LineChart(
-        LineChartData(
+      child: PinnedTooltipLineChart(
+        data: LineChartData(
           minX: xMin,
           maxX: xMax,
           minY: yMin - yPad,

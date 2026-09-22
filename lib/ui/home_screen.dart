@@ -38,7 +38,6 @@ import '../services/schema_sync.dart';
 import '../services/sheets_repository.dart';
 import '../services/transient_retry.dart';
 import '../services/warehouse_connector.dart';
-import '../services/program_current.dart';
 import '../services/program_provider.dart';
 import '../services/week_planner.dart';
 import '../services/wm_store.dart';
@@ -55,20 +54,30 @@ import 'week_plan_screen.dart';
 /// tile list; surfaced only through the pinned Coach row + chat screen.
 const kCoachChatViewName = 'coach_chat';
 
-/// App entrypoint screen. Loads config + schemas, connects to the
-/// warehouse, and presents:
+/// App entrypoint shell. Loads config + schemas, connects to the
+/// warehouse, and presents a 4-tab NavigationBar (bottom-nav redesign
+/// 2026-09-21 — the single scrolling home page had gotten too crowded):
 ///
-///   1. The progress dashboard at the top — four synthesis cards
-///      (BODY / STRENGTH / EXECUTION / ENGINE, see home_dashboard.dart).
-///      This superseded the old per-view "today counts" strip
-///      (today_dashboard.dart, removed 2026-09-21).
-///   2. The pinned Coach row + Week plan / Program tiles
-///   3. The tracker list, grouped by `app/dashboards.yaml` into a LOG
-///      section (entry domains) and a CONNECTED section (integration
-///      domains — read-only, read-friendly). Views the config doesn't
-///      claim still list under LOG so nothing becomes unreachable;
-///      missing/bad config falls back to the flat "Ledgers" section.
-///   4. The "Integrations" entry at the bottom
+///   HOME     the synthesis surface only: PHASE hero + STRENGTH card +
+///            THIS WEEK strip (home_dashboard.dart) and the Coach
+///            preview row. No lists.
+///   LOG      the tracker rows, grouped by `app/dashboards.yaml` into
+///            LOG (entry domains) and CONNECTED (integration domains —
+///            read-only, read-friendly); unclaimed views still list
+///            under LOG so nothing becomes unreachable; missing/bad
+///            config falls back to the flat "Ledgers" section.
+///            Integrations sits last — it is setup for the CONNECTED
+///            sources above it.
+///   COACH    the coach threads screen embedded as the tab root (the
+///            old pinned-row → pushed-threads flow, minus the push);
+///            opening a thread still pushes the chat.
+///   PROGRAM  the program screen embedded (declared / configuration /
+///            observed / verdict), Week plan via its app-bar action.
+///
+/// Bootstrap stays at THIS level: one FutureBuilder feeds every tab, so
+/// the SchemaSync poller's rebuild swaps all four bodies at once and
+/// the selected tab (a plain State field) survives. Tab switches don't
+/// push routes, so the poller's canPop() mid-task guard keeps working.
 ///
 /// Database + schemas are baked into the APK at build time (via
 /// `tool/brand.dart` resolving `config.yml` + `.env`). No in-app
@@ -99,6 +108,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Reentrancy guard so overlapping ticks (slow network) don't stack.
   bool _polling = false;
 
+  /// Selected bottom-nav tab (0 home · 1 log · 2 coach · 3 program).
+  /// Plain state field so it survives the poller's setState rebuilds.
+  int _tab = 0;
+
   /// Handle on the progress dashboard so pull-to-refresh can bust its
   /// caches (wm_store / program docs / weight mirror / best-e1RM).
   final _dashboardKey = GlobalKey<HomeDashboardState>();
@@ -106,6 +119,11 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Handle on the LOG/CONNECTED sections so pull-to-refresh re-pulls
   /// app/dashboards.yaml (1 h cache otherwise).
   final _domainsKey = GlobalKey<_DomainSectionsState>();
+
+  /// Handle on the HOME tab's Coach preview row: switching back to HOME
+  /// after reading threads refreshes its unread accent immediately
+  /// (the row also refreshes itself when a background sync completes).
+  final _coachRowKey = GlobalKey<_CoachRowState>();
 
   @override
   void initState() {
@@ -419,47 +437,52 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         }
         return Scaffold(
-          appBar: AppBar(
-            title: Text(appName),
-            actions: [
-              // Not const: a const instance is identical across parent
-              // rebuilds, so Flutter would skip build() and freeze the
-              // pre-bootstrap empty state (SyncScheduler.instance null).
-              SyncStatusButton(),
-              if (chatModel != null)
-                IconButton(
-                  icon: const Icon(Icons.smart_toy_outlined),
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => ChatScreen(
-                        model: chatModel,
-                        github: github == null ? null : GithubClient(github),
-                        analytics: boot?.analytics,
-                      ),
-                    ),
-                  ),
-                  tooltip: 'Chat',
-                ),
-              if (github != null)
-                IconButton(
-                  icon: const Icon(Icons.cloud_download_outlined),
-                  onPressed: () => _syncFromGithub(github),
-                  tooltip: 'Sync schemas from GitHub',
-                ),
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: () => setState(() => _bootstrap = _initialize()),
-                tooltip: 'Reload',
-              ),
-            ],
-          ),
           body: Builder(
             builder: (context) {
+              // Admin actions for the HOME tab's app bar. Not const: a
+              // const SyncStatusButton is identical across parent
+              // rebuilds, so Flutter would skip build() and freeze the
+              // pre-bootstrap empty state (SyncScheduler.instance null).
+              final homeActions = <Widget>[
+                SyncStatusButton(),
+                if (chatModel != null)
+                  IconButton(
+                    icon: const Icon(Icons.smart_toy_outlined),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ChatScreen(
+                          model: chatModel,
+                          github: github == null ? null : GithubClient(github),
+                          analytics: boot?.analytics,
+                        ),
+                      ),
+                    ),
+                    tooltip: 'Chat',
+                  ),
+                if (github != null)
+                  IconButton(
+                    icon: const Icon(Icons.cloud_download_outlined),
+                    onPressed: () => _syncFromGithub(github),
+                    tooltip: 'Sync schemas from GitHub',
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: () => setState(() => _bootstrap = _initialize()),
+                  tooltip: 'Reload',
+                ),
+              ];
               if (snap.connectionState != ConnectionState.done) {
-                return const Center(child: CircularProgressIndicator());
+                return Scaffold(
+                  appBar: AppBar(title: Text(appName)),
+                  body: const Center(child: CircularProgressIndicator()),
+                );
               }
               if (snap.hasError) {
-                return _ErrorView(error: snap.error.toString());
+                // Reload stays reachable on a failed bootstrap.
+                return Scaffold(
+                  appBar: AppBar(title: Text(appName), actions: homeActions),
+                  body: _ErrorView(error: snap.error.toString()),
+                );
               }
               final data = snap.data!;
               // Only show writable data-entry trackers (paired with
@@ -490,7 +513,10 @@ class _HomeScreenState extends State<HomeScreen> {
               if (entryViews.isEmpty &&
                   readOnlyViews.isEmpty &&
                   coachView == null) {
-                return const Center(child: Text('No views available.'));
+                return Scaffold(
+                  appBar: AppBar(title: Text(appName), actions: homeActions),
+                  body: const Center(child: Text('No views available.')),
+                );
               }
               // Ledger meta access for the Coach row's unread marker.
               // Null on non-local-first builds — unread simply tracks
@@ -530,28 +556,9 @@ class _HomeScreenState extends State<HomeScreen> {
               final domainProvider = github == null
                   ? null
                   : DomainConfigProvider(CoachBrain.githubFetcher(github));
-              void openProgram() {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ProgramScreen(
-                      provider: programProvider!,
-                      analytics: data.analytics,
-                      weightView: weightView,
-                      weightRepo: weightView == null
-                          ? null
-                          : data.registry.forView(weightView),
-                      // OBSERVED Wilks block: strength rows + the
-                      // wilks_series config from dashboards.yaml.
-                      strengthView: dashStrengthView,
-                      strengthRepo: dashStrengthView == null
-                          ? null
-                          : data.registry.forView(dashStrengthView),
-                      dashboards: domainProvider,
-                      wmStore: data.wmStore,
-                    ),
-                  ),
-                );
-              }
+              // Program is a tab — hero taps / sheet actions select it
+              // instead of pushing a duplicate screen.
+              void openProgram() => setState(() => _tab = 3);
 
               // Shared timeline opener for tracker rows. Read-only views
               // ride the direct-sheet repo with no post-log hooks; entry
@@ -676,146 +683,236 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }
 
-              return Column(
-                children: [
-                  HomeDashboard(
-                    key: _dashboardKey,
-                    wmStore: data.wmStore,
-                    provider: programProvider,
-                    analytics: data.analytics,
-                    weightView: weightView,
-                    weightRepo: weightView == null
-                        ? null
-                        : data.registry.forView(weightView),
-                    statusView: statusView,
-                    statusRepo: data.readOnlyRepo,
-                    strengthView: dashStrengthView,
-                    strengthRepo: dashStrengthView == null
-                        ? null
-                        : data.registry.forView(dashStrengthView),
-                    dashboards: domainProvider,
-                    onOpenProgram: programProvider == null ? null : openProgram,
-                    onOpenWeekPlan: programProvider == null
-                        ? null
-                        : openWeekPlan,
-                    onOpenStatus:
-                        statusView == null || data.readOnlyRepo == null
-                        ? null
-                        : openStatusLedger,
-                    onOpenStrengthDomain:
-                        domainProvider == null || dashStrengthView == null
-                        ? null
-                        : openStrengthDomain,
+              // Coach-proposal timeline opener: pushed chat screens
+              // call this to open the target view's timeline with the
+              // scheduled entries highlighted — unchanged behavior,
+              // now shared by the Coach tab.
+              void openCoachTimeline(
+                BuildContext ctx,
+                String viewName,
+                DateTime date,
+                Set<String> highlight,
+              ) {
+                final view = data.views
+                    .where((v) => v.name == viewName)
+                    .firstOrNull;
+                if (view == null) return;
+                Navigator.of(ctx).push(
+                  MaterialPageRoute(
+                    builder: (_) => TimelineScreen(
+                      view: view,
+                      repository: data.registry.forView(view),
+                      llm: data.llm,
+                      llmCache: data.llmCache,
+                      chatModel: chatModel,
+                      github: github == null ? null : GithubClient(github),
+                      analytics: data.analytics,
+                      qboSpec: data.quickbooks?.specFor(view.name),
+                      qboService: data.quickbooks?.specFor(view.name) == null
+                          ? null
+                          : data.qboService,
+                      initialDate: date,
+                      highlightKeys: highlight,
+                    ),
                   ),
-                  if (coachView != null)
-                    _CoachRow(
+                );
+              }
+
+              // ---- HOME: hero + STRENGTH + THIS WEEK + Coach preview.
+              final homeTab = Scaffold(
+                appBar: AppBar(title: Text(appName), actions: homeActions),
+                body: RefreshIndicator(
+                  // Busts the dashboard's caches (wm_store snapshot,
+                  // program docs, weight mirror, best-e1RM) and refires
+                  // its card futures + the Coach preview.
+                  onRefresh: () async {
+                    _coachRowKey.currentState?.refresh();
+                    await _dashboardKey.currentState?.reload();
+                  },
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      HomeDashboard(
+                        key: _dashboardKey,
+                        wmStore: data.wmStore,
+                        provider: programProvider,
+                        analytics: data.analytics,
+                        weightView: weightView,
+                        weightRepo: weightView == null
+                            ? null
+                            : data.registry.forView(weightView),
+                        statusView: statusView,
+                        statusRepo: data.readOnlyRepo,
+                        strengthView: dashStrengthView,
+                        strengthRepo: dashStrengthView == null
+                            ? null
+                            : data.registry.forView(dashStrengthView),
+                        dashboards: domainProvider,
+                        onOpenProgram: programProvider == null
+                            ? null
+                            : openProgram,
+                        onOpenWeekPlan: programProvider == null
+                            ? null
+                            : openWeekPlan,
+                        onOpenStatus:
+                            statusView == null || data.readOnlyRepo == null
+                            ? null
+                            : openStatusLedger,
+                        onOpenStrengthDomain:
+                            domainProvider == null || dashStrengthView == null
+                            ? null
+                            : openStrengthDomain,
+                      ),
+                      if (coachView != null)
+                        _CoachRow(
+                          key: _coachRowKey,
+                          view: coachView,
+                          repository: data.registry.forView(coachView),
+                          ledger: coachLedger,
+                          onOpen: () => setState(() => _tab = 2),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+
+              // ---- LOG: entry domains + CONNECTED, Integrations last
+              // (it is setup for the CONNECTED sources above it).
+              final logTab = Scaffold(
+                appBar: AppBar(
+                  title: const Text('Log'),
+                  actions: [SyncStatusButton()],
+                ),
+                body: RefreshIndicator(
+                  onRefresh: () async => _domainsKey.currentState?.reload(),
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      _DomainSections(
+                        key: _domainsKey,
+                        provider: domainProvider,
+                        entryViews: entryViews,
+                        readOnlyViews: readOnlyViews,
+                        onOpenDomain: openDomain,
+                        onOpenView: openView,
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.sync_alt),
+                        title: const Text('Integrations'),
+                        subtitle: const Text(
+                          'Withings and other sources → ledger',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const IntegrationsScreen(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+
+              // ---- COACH: threads screen as the tab root. Opening a
+              // thread pushes the chat exactly as before; proposal
+              // cards keep their timeline opener.
+              final coachTab = coachView == null
+                  ? Scaffold(
+                      appBar: AppBar(title: const Text('Coach')),
+                      body: const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Text(
+                            'Coach chat isn\'t available yet.\n'
+                            'It appears after the next schema sync.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                    )
+                  : CoachThreadsScreen(
                       view: coachView,
                       repository: data.registry.forView(coachView),
                       ledger: coachLedger,
                       brain: coachBrain,
-                      openTimeline: (ctx, viewName, date, highlight) {
-                        final view = data.views
-                            .where((v) => v.name == viewName)
-                            .firstOrNull;
-                        if (view == null) return;
-                        Navigator.of(ctx).push(
-                          MaterialPageRoute(
-                            builder: (_) => TimelineScreen(
-                              view: view,
-                              repository: data.registry.forView(view),
-                              llm: data.llm,
-                              llmCache: data.llmCache,
-                              chatModel: chatModel,
-                              github: github == null
-                                  ? null
-                                  : GithubClient(github),
-                              analytics: data.analytics,
-                              qboSpec: data.quickbooks?.specFor(view.name),
-                              qboService:
-                                  data.quickbooks?.specFor(view.name) == null
-                                  ? null
-                                  : data.qboService,
-                              initialDate: date,
-                              highlightKeys: highlight,
-                            ),
+                      openTimeline: openCoachTimeline,
+                    );
+
+              // ---- PROGRAM: embedded program screen; Week plan rides
+              // its app-bar action.
+              final programTab = programProvider == null
+                  ? Scaffold(
+                      appBar: AppBar(title: const Text('Program')),
+                      body: const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Text(
+                            'Program data unavailable — needs GitHub config.',
                           ),
-                        );
-                      },
-                    ),
-                  Expanded(
-                    // Pull-to-refresh: busts the dashboard's caches
-                    // (wm_store snapshot, program docs, weight mirror,
-                    // best-e1RM) and refires its card futures.
-                    child: RefreshIndicator(
-                      onRefresh: () async => Future.wait([
-                        ?_dashboardKey.currentState?.reload(),
-                        ?_domainsKey.currentState?.reload(),
-                      ]),
-                      child: ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        children: [
-                          // Week plan tile — only shown when GitHub config is
-                          // present (program.yaml lives in the schemas repo).
-                          if (github != null) ...[
-                            _WeekPlanTile(
-                              fetchDoc: CoachBrain.githubFetcher(github),
-                              onTap: openWeekPlan,
-                            ),
-                            const Divider(height: 1),
-                            // Program tile — declared intent (phase/blocks)
-                            // vs observed reality (weight via airlayer).
-                            ListTile(
-                              leading: IconResolver.resolve(
-                                'target',
-                                size: 22,
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                              title: const Text('Program'),
-                              subtitle: const Text(
-                                'Declared phase vs observed weight',
-                              ),
-                              trailing: const Icon(Icons.chevron_right),
-                              onTap: openProgram,
-                            ),
-                            const Divider(height: 1),
-                          ],
-                          // Trackers, grouped into LOG (entry domains)
-                          // and CONNECTED (integration domains) per
-                          // app/dashboards.yaml. Unclaimed views still
-                          // list under LOG; missing/bad config falls
-                          // back to the flat "Ledgers" expandable.
-                          _DomainSections(
-                            key: _domainsKey,
-                            provider: domainProvider,
-                            entryViews: entryViews,
-                            readOnlyViews: readOnlyViews,
-                            onOpenDomain: openDomain,
-                            onOpenView: openView,
-                          ),
-                          const Divider(height: 1),
-                          // Integrations tile.
-                          ListTile(
-                            leading: const Icon(Icons.sync_alt),
-                            title: const Text('Integrations'),
-                            subtitle: const Text(
-                              'Withings and other sources → ledger',
-                            ),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const IntegrationsScreen(),
-                              ),
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
-                ],
+                    )
+                  : ProgramScreen(
+                      provider: programProvider,
+                      analytics: data.analytics,
+                      weightView: weightView,
+                      weightRepo: weightView == null
+                          ? null
+                          : data.registry.forView(weightView),
+                      // OBSERVED Wilks block: strength rows + the
+                      // wilks_series config from dashboards.yaml.
+                      strengthView: dashStrengthView,
+                      strengthRepo: dashStrengthView == null
+                          ? null
+                          : data.registry.forView(dashStrengthView),
+                      dashboards: domainProvider,
+                      wmStore: data.wmStore,
+                      onOpenWeekPlan: openWeekPlan,
+                    );
+
+              // IndexedStack keeps every tab's state (scroll positions,
+              // in-flight futures, the threads screen's poll) alive
+              // across switches; the bootstrap swap above recreates all
+              // four together.
+              return IndexedStack(
+                index: _tab,
+                children: [homeTab, logTab, coachTab, programTab],
               );
             },
+          ),
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _tab,
+            onDestinationSelected: (i) {
+              if (i == _tab) return;
+              setState(() => _tab = i);
+              // Back to HOME after reading coach threads → refresh the
+              // preview row's unread accent right away.
+              if (i == 0) _coachRowKey.currentState?.refresh();
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home),
+                label: 'Home',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.edit_note_outlined),
+                selectedIcon: Icon(Icons.edit_note),
+                label: 'Log',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.smart_toy_outlined),
+                selectedIcon: Icon(Icons.smart_toy),
+                label: 'Coach',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.track_changes_outlined),
+                selectedIcon: Icon(Icons.track_changes),
+                label: 'Program',
+              ),
+            ],
           ),
         );
       },
@@ -886,26 +983,28 @@ class _Bootstrap {
   });
 }
 
-/// Pinned Coach row above the tracker tiles. Tinted (primaryContainer)
-/// so it reads as a different kind of row; shows a preview of the
-/// newest coach message across all threads + relative time, and an
-/// accent dot / stronger tint while ANY thread is unread (per-thread
-/// newest coach `ts` vs its device-local read marker, with the legacy
-/// fallback for `general`). Tap opens [CoachThreadsScreen]; preview +
-/// unread refresh on return and when a background sync completes.
+/// Coach preview row on the HOME tab. Tinted (primaryContainer) so it
+/// reads as a different kind of row; shows a preview of the newest
+/// coach message across all threads + relative time, and an accent dot
+/// / stronger tint while ANY thread is unread (per-thread newest coach
+/// `ts` vs its device-local read marker, with the legacy fallback for
+/// `general`). Tap selects the COACH tab ([onOpen]); preview + unread
+/// refresh when a background sync completes, on pull-to-refresh, and
+/// when the shell switches back to HOME.
 class _CoachRow extends StatefulWidget {
   final ViewSchema view;
   final WarehouseConnector repository;
   final EngineLedgerRepository? ledger;
-  final CoachBrain? brain;
-  final CoachTimelineOpener? openTimeline;
+
+  /// Tap handler — the shell selects the Coach tab.
+  final VoidCallback onOpen;
 
   const _CoachRow({
+    super.key,
     required this.view,
     required this.repository,
     this.ledger,
-    this.brain,
-    this.openTimeline,
+    required this.onOpen,
   });
 
   @override
@@ -921,7 +1020,7 @@ class _CoachRowState extends State<_CoachRow> {
   @override
   void initState() {
     super.initState();
-    _refresh();
+    refresh();
     _syncing = SyncScheduler.instance?.syncing;
     _syncing?.addListener(_onSyncStateChanged);
   }
@@ -935,10 +1034,12 @@ class _CoachRowState extends State<_CoachRow> {
   void _onSyncStateChanged() {
     // Refresh when a sync completes — a fresh coach message may have
     // just been pulled from the sheet.
-    if (_syncing?.value == false) _refresh();
+    if (_syncing?.value == false) refresh();
   }
 
-  Future<void> _refresh() async {
+  /// Re-lists the coach view and recomputes preview + unread. Public-
+  /// within-library: the shell calls it on tab return / pull-to-refresh.
+  Future<void> refresh() async {
     try {
       final rows = await widget.repository.list(widget.view);
       // Newest coach message overall (preview) + newest coach `ts` per
@@ -1011,23 +1112,6 @@ class _CoachRowState extends State<_CoachRow> {
     return '${diff.inDays}d ago';
   }
 
-  Future<void> _open() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => CoachThreadsScreen(
-          view: widget.view,
-          repository: widget.repository,
-          ledger: widget.ledger,
-          brain: widget.brain,
-          openTimeline: widget.openTimeline,
-        ),
-      ),
-    );
-    // The chat screens mark their threads read (and the user may have
-    // sent messages) — refresh the preview/unread state on return.
-    if (mounted) _refresh();
-  }
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -1075,7 +1159,7 @@ class _CoachRowState extends State<_CoachRow> {
             Icon(Icons.chevron_right, color: scheme.onPrimaryContainer),
           ],
         ),
-        onTap: _open,
+        onTap: widget.onOpen,
       ),
     );
   }
@@ -1287,72 +1371,6 @@ class _DomainSectionsState extends State<_DomainSections> {
           for (final view in widget.readOnlyViews) _viewTile(context, view),
         ],
       ],
-    );
-  }
-}
-
-/// Home-screen tile for the Week Plan feature. Loads program.yaml (via
-/// [ProgramProvider]'s 1 h cache) to compute a useful subtitle: the
-/// morning template text for today (or tomorrow when today is Sunday).
-/// Falls back to "This week: [weekType]" when the slice is available but has
-/// no morning session, or "View this week's plan" when data is absent.
-class _WeekPlanTile extends StatefulWidget {
-  final CoachDocFetcher fetchDoc;
-  final VoidCallback onTap;
-
-  const _WeekPlanTile({required this.fetchDoc, required this.onTap});
-
-  @override
-  State<_WeekPlanTile> createState() => _WeekPlanTileState();
-}
-
-class _WeekPlanTileState extends State<_WeekPlanTile> {
-  String _subtitle = 'View this week\'s plan';
-
-  @override
-  void initState() {
-    super.initState();
-    _loadSubtitle();
-  }
-
-  Future<void> _loadSubtitle() async {
-    try {
-      final provider = ProgramProvider(widget.fetchDoc);
-      final docs = await provider.load();
-      final program = docs.program;
-      if (program == null) return;
-
-      final now = DateTime.now();
-      // On Sundays show tomorrow's (Monday) template — that's the upcoming day.
-      final refDate = now.weekday == DateTime.sunday
-          ? now.add(const Duration(days: 1))
-          : now;
-
-      final slice = programCurrent(program, docs.phase, refDate);
-      if (slice == null) return;
-
-      final morning = slice.todayTemplate['morning']?.toString().trim() ?? '';
-      if (morning.isNotEmpty) {
-        final preview = morning.length > 60
-            ? '${morning.substring(0, 60)}…'
-            : morning;
-        if (mounted) setState(() => _subtitle = preview);
-      } else {
-        if (mounted) setState(() => _subtitle = 'This week: ${slice.weekType}');
-      }
-    } catch (_) {
-      // Keep default subtitle.
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: const Icon(Icons.event_note_outlined),
-      title: const Text('Week plan'),
-      subtitle: Text(_subtitle),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: widget.onTap,
     );
   }
 }

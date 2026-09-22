@@ -75,6 +75,11 @@ class ProgramScreen extends StatefulWidget {
   /// Null → the section is omitted.
   final WmStore? wmStore;
 
+  /// Week-plan opener. Non-null (the bottom-nav shell passes it) → the
+  /// app bar gets an event-note action; the Week Plan screen itself
+  /// still pushes on the root navigator.
+  final VoidCallback? onOpenWeekPlan;
+
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -88,6 +93,7 @@ class ProgramScreen extends StatefulWidget {
     this.strengthView,
     this.dashboards,
     this.wmStore,
+    this.onOpenWeekPlan,
     this.today,
   });
 
@@ -187,7 +193,17 @@ class _ProgramScreenState extends State<ProgramScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Program')),
+      appBar: AppBar(
+        title: const Text('Program'),
+        actions: [
+          if (widget.onOpenWeekPlan != null)
+            IconButton(
+              icon: const Icon(Icons.event_note_outlined),
+              tooltip: 'Week plan',
+              onPressed: widget.onOpenWeekPlan,
+            ),
+        ],
+      ),
       body: FutureBuilder<_ProgramData?>(
         future: _load,
         builder: (context, snap) {

@@ -550,4 +550,101 @@ void main() {
       );
     });
   });
+
+  group('headline', () {
+    const wilksM = MetricConfig(id: 'wilks');
+    const plM = MetricConfig(id: 'pl_total', unit: 'lb');
+    const e1rmM = MetricConfig(
+      id: 'e1rm_reference',
+      unit: 'lb',
+      lifts: ['squat', 'bench'],
+    );
+    const hrM = MetricConfig(id: 'hr_4x4_series', kind: MetricKind.series, unit: 'bpm');
+    const pyramidM = MetricConfig(id: 'grade_pyramid', kind: MetricKind.best);
+
+    test('declared headline ids win, in order; unknown ids skipped', () {
+      const domain = DomainConfig(
+        name: 'strength',
+        paradigm: DomainParadigm.entry,
+        views: ['strength'],
+        metrics: [plM, e1rmM, wilksM],
+        headline: ['wilks', 'nope', 'pl_total'],
+      );
+      expect(
+        headlineConfigs(domain).map((m) => m.id),
+        ['wilks', 'pl_total'],
+      );
+    });
+
+    test('no headline → stat/best kinds first, capped at three', () {
+      const domain = DomainConfig(
+        name: 'cardio',
+        paradigm: DomainParadigm.entry,
+        views: ['cardio'],
+        metrics: [hrM, pyramidM, plM, wilksM, e1rmM],
+      );
+      expect(
+        headlineConfigs(domain).map((m) => m.id),
+        ['grade_pyramid', 'pl_total', 'wilks'],
+      );
+    });
+
+    test('stat metrics reduce to their first chip', () {
+      final strengthRows = [
+        row('Barbell Squat', 315, 3, '2026-09-01'),
+        row('Flat Barbell Bench Press', 225, 5, '2026-09-10'),
+      ];
+      final inputs =
+          DomainMetricInputs(strengthRows: strengthRows, today: today);
+      // Multi-chip stat keeps the chip's own label for honesty.
+      final e = headlineStat(e1rmM, inputs)!;
+      expect(e.label, 'e1RM squat');
+      expect(e.value, '${e1rm(315, 3).round()} lb');
+      // Single-chip stat uses the short built-in label alone.
+      final p = headlineStat(plM, inputs)!;
+      expect(p.label, 'PL');
+    });
+
+    test('series reduce to the latest point; bars to the top label', () {
+      final series = headlineStat(
+        hrM,
+        DomainMetricInputs(
+          records: [
+            {'date': '2026-09-10', 'max_hr': 195},
+            {'date': '2026-09-17', 'max_hr': 191},
+          ],
+          today: today,
+        ),
+      )!;
+      expect(series.label, 'max HR');
+      expect(series.value, '191 bpm');
+
+      final bars = headlineStat(
+        pyramidM,
+        DomainMetricInputs(
+          records: [
+            {'grade': 'v5'},
+            {'grade': 'v7'},
+            {'grade': 'v5'},
+          ],
+          today: today,
+        ),
+      )!;
+      expect(bars.label, 'top');
+      expect(bars.value, 'v7');
+    });
+
+    test('unavailable metrics drop out of the strip', () {
+      final empty = DomainMetricInputs(today: today);
+      expect(headlineStat(wilksM, empty), isNull);
+      const domain = DomainConfig(
+        name: 'strength',
+        paradigm: DomainParadigm.entry,
+        views: ['strength'],
+        metrics: [wilksM, plM],
+        headline: ['wilks', 'pl_total'],
+      );
+      expect(headlineStats(domain, empty), isEmpty);
+    });
+  });
 }

@@ -10,6 +10,7 @@ domains:
     paradigm: entry
     views: [strength]
     icon: dumbbell
+    headline: [wilks, pl_total]
     metrics:
       - id: pl_total
         kind: stat
@@ -80,6 +81,7 @@ void main() {
       expect(strength.views, ['strength']);
       expect(strength.primaryView, 'strength');
       expect(strength.icon, 'dumbbell');
+      expect(strength.headline, ['wilks', 'pl_total']);
       expect(strength.metrics, hasLength(4));
       expect(strength.metrics[0].id, 'pl_total');
       expect(strength.metrics[0].kind, MetricKind.stat);
@@ -95,6 +97,8 @@ void main() {
       expect(strength.metrics[2].floorPct, isNull); // absent key → null
 
       final weight = domains[1];
+      // No headline declared → empty (UI defaults kick in downstream).
+      expect(weight.headline, isEmpty);
       expect(weight.metrics[0].id, 'bw_series');
       expect(weight.metrics[0].kind, MetricKind.series);
       expect(weight.metrics[0].goal, 154);
@@ -138,6 +142,7 @@ void main() {
 domains:
   - name: x
     views: [x]
+    headline: "not a list"
     list_fields:
       - ""
       - { unit: kcal }
@@ -152,6 +157,8 @@ domains:
         goal_band_per_lb: [1.0, 0.8]
 ''')!;
       final d = domains.single;
+      // Non-list headline → empty default, not fatal.
+      expect(d.headline, isEmpty);
       // Blank / field-less entries dropped; scalars coerce to strings.
       expect(d.listFields.map((f) => f.field), ['ok', '42']);
       // Wrong-arity and non-list bands → null.

@@ -16,6 +16,10 @@
 /// (climbing), hr_4x4_series (cardio). Unknown ids return a
 /// [MetricUnavailable] placeholder — a declared-but-unknown metric must
 /// render as a dim note, never break the header.
+///
+/// [headlineStats] additionally reduces a domain's headline metrics to
+/// one-number chips for the compact strip atop the domain screen's
+/// records mode (the full dashboard lives in its Trends mode).
 library;
 
 import 'domain_config.dart';
@@ -553,6 +557,87 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
     default:
       return MetricUnavailable('unknown metric "${m.id}"');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Headline strip
+// ---------------------------------------------------------------------------
+
+/// Short display names for the headline strip — the full `label:` from
+/// dashboards.yaml is a heading, not a chip. Unknown ids fall back to
+/// the raw id.
+const _headlineLabels = {
+  'pl_total': 'PL',
+  'e1rm_reference': 'e1RM',
+  'all_time_best_weight': 'best',
+  'wilks': 'Wilks',
+  'wilks_series': 'Wilks',
+  'bw_series': 'bw',
+  'bf_series': 'bf',
+  'kcal_series': 'kcal',
+  'protein_series': 'protein',
+  'grade_pyramid': 'top',
+  'session_frequency': 'sess/wk',
+  'hr_4x4_series': 'max HR',
+};
+
+/// Which metrics feed the headline strip. Declared `headline:` ids win
+/// (config order, unknown ids skipped); absent/empty → sensible default:
+/// stat/best kinds first, then the rest, capped at three — a strip, not
+/// a dashboard.
+List<MetricConfig> headlineConfigs(DomainConfig domain) {
+  final byId = {for (final m in domain.metrics) m.id: m};
+  final declared = [
+    for (final id in domain.headline) ?byId[id],
+  ];
+  if (declared.isNotEmpty) return declared;
+  final stats = [
+    for (final m in domain.metrics)
+      if (m.kind != MetricKind.series) m,
+  ];
+  final series = [
+    for (final m in domain.metrics)
+      if (m.kind == MetricKind.series) m,
+  ];
+  return [...stats, ...series].take(3).toList();
+}
+
+/// One metric reduced to a single headline number, or null when it has
+/// nothing to say (unavailable / empty — the strip simply omits it).
+/// Stats take their first chip (per-lift stats keep the lift name so
+/// "e1RM squat 315 lb" stays honest); series take the latest point;
+/// bar lists take the top bar's label (grade pyramid → hardest grade).
+MetricStat? headlineStat(MetricConfig m, DomainMetricInputs inputs) {
+  final label = _headlineLabels[m.id] ?? m.id;
+  switch (computeMetric(m, inputs)) {
+    case MetricStats(stats: final stats) when stats.isNotEmpty:
+      final first = stats.first;
+      return MetricStat(
+        label: stats.length == 1 ? label : '$label ${first.label}',
+        value: first.value,
+      );
+    case MetricSeries(points: final points, unit: final unit)
+        when points.isNotEmpty:
+      final v = points.last.value;
+      final num_ = v == v.roundToDouble()
+          ? v.round().toString()
+          : v.toStringAsFixed(1);
+      return MetricStat(
+        label: label,
+        value: unit == null ? num_ : '$num_ $unit',
+      );
+    case MetricBars(bars: final bars) when bars.isNotEmpty:
+      return MetricStat(label: label, value: bars.first.label);
+    default:
+      return null;
+  }
+}
+
+/// The whole strip: headline metrics reduced to stats, nulls dropped.
+List<MetricStat> headlineStats(DomainConfig domain, DomainMetricInputs inputs) {
+  return [
+    for (final m in headlineConfigs(domain)) ?headlineStat(m, inputs),
+  ];
 }
 
 MetricStats _perLiftStats(

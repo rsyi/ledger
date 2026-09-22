@@ -6,8 +6,9 @@
 /// each with a paradigm (`entry` → home LOG section, full timeline;
 /// `integration` → CONNECTED section, read-friendly record list with
 /// the read-only timeline a calendar-icon away), an icon, a metrics
-/// list for the domain screen's dashboard header, and optional
-/// `list_fields` (the record list's salient columns).
+/// list for the domain screen's Trends mode, an optional `headline`
+/// (metric ids for the one-line strip atop the records mode), and
+/// optional `list_fields` (the record list's salient columns).
 ///
 /// ENGINE-FREE by design (adaptation decision 1): fetched straight from
 /// GitHub through the shared [DocCache] (1 h TTL, pull-to-refresh bust)
@@ -115,6 +116,13 @@ class DomainConfig {
 
   final List<MetricConfig> metrics;
 
+  /// Metric ids for the compact headline strip atop the domain screen's
+  /// default (records) mode — yaml `headline: [wilks, pl_total]`. Ids
+  /// must reference entries in [metrics]; unknown ids are skipped at
+  /// display time. Empty → the UI picks sensible defaults (stat-kind
+  /// metrics first). See headlineConfigs in domain_metrics.dart.
+  final List<String> headline;
+
   /// Salient columns for the read-friendly record list. Empty → the UI
   /// falls back to the view's `list_display`.
   final List<DomainListField> listFields;
@@ -125,6 +133,7 @@ class DomainConfig {
     required this.views,
     this.icon,
     this.metrics = const [],
+    this.headline = const [],
     this.listFields = const [],
   });
 
@@ -172,6 +181,7 @@ List<DomainConfig>? parseDomainConfigs(String? raw) {
         views: views,
         icon: d['icon']?.toString(),
         metrics: _parseMetrics(d['metrics']),
+        headline: _parseHeadline(d['headline']),
         listFields: _parseListFields(d['list_fields']),
       ),
     );
@@ -211,6 +221,16 @@ List<MetricConfig> _parseMetrics(Object? raw) {
     );
   }
   return out;
+}
+
+/// `headline: [id, id]` — bare metric-id strings; blanks skipped.
+/// Anything that isn't a list degrades to empty (default headline).
+List<String> _parseHeadline(Object? raw) {
+  if (raw is! List) return const [];
+  return [
+    for (final id in raw)
+      if (id != null && id.toString().trim().isNotEmpty) id.toString().trim(),
+  ];
 }
 
 /// `goal_band_per_lb: [low, high]` → normalized record. Anything that

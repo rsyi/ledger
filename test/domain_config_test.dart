@@ -25,7 +25,8 @@ domains:
       - id: wilks_series
         kind: series
         from: "2026-09-21"
-        goal_note: "hold stable through the cut"
+        floor_pct: 2.5
+        goal_note: "hold within 2.5% of cut start"
   - name: weight
     paradigm: entry
     views: [weight]
@@ -90,6 +91,8 @@ void main() {
       expect(strength.metrics[2].kind, MetricKind.best);
       expect(strength.metrics[3].from, DateTime(2026, 9, 21));
       expect(strength.metrics[2].from, isNull); // absent key → null
+      expect(strength.metrics[3].floorPct, 2.5);
+      expect(strength.metrics[2].floorPct, isNull); // absent key → null
 
       final weight = domains[1];
       expect(weight.metrics[0].id, 'bw_series');

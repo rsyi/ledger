@@ -18,6 +18,15 @@
 ///     weeks with no weigh-ins;
 ///   • wilks = total_kg × coeff(bw_kg).
 ///
+/// Monthly cadence ([monthlyWilksSeries], the trend chart — user
+/// 2026-09-21: "month-to-month measurements, rather than week-to-week,
+/// since I have deload weeks"): same per-lift best-of rule but over the
+/// CALENDAR MONTH, so a deload week inside a month can never drag the
+/// point (the month's heaviest qualifying set wins). Bodyweight = the
+/// mean of the month's weigh-ins, carried forward through months with
+/// no weigh-in at all ([WilksMonth.bwCarried]) — this is what lets the
+/// series run back through sparse weigh-in eras instead of truncating.
+///
 /// WILKS-2020 ("Wilks-2", March 2020 revision) male constants,
 /// verified 2026-09-21 against
 /// https://en.wikipedia.org/wiki/Wilks_coefficient — the revision
@@ -153,6 +162,112 @@ List<WilksWeek> weeklyWilksSeries(
           for (final l in wilksLifts)
             if (!trained.containsKey(l)) l,
         ],
+      ),
+    );
+  }
+  return out;
+}
+
+/// One monthly Wilks point.
+class WilksMonth {
+  /// First day of the calendar month.
+  final DateTime monthStart;
+  final double wilks;
+
+  /// SBD total in lbs (best-of-month capped e1RMs, carries included).
+  final double totalLbs;
+
+  /// The month's bodyweight reference in lbs — mean of the month's
+  /// weigh-ins, possibly carried from an earlier month ([bwCarried]).
+  final double bodyweightLbs;
+
+  /// Lifts whose value this month is carried forward (no qualifying
+  /// reps<=5 set this month).
+  final List<String> carried;
+
+  /// True when the month had no weigh-in and [bodyweightLbs] is the
+  /// last known monthly mean carried forward.
+  final bool bwCarried;
+
+  const WilksMonth({
+    required this.monthStart,
+    required this.wilks,
+    required this.totalLbs,
+    required this.bodyweightLbs,
+    this.carried = const [],
+    this.bwCarried = false,
+  });
+}
+
+/// Monthly Wilks series per the library-doc semantics (see "Monthly
+/// cadence" above). Points start at the first calendar month where all
+/// three lifts AND a bodyweight are known and run contiguously through
+/// the last month with any input — or through [through]'s month when
+/// that is later (so the current, not-yet-trained month still gets a
+/// carried point). Empty when the inputs never cover all three lifts
+/// plus a weigh-in.
+List<WilksMonth> monthlyWilksSeries(
+  List<StrengthRow> strengthRows,
+  List<WeightRow> weighIns, {
+  DateTime? through,
+}) {
+  DateTime monthOf(DateTime d) => DateTime(d.year, d.month);
+
+  // Best qualifying e1RM per (month, lift).
+  final bestByMonth = <DateTime, Map<String, double>>{};
+  for (final r in strengthRows) {
+    final lift = mainLiftByExercise[r.exercise];
+    if (lift == null || !wilksLifts.contains(lift)) continue;
+    if (r.reps <= 0 || r.reps > 5 || r.weight <= 0) continue;
+    final mo = monthOf(r.date);
+    final e = epleyE1rm(r.weight, r.reps);
+    final m = bestByMonth[mo] ??= {};
+    if ((m[lift] ?? 0) < e) m[lift] = e;
+  }
+
+  // Monthly bodyweight: mean of the month's weigh-ins.
+  final bwSum = <DateTime, double>{};
+  final bwN = <DateTime, int>{};
+  for (final w in weighIns) {
+    final mo = monthOf(w.date);
+    bwSum[mo] = (bwSum[mo] ?? 0) + w.weightLbs;
+    bwN[mo] = (bwN[mo] ?? 0) + 1;
+  }
+
+  final months = <DateTime>{...bestByMonth.keys, ...bwSum.keys};
+  if (months.isEmpty) return const [];
+  final sorted = months.toList()..sort();
+  final first = sorted.first;
+  var last = sorted.last;
+  if (through != null) {
+    final t = monthOf(through);
+    if (t.isAfter(last)) last = t;
+  }
+
+  final out = <WilksMonth>[];
+  final lifts = <String, double>{}; // carried lift values
+  double? bw;
+  for (var m = first; !m.isAfter(last); m = DateTime(m.year, m.month + 1)) {
+    final trained = bestByMonth[m] ?? const <String, double>{};
+    lifts.addAll(trained);
+    final n = bwN[m];
+    if (n != null) bw = bwSum[m]! / n;
+    if (bw == null || wilksLifts.any((l) => !lifts.containsKey(l))) {
+      continue; // not computable yet — never guess
+    }
+    final totalLbs =
+        wilksLifts.fold<double>(0, (sum, l) => sum + lifts[l]!);
+    out.add(
+      WilksMonth(
+        monthStart: m,
+        wilks: totalLbs * kgPerLb * wilks2020MaleCoeff(bw * kgPerLb),
+        totalLbs: totalLbs,
+        bodyweightLbs: bw,
+        carried: [
+          for (final l in wilksLifts)
+            if (!trained.containsKey(l)) l,
+        ],
+        bwCarried: n == null,
       ),
     );
   }

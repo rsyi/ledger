@@ -69,6 +69,13 @@ class MetricConfig {
   /// unparseable.
   final DateTime? from;
 
+  /// Acceptable-drop floor (yaml `floor_pct: 2.5`), percent BELOW the
+  /// `from`-anchored reference: the chart draws a second dashed line at
+  /// reference × (1 − floor_pct/100) — the "act if you sink under this"
+  /// line (wilks_series during the cut). Null when absent or malformed
+  /// (back-compat: older configs simply get no floor line).
+  final double? floorPct;
+
   const MetricConfig({
     required this.id,
     this.kind = MetricKind.stat,
@@ -79,6 +86,7 @@ class MetricConfig {
     this.goalBandPerLb,
     this.lifts = const [],
     this.from,
+    this.floorPct,
   });
 }
 
@@ -179,6 +187,7 @@ List<MetricConfig> _parseMetrics(Object? raw) {
     final id = m['id']?.toString().trim() ?? '';
     if (id.isEmpty) continue;
     final goal = m['goal'];
+    final floorPct = m['floor_pct'];
     final lifts = m['lifts'];
     out.add(
       MetricConfig(
@@ -197,6 +206,7 @@ List<MetricConfig> _parseMetrics(Object? raw) {
             ? [for (final l in lifts) l.toString()]
             : const [],
         from: DateTime.tryParse(m['from']?.toString() ?? ''),
+        floorPct: floorPct is num ? floorPct.toDouble() : null,
       ),
     );
   }

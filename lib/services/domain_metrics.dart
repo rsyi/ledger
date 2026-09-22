@@ -8,7 +8,8 @@
 ///
 /// Full built-in vocabulary (P2 + P3): pl_total, e1rm_reference,
 /// all_time_best_weight, wilks, wilks_series (strength — wilks is the
-/// WILKS-2020 SBD score, see services/wilks.dart), bw_series, bf_series
+/// WILKS-2020 SBD score, weekly-current stat; wilks_series is the
+/// MONTHLY trend, see services/wilks.dart), bw_series, bf_series
 /// (weight),
 /// kcal_series, protein_series (meals — daily sums; protein carries a
 /// bodyweight-scaled goal band), grade_pyramid, session_frequency
@@ -53,22 +54,31 @@ class MetricStats extends MetricData {
 }
 
 /// A daily line chart: raw [points], optional smoothed [avg] overlay,
-/// optional flat [goal] target line, optional shaded goal band
-/// ([bandLow]..[bandHigh] — both set or both null).
+/// optional flat [goal] target line, optional acceptable-drop [floor]
+/// line (a second dashed line under the goal — wilks_series' "act if
+/// you sink under this" during a cut), optional shaded goal band
+/// ([bandLow]..[bandHigh] — both set or both null). [fullHistory] asks
+/// the chart to plot the whole series instead of its default trailing
+/// window (monthly series — a month-cadence trend inside an 84-day
+/// window is 3 points).
 class MetricSeries extends MetricData {
   final List<({DateTime day, double value})> points;
   final List<({DateTime day, double value})> avg;
   final double? goal;
+  final double? floor;
   final double? bandLow;
   final double? bandHigh;
   final String? unit;
+  final bool fullHistory;
   const MetricSeries({
     required this.points,
     this.avg = const [],
     this.goal,
+    this.floor,
     this.bandLow,
     this.bandHigh,
     this.unit,
+    this.fullHistory = false,
   });
 }
 
@@ -365,11 +375,11 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       return _perLiftStats(best, lifts, withUnit);
 
     case 'wilks':
-    case 'wilks_series':
       // WILKS-2020 SBD score (squat+bench+deadlift only — NOT the
-      // 4-lift pl_total). Weekly best capped e1RM per lift (reps <= 5,
-      // carried forward when untrained) at that week's 7-day-avg
-      // bodyweight. All semantics + verified constants: wilks.dart.
+      // 4-lift pl_total). The stat stays WEEKLY-current: best capped
+      // e1RM per lift (reps <= 5, carried forward when untrained) at
+      // that week's 7-day-avg bodyweight. All semantics + verified
+      // constants: wilks.dart.
       if (inputs.strengthRows.isEmpty) {
         return const MetricUnavailable('no strength history');
       }
@@ -386,44 +396,82 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
           'no squat/bench/deadlift sets with reps ≤ 5 yet',
         );
       }
-      if (m.id == 'wilks') {
-        final last = weeks.last;
-        return MetricStats(
-          [
-            MetricStat(
-              label: 'Wilks (SBD)',
-              value: last.wilks.toStringAsFixed(1),
-            ),
-          ],
-          note: 'total ${fmtLb(last.totalLbs.roundToDouble())} lb @ '
-              '${last.bodyweightLbs.toStringAsFixed(1)} lb bw'
-              '${last.carried.isEmpty ? '' : ' · carried: ${last.carried.join(', ')}'}',
+      final last = weeks.last;
+      return MetricStats(
+        [
+          MetricStat(
+            label: 'Wilks (SBD)',
+            value: last.wilks.toStringAsFixed(1),
+          ),
+        ],
+        note: 'total ${fmtLb(last.totalLbs.roundToDouble())} lb @ '
+            '${last.bodyweightLbs.toStringAsFixed(1)} lb bw'
+            '${last.carried.isEmpty ? '' : ' · carried: ${last.carried.join(', ')}'}',
+      );
+
+    case 'wilks_series':
+      // The TREND is month-to-month (user 2026-09-21: "month-to-month
+      // measurements, rather than week-to-week, since I have deload
+      // weeks") — best-of-calendar-month per lift so a deload week
+      // can't drag a point, monthly-mean bodyweight carried through
+      // months with no weigh-in (which is what lets the series run
+      // back through sparse weigh-in eras instead of truncating).
+      if (inputs.strengthRows.isEmpty) {
+        return const MetricUnavailable('no strength history');
+      }
+      if (inputs.weightDaily.isEmpty) {
+        return const MetricUnavailable('no weigh-ins for bodyweight');
+      }
+      final months = monthlyWilksSeries(
+        inputs.strengthRows,
+        inputs.weightDaily,
+        through: inputs.today,
+      );
+      if (months.isEmpty) {
+        return const MetricUnavailable(
+          'no squat/bench/deadlift sets with reps ≤ 5 yet',
         );
       }
-      // wilks_series: window from m.from (block-0 start) with the
-      // dashed reference at the value AS OF that date — the stability
-      // target through the cut. No `from` → full series, no reference.
-      var points = [
-        for (final w in weeks) (day: w.weekStart, value: w.wilks),
+      final points = [
+        for (final mo in months) (day: mo.monthStart, value: mo.wilks),
       ];
+      // `from` anchors the dashed REFERENCE at the WEEKLY value as of
+      // that date — the Wilks the cut was walked into with (327.5 on
+      // 2026-09-21). Weekly, not monthly, on purpose: the cut-start
+      // month's point keeps absorbing best-of-month sets logged during
+      // the cut itself, which would move the yardstick. The series
+      // shows the full computable history (user 2026-09-22: "wilks
+      // should be tracked for longer"). floor_pct then hangs the
+      // acceptable-drop line under the reference: reference ×
+      // (1 − pct/100); 3+ weeks below the floor = the act signal.
       double? reference;
       final from = m.from;
       if (from != null) {
-        final fromMonday = mondayOf(from);
-        // Value as of the window start: last week at/before it (the
-        // Wilks the cut was walked into with), else the first point.
-        var ref = weeks.first;
-        for (final w in weeks) {
-          if (!w.weekStart.isAfter(fromMonday)) ref = w;
+        final weeks = weeklyWilksSeries(
+          inputs.strengthRows,
+          inputs.weightDaily,
+          through: inputs.today,
+        );
+        if (weeks.isNotEmpty) {
+          final fromMonday = mondayOf(from);
+          var ref = weeks.first;
+          for (final w in weeks) {
+            if (!w.weekStart.isAfter(fromMonday)) ref = w;
+          }
+          reference = ref.wilks;
         }
-        reference = ref.wilks;
-        // `from` anchors the REFERENCE only; the series itself shows
-        // the full computable history (user 2026-09-22: "wilks should
-        // be tracked for longer"). Wilks is a career-scale number —
-        // clipping it to the block hid the trend the reference line is
-        // there to be compared against.
       }
-      return MetricSeries(points: points, goal: reference, unit: m.unit);
+      final floorPct = m.floorPct;
+      final floor = reference == null || floorPct == null
+          ? null
+          : reference * (1 - floorPct / 100);
+      return MetricSeries(
+        points: points,
+        goal: reference,
+        floor: floor,
+        unit: m.unit,
+        fullHistory: true,
+      );
 
     case 'bw_series':
       if (inputs.weightDaily.isEmpty) {

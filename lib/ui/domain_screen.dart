@@ -446,11 +446,14 @@ class _BarList extends StatelessWidget {
 }
 
 /// Compact series chart: raw points (faint), optional smoothed line
-/// (solid), optional flat goal line (dashed tertiary). Window = the
+/// (solid), optional flat goal line (dashed tertiary), optional
+/// acceptable-drop floor line (dotted error color — the "act if you
+/// sink under this" line, e.g. wilks_series' cut floor). Window = the
 /// trailing 84 days; widens to full history when the window holds
-/// fewer than two points (sparse series like caliper body-fat). Same
-/// fl_chart machinery as the Program screen's weight chart, shrunk to
-/// header size.
+/// fewer than two points (sparse series like caliper body-fat) or when
+/// the series asks for it ([MetricSeries.fullHistory] — monthly
+/// trends). Same fl_chart machinery as the Program screen's weight
+/// chart, shrunk to header size.
 class _MetricChart extends StatelessWidget {
   final MetricSeries series;
   final DateTime today;
@@ -474,7 +477,7 @@ class _MetricChart extends StatelessWidget {
       for (final p in series.points)
         if (!p.day.isBefore(windowStart)) p,
     ];
-    if (points.length < 2) {
+    if (series.fullHistory || points.length < 2) {
       points = series.points;
       if (points.isNotEmpty) windowStart = points.first.day;
     }
@@ -497,6 +500,7 @@ class _MetricChart extends StatelessWidget {
     final rawSpots = [for (final p in points) FlSpot(_x(p.day), p.value)];
     final avgSpots = [for (final p in avg) FlSpot(_x(p.day), p.value)];
     final goal = series.goal;
+    final floor = series.floor;
     final bandLow = series.bandLow;
     final bandHigh = series.bandHigh;
 
@@ -504,6 +508,7 @@ class _MetricChart extends StatelessWidget {
       for (final s in rawSpots) s.y,
       for (final s in avgSpots) s.y,
       ?goal,
+      ?floor,
       ?bandLow,
       ?bandHigh,
     ];
@@ -563,7 +568,13 @@ class _MetricChart extends StatelessWidget {
                   sideTitles: SideTitles(
                     showTitles: true,
                     reservedSize: 22,
-                    interval: rangeDays <= 45 ? 14 : 30,
+                    // ~monthly labels, thinning out on long (full-
+                    // history) windows so they stay legible.
+                    interval: rangeDays <= 45
+                        ? 14
+                        : rangeDays <= 200
+                            ? 30
+                            : (rangeDays / 6).ceilToDouble(),
                     getTitlesWidget: (value, meta) {
                       final dt = DateTime.fromMillisecondsSinceEpoch(
                         (value * 86400000).toInt(),
@@ -625,6 +636,17 @@ class _MetricChart extends StatelessWidget {
                     dashArray: [6, 4],
                     dotData: const FlDotData(show: false),
                   ),
+                // Acceptable-drop floor: dotted, error-toned — visually
+                // subordinate to the goal line it hangs under.
+                if (floor != null)
+                  LineChartBarData(
+                    spots: [FlSpot(xMin, floor), FlSpot(xMax, floor)],
+                    isCurved: false,
+                    barWidth: 1.2,
+                    color: scheme.error.withValues(alpha: 0.7),
+                    dashArray: [2, 4],
+                    dotData: const FlDotData(show: false),
+                  ),
               ],
               lineTouchData: LineTouchData(
                 enabled: true,
@@ -650,13 +672,16 @@ class _MetricChart extends StatelessWidget {
             ),
           ),
         ),
-        if (goal != null || hasBand || goalNote != null)
+        if (goal != null || floor != null || hasBand || goalNote != null)
           Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text(
               [
                 if (goal != null)
                   'goal ${goal.toStringAsFixed(goal == goal.roundToDouble() ? 0 : 1)}'
+                      '${series.unit == null ? '' : ' ${series.unit}'}',
+                if (floor != null)
+                  'floor ${floor.toStringAsFixed(floor == floor.roundToDouble() ? 0 : 1)}'
                       '${series.unit == null ? '' : ' ${series.unit}'}',
                 if (hasBand)
                   'goal ${bandLow.round()}–${bandHigh.round()}'

@@ -412,31 +412,101 @@ void main() {
       expect(d.note, contains('carried: squat, bench, deadlift'));
     });
 
-    test('wilks_series clips to `from` and anchors the reference there',
-        () {
+    test(
+        'wilks_series: monthly points, full history, from-anchored '
+        'reference + floor', () {
+      // Jul: all three lifts + weigh-in. Aug: nothing (fully carried).
+      // Sep: squat improves, weigh-in drops; a second squat PR lands
+      // AFTER `from`'s week (09-21) — the monthly point includes it,
+      // the reference must NOT (327.5 semantics: the reference is the
+      // WEEKLY value walked into the cut with, not the best of the
+      // whole cut-start month).
+      final rows2 = [
+        row('Barbell Squat', 300, 1, '2026-07-06'),
+        row('Flat Barbell Bench Press', 200, 3, '2026-07-08'),
+        row('Barbell Deadlift', 400, 1, '2026-07-10'),
+        row('Barbell Squat', 305, 1, '2026-09-01'),
+        row('Barbell Squat', 325, 1, '2026-09-21'), // after from's week
+      ];
+      final daily = [
+        WeightRow(date: DateTime(2026, 7, 5), weightLbs: 166),
+        WeightRow(date: DateTime(2026, 9, 2), weightLbs: 164),
+      ];
+      final d = computeMetric(
+        MetricConfig(
+          id: 'wilks_series',
+          from: DateTime(2026, 9, 14),
+          floorPct: 2.5,
+        ),
+        DomainMetricInputs(
+          strengthRows: rows2,
+          weightDaily: daily,
+          today: today,
+        ),
+      ) as MetricSeries;
+      // Month-to-month cadence (user 2026-09-21 — deload weeks make
+      // weekly points noisy), FULL history: Jul, Aug (carried), Sep.
+      expect(
+        d.points.map((p) => p.day),
+        [DateTime(2026, 7, 1), DateTime(2026, 8, 1), DateTime(2026, 9, 1)],
+      );
+      final julTotal = e1rm(300, 1) + e1rm(200, 3) + e1rm(400, 1);
+      expect(
+        d.points[0].value,
+        closeTo(julTotal * kgPerLb * wilks2020MaleCoeff(166 * kgPerLb), 1e-9),
+      );
+      expect(d.points[1].value, closeTo(d.points[0].value, 1e-9));
+      // The Sep monthly point takes the month's best squat (the 09-21
+      // single).
+      final sepTotal = e1rm(325, 1) + e1rm(200, 3) + e1rm(400, 1);
+      expect(
+        d.points[2].value,
+        closeTo(sepTotal * kgPerLb * wilks2020MaleCoeff(164 * kgPerLb), 1e-9),
+      );
+      // Reference = the WEEKLY value as of `from` (week of 09-14:
+      // squat still 305) — the Wilks the cut was walked into with, not
+      // the cut-start month's eventual best. Floor hangs 2.5% under it.
+      final refTotal = e1rm(305, 1) + e1rm(200, 3) + e1rm(400, 1);
+      final ref = refTotal * kgPerLb * wilks2020MaleCoeff(164 * kgPerLb);
+      expect(d.goal, closeTo(ref, 1e-9));
+      expect(d.floor, closeTo(ref * 0.975, 1e-9));
+      // The chart must not clip monthly history to its 84-day window.
+      expect(d.fullHistory, isTrue);
+    });
+
+    test('wilks_series without from/floor_pct: no reference, no floor', () {
       final daily = [
         for (var i = 0; i < 21; i++)
           WeightRow(date: DateTime(2026, 9, 1 + i), weightLbs: 164),
       ];
       final d = computeMetric(
-        MetricConfig(id: 'wilks_series', from: DateTime(2026, 9, 14)),
+        const MetricConfig(id: 'wilks_series'),
         DomainMetricInputs(
           strengthRows: strengthRows,
           weightDaily: daily,
           today: today,
         ),
       ) as MetricSeries;
-      // `from` anchors the reference only — the series keeps the full
-      // computable history (Wilks is a career-scale trend; the dashed
-      // reference marks the cut-start value to compare it against).
-      final fromWeeks =
-          d.points.where((p) => !p.day.isBefore(DateTime(2026, 9, 14)));
-      expect(fromWeeks, hasLength(2));
-      expect(d.points.length, greaterThanOrEqualTo(2),
-          reason: 'pre-from history must survive');
-      final refWeek =
-          d.points.lastWhere((p) => !p.day.isAfter(DateTime(2026, 9, 14)));
-      expect(d.goal, closeTo(refWeek.value, 1e-9));
+      expect(d.goal, isNull);
+      expect(d.floor, isNull);
+    });
+
+    test('wilks_series floor_pct without from has no reference to '
+        'anchor to — no floor', () {
+      final daily = [
+        for (var i = 0; i < 21; i++)
+          WeightRow(date: DateTime(2026, 9, 1 + i), weightLbs: 164),
+      ];
+      final d = computeMetric(
+        const MetricConfig(id: 'wilks_series', floorPct: 2.5),
+        DomainMetricInputs(
+          strengthRows: strengthRows,
+          weightDaily: daily,
+          today: today,
+        ),
+      ) as MetricSeries;
+      expect(d.goal, isNull);
+      expect(d.floor, isNull);
     });
 
     test('wilks without weigh-ins degrades honestly', () {

@@ -144,4 +144,112 @@ void main() {
       expect(weeklyWilksSeries([], weights), isEmpty);
     });
   });
+
+  group('monthlyWilksSeries', () {
+    // August / September 2026 (October only via `through`).
+    final rows = [
+      // August: all three lifts.
+      _set('2026-08-03', 'Barbell Squat', 300, 1), // e1RM 310
+      _set('2026-08-05', 'Flat Barbell Bench Press', 200, 3), // e1RM 220
+      _set('2026-08-10', 'Barbell Deadlift', 400, 1), // e1RM 413.33
+      // Aug 31 is a Monday whose ISO week runs into September — the
+      // set belongs to AUGUST by calendar month, and beats the 08-05
+      // bench (224 > 220).
+      _set('2026-08-31', 'Flat Barbell Bench Press', 210, 2), // e1RM 224
+      // September: squat improves early, then a weaker deload set —
+      // best-of-month must win, so the deload can't drag the point.
+      _set('2026-09-01', 'Barbell Squat', 305, 1), // e1RM 315.17
+      _set('2026-09-21', 'Barbell Squat', 250, 5), // deload, e1RM 291.67
+      // Bench untrained in September (carried); deadlift only has a
+      // reps-6 set → does not qualify, carried too.
+      _set('2026-09-15', 'Barbell Deadlift', 350, 6), // reps > 5 → ignored
+      // Press is never part of the total; non-mains ignored.
+      _set('2026-09-14', 'Overhead Press', 500, 1),
+      _set('2026-09-14', 'Leg Press', 600, 5),
+    ];
+    final weights = [
+      _bw('2026-08-04', 164),
+      _bw('2026-08-20', 166), // Aug mean 165; September has NO weigh-in
+    ];
+
+    double e(double w, int reps) => w * (1 + reps / 30);
+
+    test('groups by calendar month, bw = mean of the month\'s weigh-ins',
+        () {
+      final s = monthlyWilksSeries(rows, weights);
+      expect(s, hasLength(2));
+
+      final aug = s[0];
+      expect(aug.monthStart, DateTime(2026, 8, 1));
+      final totalAug = e(300, 1) + e(210, 2) + e(400, 1);
+      expect(aug.totalLbs, closeTo(totalAug, 1e-9));
+      expect(aug.bodyweightLbs, closeTo(165, 1e-9));
+      expect(
+        aug.wilks,
+        closeTo(totalAug * kgPerLb * wilks2020MaleCoeff(165 * kgPerLb), 1e-9),
+      );
+      expect(aug.carried, isEmpty);
+      expect(aug.bwCarried, isFalse);
+    });
+
+    test('deload sets do not drag the month — best-of wins', () {
+      final s = monthlyWilksSeries(rows, weights);
+      final sep = s[1];
+      expect(sep.monthStart, DateTime(2026, 9, 1));
+      // Squat = the 09-01 top single, NOT the 09-21 deload 5x250.
+      final totalSep = e(305, 1) + e(210, 2) + e(400, 1);
+      expect(sep.totalLbs, closeTo(totalSep, 1e-9));
+    });
+
+    test('carries untrained lifts forward and reports them', () {
+      final s = monthlyWilksSeries(rows, weights);
+      final sep = s[1];
+      expect(sep.carried, ['bench', 'deadlift']);
+    });
+
+    test('bodyweight carries into months with no weigh-ins, flagged', () {
+      final s = monthlyWilksSeries(rows, weights);
+      expect(s[1].bodyweightLbs, closeTo(165, 1e-9));
+      expect(s[1].bwCarried, isTrue);
+    });
+
+    test('no point until all three lifts AND a bodyweight are known', () {
+      final s = monthlyWilksSeries(
+        [
+          _set('2026-08-03', 'Barbell Squat', 300, 1),
+          _set('2026-08-05', 'Flat Barbell Bench Press', 200, 3),
+          // deadlift first appears in September
+          _set('2026-09-05', 'Barbell Deadlift', 400, 1),
+        ],
+        weights,
+      );
+      expect(s, hasLength(1));
+      expect(s.single.monthStart, DateTime(2026, 9, 1));
+    });
+
+    test('through extends the series with fully carried months', () {
+      final s = monthlyWilksSeries(
+        rows,
+        weights,
+        through: DateTime(2026, 11, 15), // Oct + Nov: no data at all
+      );
+      expect(s, hasLength(4));
+      expect(s[2].monthStart, DateTime(2026, 10, 1));
+      expect(s.last.monthStart, DateTime(2026, 11, 1));
+      expect(s.last.carried, ['squat', 'bench', 'deadlift']);
+      expect(s.last.bwCarried, isTrue);
+      expect(s.last.totalLbs, closeTo(s[1].totalLbs, 1e-9));
+      expect(s.last.wilks, closeTo(s[1].wilks, 1e-9));
+    });
+
+    test('empty inputs yield an empty series', () {
+      expect(monthlyWilksSeries([], []), isEmpty);
+      expect(
+        monthlyWilksSeries([], [], through: DateTime(2026, 9, 21)),
+        isEmpty,
+      );
+      // Weigh-ins but no lifts → still empty (never guess a total).
+      expect(monthlyWilksSeries([], weights), isEmpty);
+    });
+  });
 }

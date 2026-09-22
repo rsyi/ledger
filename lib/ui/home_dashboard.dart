@@ -24,17 +24,25 @@
 ///   BODY      bw 7-day avg + weekly rate vs the declared target + the
 ///             Program screen's declared-vs-observed verdict, condensed
 ///             to a chip.
-///   STRENGTH  per lift, the three numbers the working-max spec §0 says
-///             never to confuse — full labels + age tags (2026-09-22):
-///             recent e1RM (best capped e1RM in the last 14 days of
-///             real work — light weeks + sub-0.75-effort sets excluded,
-///             window widens until it finds something and the age tag
-///             tells the story; DISPLAY-ONLY — the §2.5 42-day
-///             reference is unchanged internally), working max (the
-///             controller setting percentages hang off) with its
-///             4-week direction arrow, and the all-time best e1RM from
-///             full strength history (cached per session). Every
-///             number carries a "3d"/"2w"/"5mo" age tag. Pain caps
+///   STRENGTH  per lift, TWO columns (rebuild 2026-09-22 — user: "only
+///             show recent e1rm strength against my all-time tops, and
+///             also show the wilks calculations for each"): recent
+///             e1RM (best capped e1RM in the last 14 days of real work
+///             — light weeks + sub-0.75-effort sets excluded, window
+///             widens until it finds something and the age tag tells
+///             the story; DISPLAY-ONLY — the §2.5 42-day reference is
+///             unchanged internally) vs the all-time best e1RM from
+///             full strength history (cached per session). Each value
+///             carries its per-lift Wilks points (wilksPointsLb):
+///             recent priced at CURRENT bodyweight (7-day avg), the
+///             all-time top at the CONTEMPORANEOUS bodyweight — the
+///             monthly mean as of the PR's month — which is what makes
+///             an old fat-bulk PR comparable. Every number carries a
+///             "3d"/"2w"/"5mo" age tag. The WORKING MAX column moved
+///             OFF this card (it lives on the Program tab's
+///             Configuration card; the detail sheet says so). The card
+///             is tagged "e1RM basis" so it can't be confused with the
+///             Wilks trend chart, which is ACTUAL-MAX basis. Pain caps
 ///             show as a labeled chip.
 ///   EXECUTION this week's working / near-max / bench counts vs the
 ///             program targets, + fired-flag count. Data: the current
@@ -73,7 +81,12 @@ import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
-import '../services/wilks.dart' show WilksWeek, weeklyWilksSeries;
+import '../services/wilks.dart'
+    show
+        WilksWeek,
+        contemporaneousBodyweightLbs,
+        weeklyWilksSeries,
+        wilksPointsLb;
 import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
 
@@ -188,29 +201,41 @@ class _EngineData {
   });
 }
 
-/// STRENGTH card data: the spec-§0 trio per lift, each value paired
-/// with the date it was set (→ age tags).
+/// One STRENGTH-card value: pounds + the date it was set (→ age tag) +
+/// its per-lift Wilks points (null when no bodyweight covers the date).
+typedef _LiftValue = ({double value, DateTime date, double? wilks});
+
+/// STRENGTH card data (rebuild 2026-09-22): recent e1RM vs all-time
+/// top per lift, each with an age tag and Wilks points. [trends] stays
+/// only for pain caps — the working-max COLUMN moved to the Program
+/// tab's Configuration card.
 class _StrengthData {
-  /// WM value + effective_from + 4-week direction + pain cap, per lift.
+  /// WM snapshot per lift — the card reads ONLY painCap from it now.
   final List<LiftTrend> trends;
 
   /// recent e1RM: best capped e1RM in the trailing 14 days of real
   /// work (light weeks + effort < 0.75 excluded; window widens until
-  /// found), with the date of the set.
-  final Map<String, ({double value, DateTime date})> recent;
+  /// found). Wilks priced at CURRENT bodyweight ([currentBwLbs]).
+  final Map<String, _LiftValue> recent;
 
-  /// All-time best e1RM per lift + the date it was set (full history,
-  /// session-cached).
-  final Map<String, ({double value, DateTime date})> best;
+  /// All-time best e1RM per lift (full history, session-cached).
+  /// Wilks priced at the CONTEMPORANEOUS bodyweight — the monthly mean
+  /// as of the month the PR was set.
+  final Map<String, _LiftValue> best;
+
+  /// The bodyweight (lb) the recent column's Wilks is priced at:
+  /// 7-day average, falling back to the current month's mean. Null →
+  /// no wilks on the recent column.
+  final double? currentBwLbs;
 
   const _StrengthData({
     required this.trends,
     required this.recent,
     required this.best,
+    required this.currentBwLbs,
   });
 
-  bool get isEmpty =>
-      trends.every((t) => t.valueLb == null) && recent.isEmpty && best.isEmpty;
+  bool get isEmpty => recent.isEmpty && best.isEmpty;
 }
 
 class HomeDashboardState extends State<HomeDashboard> {
@@ -461,7 +486,17 @@ class HomeDashboardState extends State<HomeDashboard> {
             anchorMondayOf(weekStart),
           )?.weekType;
     final graded = rows.isEmpty ? const <GradedSet>[] : gradeSets(rows);
-    final recent = <String, ({double value, DateTime date})>{};
+    // Wilks pricing (2026-09-22): recent column at CURRENT bodyweight
+    // (7-day avg, same "current bodyweight" as the BODY/hero rows;
+    // month-mean fallback when the last weigh-in is stale), all-time
+    // column at the CONTEMPORANEOUS bodyweight — the monthly mean as
+    // of the PR's month (contemporaneousBodyweightLbs) — so an old
+    // fat-bulk PR is priced at the body that lifted it.
+    final daily = (await _weights)?.daily ?? const <WeightRow>[];
+    final currentBw =
+        observedWeightStats(daily, _today).bw7dAvg ??
+        contemporaneousBodyweightLbs(daily, _today);
+    final recent = <String, _LiftValue>{};
     for (final lift in synthesisLifts) {
       final r = recentBestE1rm(
         graded,
@@ -470,15 +505,33 @@ class HomeDashboardState extends State<HomeDashboard> {
         weekTypeOf: program == null ? null : weekTypeOf,
         weekStartDay: wsDay,
       );
-      if (r != null) recent[lift] = r;
+      if (r != null) {
+        recent[lift] = (
+          value: r.value,
+          date: r.date,
+          wilks: currentBw == null ? null : wilksPointsLb(r.value, currentBw),
+        );
+      }
     }
-    final best = rows.isEmpty
+    final bestRaw = rows.isEmpty
         ? const <String, ({double value, DateTime date})>{}
         : (_bestE1rmCache ??= allTimeBestE1rmsWithDates(rows));
+    final best = <String, _LiftValue>{
+      for (final e in bestRaw.entries)
+        e.key: (
+          value: e.value.value,
+          date: e.value.date,
+          wilks: switch (contemporaneousBodyweightLbs(daily, e.value.date)) {
+            null => null,
+            final bw => wilksPointsLb(e.value.value, bw),
+          },
+        ),
+    };
     return _StrengthData(
       trends: liftTrends(snap, _today),
       recent: recent,
       best: best,
+      currentBwLbs: currentBw,
     );
   }
 
@@ -702,60 +755,71 @@ class HomeDashboardState extends State<HomeDashboard> {
 
   Future<void> _openStrengthSheet() async {
     final d = await _strength;
-    String liftLine(Map<String, ({double value, DateTime date})> m) => m.isEmpty
+    // One line per lift so the wilks tag stays attached to its number:
+    // "squat 315 · 121.4w (2d)".
+    String liftLines(Map<String, _LiftValue> m) => m.isEmpty
         ? '—'
         : synthesisLifts
               .where(m.containsKey)
               .map(
                 (l) =>
-                    '$l ${fmtLb(m[l]!.value.roundToDouble())} '
-                    '(${fmtAge(m[l]!.date, _today)})',
+                    '$l ${fmtLb(m[l]!.value.roundToDouble())}'
+                    '${m[l]!.wilks == null ? '' : ' · ${m[l]!.wilks!.toStringAsFixed(1)}w'}'
+                    ' (${fmtAge(m[l]!.date, _today)})',
               )
-              .join(' · ');
-    final wmLine = d == null
-        ? '—'
-        : [
-            for (final t in d.trends)
-              if (t.valueLb != null)
-                '${t.lift} ${fmtLb(t.valueLb!)}'
-                    '${t.asOf == null ? '' : ' (${fmtAge(t.asOf!, _today)})'}',
-          ].join(' · ');
+              .join('\n');
     final capped = [
       for (final t in d?.trends ?? const <LiftTrend>[])
         if (t.painCap) t.lift,
     ];
+    final bw = d?.currentBwLbs;
     await _showDetailSheet(
       title: 'Strength',
       entries: [
         _DetailEntry(
           label: 'recent e1RM',
-          value: liftLine(d?.recent ?? const {}),
+          value: liftLines(d?.recent ?? const {}),
           explain:
               'What you\'ve actually shown recently: the best '
               'estimated 1RM over the last 14 days of real work — '
               'deload (light-week) sets and easy sets under 75% effort '
               'don\'t count. When there\'s no real work in the window '
               'it slides back to your newest qualifying set; the age '
-              'tag tells you how current the number is.',
+              'tag tells you how current the number is. The ·w number '
+              'is the lift\'s Wilks points at your current bodyweight'
+              '${bw == null ? '' : ' (${bw.toStringAsFixed(1)} lb)'}.',
         ),
         _DetailEntry(
-          label: 'working max',
-          value: wmLine.isEmpty ? '—' : wmLine,
-          explain:
-              'The controller\'s setting that percentages hang off — '
-              'not your measured max. Moves on top-set RPE readings, '
-              'test singles, and manual overrides (working_max tab). '
-              'Arrow = 4-week direction; age = when the current value '
-              'took effect.',
-        ),
-        _DetailEntry(
-          label: 'all-time best',
-          value: liftLine(d?.best ?? const {}),
+          label: 'all-time top',
+          value: liftLines(d?.best ?? const {}),
           explain:
               'Your best-ever estimated 1RM (Epley, reps capped at '
               '12) over the full strength history — the ceiling the '
-              'other two numbers sit under; the age tag says when you '
-              'set it.',
+              'recent column sits under. Its Wilks points use the '
+              'bodyweight you carried THE MONTH the PR was set '
+              '(contemporaneous, from the monthly weigh-in means) — '
+              'that\'s what makes an old bulk-weight PR comparable to '
+              'today\'s cut numbers. No weigh-in history covering that '
+              'month → the wilks tag is omitted.',
+        ),
+        _DetailEntry(
+          label: 'basis',
+          value: 'e1RM',
+          explain:
+              'This card is e1RM-basis: estimated 1RMs, per your ask '
+              'for recent e1RM vs all-time tops. The Wilks trend chart '
+              'and its best-ever benchmark are ACTUAL-MAX basis — '
+              'heaviest weights actually lifted, no estimates. Same '
+              '"wilks" name, two bases; don\'t cross-compare them.',
+        ),
+        _DetailEntry(
+          label: 'working max',
+          value: 'Program › Configuration',
+          explain:
+              'No longer shown on this card. The working max is the '
+              'controller\'s setting that session percentages hang off '
+              '— not a measured max. It lives on the Program tab\'s '
+              'Configuration card, where you confirm or override it.',
         ),
         if (capped.isNotEmpty)
           _DetailEntry(
@@ -917,6 +981,16 @@ class HomeDashboardState extends State<HomeDashboard> {
     return _SynthCard(
       label: 'Strength',
       onTap: _openStrengthSheet,
+      // Subtle basis tag: THIS card is e1RM-basis (the user asked for
+      // recent e1RM vs all-time tops here); the Wilks trend chart and
+      // its best-ever benchmark are ACTUAL-MAX basis. The tag keeps
+      // the two surfaces from being read as the same number.
+      trailingBuilder: (context) => Text(
+        'e1RM basis',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
       child: FutureBuilder<_StrengthData?>(
         future: _strength,
         builder: (context, snap) {
@@ -935,11 +1009,11 @@ class HomeDashboardState extends State<HomeDashboard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const _LiftHeaderRow(),
-              for (final t in d.trends)
+              for (final lift in synthesisLifts)
                 _LiftNumbersRow(
-                  trend: t,
-                  recent: d.recent[t.lift],
-                  best: d.best[t.lift],
+                  lift: lift,
+                  recent: d.recent[lift],
+                  best: d.best[lift],
                   today: _today,
                 ),
               if (capped.isNotEmpty) ...[
@@ -1416,23 +1490,23 @@ class _VerdictChip extends StatelessWidget {
   }
 }
 
-/// Column headers for the STRENGTH card's three spec-§0 numbers —
-/// FULL labels (2026-09-22): the abbreviations ("e1RM"/"WM"/"best")
-/// made the three numbers read as one.
+/// Column headers for the STRENGTH card's two columns. Readability
+/// pass 2026-09-22: labelSmall (11sp) in onSurfaceVariant — the old
+/// 9sp outline-colored tags were illegible on the dark theme.
 class _LiftHeaderRow extends StatelessWidget {
   const _LiftHeaderRow();
 
   @override
   Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.labelSmall?.copyWith(
-      color: Theme.of(context).colorScheme.outline,
-      fontSize: 9,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      fontWeight: FontWeight.w600,
     );
     return Padding(
-      padding: const EdgeInsets.only(bottom: 1),
+      padding: const EdgeInsets.only(bottom: 2),
       child: Row(
         children: [
-          const SizedBox(width: 44),
+          const SizedBox(width: 56),
           Expanded(
             child: Text(
               'recent e1RM',
@@ -1442,14 +1516,7 @@ class _LiftHeaderRow extends StatelessWidget {
           ),
           Expanded(
             child: Text(
-              'working max',
-              textAlign: TextAlign.right,
-              style: style,
-            ),
-          ),
-          Expanded(
-            child: Text(
-              'all-time best',
+              'all-time top',
               textAlign: TextAlign.right,
               style: style,
             ),
@@ -1460,18 +1527,21 @@ class _LiftHeaderRow extends StatelessWidget {
   }
 }
 
-/// One lift's three numbers, aligned under the header's columns, each
-/// with an age tag ("3d"/"2w"/"5mo") saying when it was set: recent
-/// e1RM (14-day best of real work), working max (controller setting,
-/// with its 4-week direction glyph; age = when it took effect),
-/// all-time best e1RM.
+/// One lift's two columns, aligned under the header: recent e1RM
+/// (14-day best of real work) vs all-time top, each rendered as
+/// `315 · 121.4w · 2d` — pounds, per-lift Wilks points (current bw
+/// for recent, contemporaneous bw for the all-time top), and an age
+/// tag saying when it was set (a stale value can never masquerade as
+/// current). Readability pass 2026-09-22: numbers at bodySmall (12sp),
+/// Wilks + age tags at labelSmall (11sp) onSurfaceVariant — nothing
+/// below Material's 11sp legibility floor, no outline-on-dark text.
 class _LiftNumbersRow extends StatelessWidget {
-  final LiftTrend trend;
-  final ({double value, DateTime date})? recent;
-  final ({double value, DateTime date})? best;
+  final String lift;
+  final _LiftValue? recent;
+  final _LiftValue? best;
   final DateTime today;
   const _LiftNumbersRow({
-    required this.trend,
+    required this.lift,
     required this.recent,
     required this.best,
     required this.today,
@@ -1480,63 +1550,53 @@ class _LiftNumbersRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final (glyph, color) = switch (trend.direction) {
-      TrendDirection.up => ('↑', Colors.green.shade700),
-      TrendDirection.down => ('↓', scheme.error),
-      TrendDirection.flat => ('→', scheme.onSurfaceVariant),
-      TrendDirection.unknown => ('·', scheme.outline),
-    };
-    final numStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
+    final numStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
       fontWeight: FontWeight.w700,
       fontFeatures: const [FontFeature.tabularFigures()],
     );
-    final ageStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
-      fontSize: 8.5,
-      color: scheme.outline,
+    final tagStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
+      color: scheme.onSurfaceVariant,
       fontFeatures: const [FontFeature.tabularFigures()],
     );
-    String lb(double? v) => v == null ? '—' : fmtLb(v.roundToDouble());
-    // Number + a small dim age tag ("315 3d"). The tag rides along on
-    // EVERY number so a stale value can never masquerade as current.
-    Widget cell(double? value, DateTime? date, {InlineSpan? suffix}) =>
-        Expanded(
-          child: Text.rich(
-            TextSpan(
-              text: lb(value),
-              style: numStyle,
-              children: [
-                ?suffix,
-                if (value != null && date != null)
-                  TextSpan(text: ' ${fmtAge(date, today)}', style: ageStyle),
-              ],
+    Widget cell(_LiftValue? v) => Expanded(
+      child: v == null
+          ? Text('—', textAlign: TextAlign.right, style: tagStyle)
+          : Text.rich(
+              TextSpan(
+                text: fmtLb(v.value.roundToDouble()),
+                style: numStyle,
+                children: [
+                  if (v.wilks != null)
+                    TextSpan(
+                      text: ' · ${v.wilks!.toStringAsFixed(1)}w',
+                      style: tagStyle,
+                    ),
+                  TextSpan(
+                    text: ' · ${fmtAge(v.date, today)}',
+                    style: tagStyle,
+                  ),
+                ],
+              ),
+              textAlign: TextAlign.right,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            textAlign: TextAlign.right,
-            maxLines: 1,
-          ),
-        );
+    );
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1),
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
           SizedBox(
-            width: 44,
+            width: 56,
             child: Text(
-              trend.lift,
+              lift,
               style: Theme.of(
                 context,
               ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
-          cell(recent?.value, recent?.date),
-          cell(
-            trend.valueLb,
-            trend.asOf,
-            suffix: TextSpan(
-              text: glyph,
-              style: numStyle?.copyWith(color: color),
-            ),
-          ),
-          cell(best?.value, best?.date),
+          cell(recent),
+          cell(best),
         ],
       ),
     );
@@ -1623,11 +1683,13 @@ class _DetailTile extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 2),
+          // Readability pass 2026-09-22: explainer copy at bodyMedium
+          // (14sp) — bodySmall read as fine print on the dark theme.
           Text(
             entry.explain,
             style: Theme.of(
               context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ],
       ),

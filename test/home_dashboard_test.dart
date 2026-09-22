@@ -51,6 +51,17 @@ final _strengthView = ViewSchema(
   ],
 );
 
+final _weightView = ViewSchema(
+  name: 'weight',
+  datasource: 'gsheets',
+  table: 'weight',
+  entities: const [],
+  measures: const [],
+  dimensions: [
+    Dimension(name: 'date', type: DimensionType.date, expr: 'date'),
+  ],
+);
+
 Widget _wrap(Widget child) =>
     MaterialApp(home: Scaffold(body: SingleChildScrollView(child: child)));
 
@@ -83,8 +94,8 @@ void main() {
     expect(find.text('no status data'), findsNWidgets(2));
   });
 
-  testWidgets('STRENGTH renders recent-e1RM / working-max / all-time-best '
-      'columns with age tags even without a wm store', (tester) async {
+  testWidgets('STRENGTH renders recent-e1RM vs all-time-top columns with '
+      'wilks points and age tags; working max is gone', (tester) async {
     HomeDashboardState.clearBestE1rmCache();
     final strengthRepo = _FakeStatusRepo([
       {
@@ -97,26 +108,40 @@ void main() {
         'date': DateTime(2025, 1, 6),
         'exercise': 'Barbell Squat',
         'weight': 320,
-        'reps': 1, // e1rm ~330.7 — all-time best, long outside the window
+        'reps': 1, // e1rm ~330.7 — all-time top, long outside the window
       },
+    ]);
+    // Current bw: 7-day mean 165 (Sep 17–23). Contemporaneous bw for
+    // the Jan '25 PR: that month's mean, (174+176)/2 = 175.
+    final weightRepo = _FakeStatusRepo([
+      for (var i = 17; i <= 23; i++)
+        {'date': DateTime(2026, 9, i), 'weight_lbs': 165.0},
+      {'date': DateTime(2025, 1, 2), 'weight_lbs': 174.0},
+      {'date': DateTime(2025, 1, 28), 'weight_lbs': 176.0},
     ]);
     await tester.pumpWidget(_wrap(HomeDashboard(
       strengthView: _strengthView,
       strengthRepo: strengthRepo,
+      weightView: _weightView,
+      weightRepo: weightRepo,
       today: DateTime(2026, 9, 23),
     )));
     await tester.pumpAndSettle();
-    // Full column labels (2026-09-22 redesign — no abbreviations).
+    // Two columns only (2026-09-22 rebuild) + the basis tag; the
+    // working-max column moved to Program › Configuration.
     expect(find.text('recent e1RM'), findsOneWidget);
-    expect(find.text('working max'), findsOneWidget);
-    expect(find.text('all-time best'), findsOneWidget);
-    // Numbers carry age tags: "310 2d" (recent) / "331 21mo" (best).
+    expect(find.text('all-time top'), findsOneWidget);
+    expect(find.text('working max'), findsNothing);
+    expect(find.text('e1RM basis'), findsOneWidget);
+    // Cells: lb · wilks (current bw 165 / contemporaneous bw 175) · age.
+    // wilksPointsLb(310, 165) = 120.04…; wilksPointsLb(330.67, 175) =
+    // 123.44… (independently computed in wilks_test.dart).
     expect(
-      find.textContaining('310 2d', findRichText: true),
+      find.textContaining('310 · 120.0w · 2d', findRichText: true),
       findsOneWidget,
     );
     expect(
-      find.textContaining('331 21mo', findRichText: true),
+      find.textContaining('331 · 123.4w · 21mo', findRichText: true),
       findsOneWidget,
     );
   });
@@ -157,8 +182,8 @@ void main() {
     expect(openedStatus, isTrue);
   });
 
-  testWidgets('STRENGTH detail sheet explains the three numbers',
-      (tester) async {
+  testWidgets('STRENGTH detail sheet explains the two columns, both wilks '
+      'bases, and where the working max went', (tester) async {
     HomeDashboardState.clearBestE1rmCache();
     await tester.pumpWidget(_wrap(HomeDashboard(
       strengthView: _strengthView,
@@ -175,22 +200,29 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('STRENGTH'));
     await tester.pumpAndSettle();
-    // Labels appear in the card header AND the sheet (full labels both
-    // places since the 2026-09-22 redesign).
-    expect(find.text('working max'), findsNWidgets(2));
+    // Column labels appear in the card header AND the sheet.
     expect(find.text('recent e1RM'), findsNWidgets(2));
-    expect(find.text('all-time best'), findsNWidgets(2));
-    // The copy explains each number's semantics.
-    expect(find.textContaining('not your measured max'), findsOneWidget);
+    expect(find.text('all-time top'), findsNWidgets(2));
+    // The copy explains each number's semantics + the wilks pricing.
     expect(
       find.textContaining('last 14 days of real work'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('the age tag tells you'),
+      find.textContaining('Wilks points at your current bodyweight'),
       findsOneWidget,
     );
+    expect(find.textContaining('contemporaneous'), findsOneWidget);
     expect(find.textContaining('reps capped at'), findsOneWidget);
+    // Both wilks bases are called out (chart = actual-max, card = e1RM).
+    expect(find.textContaining('ACTUAL-MAX basis'), findsOneWidget);
+    // Working max: no column, just the pointer to its new home.
+    expect(find.text('working max'), findsOneWidget); // sheet entry only
+    expect(find.text('Program › Configuration'), findsOneWidget);
+    expect(
+      find.textContaining('Program tab\'s Configuration card'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('EXECUTION/ENGINE render status-row numbers and flag chip',

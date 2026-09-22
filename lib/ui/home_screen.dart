@@ -439,26 +439,18 @@ class _HomeScreenState extends State<HomeScreen> {
         return Scaffold(
           body: Builder(
             builder: (context) {
-              // Admin actions for the HOME tab's app bar. Not const: a
-              // const SyncStatusButton is identical across parent
-              // rebuilds, so Flutter would skip build() and freeze the
-              // pre-bootstrap empty state (SyncScheduler.instance null).
+              // Admin actions for the HOME tab's app bar. The old
+              // app-bar robot icon (generic analytics chat) is GONE:
+              // with a dedicated Coach tab in the bottom nav a second
+              // robot one row above it was redundant, and the analytics
+              // chat it actually opened now lives in the LOG tab's
+              // overflow menu (it's a data-questions tool — it belongs
+              // with the data). Not const: a const SyncStatusButton is
+              // identical across parent rebuilds, so Flutter would skip
+              // build() and freeze the pre-bootstrap empty state
+              // (SyncScheduler.instance null).
               final homeActions = <Widget>[
                 SyncStatusButton(),
-                if (chatModel != null)
-                  IconButton(
-                    icon: const Icon(Icons.smart_toy_outlined),
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ChatScreen(
-                          model: chatModel,
-                          github: github == null ? null : GithubClient(github),
-                          analytics: boot?.analytics,
-                        ),
-                      ),
-                    ),
-                    tooltip: 'Chat',
-                  ),
                 if (github != null)
                   IconButton(
                     icon: const Icon(Icons.cloud_download_outlined),
@@ -781,7 +773,37 @@ class _HomeScreenState extends State<HomeScreen> {
               final logTab = Scaffold(
                 appBar: AppBar(
                   title: const Text('Log'),
-                  actions: [SyncStatusButton()],
+                  actions: [
+                    SyncStatusButton(),
+                    // Generic analytics chat (run_query over the
+                    // ledger), demoted from the home app bar's robot
+                    // icon — unobtrusive but still reachable.
+                    if (chatModel != null)
+                      PopupMenuButton<String>(
+                        tooltip: 'More',
+                        onSelected: (v) {
+                          if (v == 'chat') {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => ChatScreen(
+                                  model: chatModel,
+                                  github: github == null
+                                      ? null
+                                      : GithubClient(github),
+                                  analytics: data.analytics,
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(
+                            value: 'chat',
+                            child: Text('Analytics chat'),
+                          ),
+                        ],
+                      ),
+                  ],
                 ),
                 body: RefreshIndicator(
                   onRefresh: () async => _domainsKey.currentState?.reload(),

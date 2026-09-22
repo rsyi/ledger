@@ -540,6 +540,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       weightRepo: weightView == null
                           ? null
                           : data.registry.forView(weightView),
+                      // OBSERVED Wilks block: strength rows + the
+                      // wilks_series config from dashboards.yaml.
+                      strengthView: dashStrengthView,
+                      strengthRepo: dashStrengthView == null
+                          ? null
+                          : data.registry.forView(dashStrengthView),
+                      dashboards: domainProvider,
                       wmStore: data.wmStore,
                     ),
                   ),

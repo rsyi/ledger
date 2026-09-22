@@ -14,6 +14,12 @@
 ///     measure grouped by date — one averaged point per day), then the
 ///     §2.5 windowed formulas from program_metrics/program_observed
 ///     (7-day avg, weekly rate, 3-week change) computed in pure Dart.
+///     Below the weight chart: the Wilks block — the strength domain's
+///     monthly wilks_series (same MetricChart widget, same
+///     dashboards.yaml config, so the two screens always agree) with
+///     its cut-start reference + floor lines, plus the weekly-current
+///     stat line from the hero's wilksStability math ("Wilks 327.5 ·
+///     floor 319.3 · 0 wks below").
 ///  4. VERDICT — PHASE_MISMATCH semantics: green (agree), amber
 ///     (drifting), red (three consecutive mismatch weeks — the flag
 ///     would fire).
@@ -27,13 +33,19 @@ import 'package:intl/intl.dart';
 
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
+import '../services/domain_config.dart';
+import '../services/domain_metrics.dart';
+import '../services/home_synthesis.dart' show strengthRowFromRecord;
+import '../services/phase_eigenvectors.dart' show wilksStability;
 import '../services/program_current.dart';
-import '../services/program_metrics.dart' show WeightRow;
+import '../services/program_metrics.dart' show StrengthRow, WeightRow;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
+import '../services/wilks.dart' show WilksWeek, weeklyWilksSeries;
 import '../services/wm_store.dart';
+import 'widgets/metric_chart.dart';
 import 'widgets/working_max_card.dart';
 
 class ProgramScreen extends StatefulWidget {
@@ -46,6 +58,18 @@ class ProgramScreen extends StatefulWidget {
   /// Connector + schema for the `weight` view (observed layer's source).
   final WarehouseConnector? weightRepo;
   final ViewSchema? weightView;
+
+  /// Connector + schema for the `strength` view — feeds the OBSERVED
+  /// Wilks block (same list→strengthRowFromRecord path the domain
+  /// screen uses). Null → the block is omitted.
+  final WarehouseConnector? strengthRepo;
+  final ViewSchema? strengthView;
+
+  /// dashboards.yaml provider (shared 1 h cache) — the Wilks block
+  /// reads the strength domain's `wilks_series` metric config from it
+  /// (from/floor_pct), so this screen and the strength domain always
+  /// agree. Null → the block is omitted.
+  final DomainConfigProvider? dashboards;
 
   /// Working-max controller tabs — the CONFIGURATION section's card.
   /// Null → the section is omitted.
@@ -60,6 +84,9 @@ class ProgramScreen extends StatefulWidget {
     this.analytics,
     this.weightRepo,
     this.weightView,
+    this.strengthRepo,
+    this.strengthView,
+    this.dashboards,
     this.wmStore,
     this.today,
   });
@@ -78,10 +105,20 @@ class _ProgramData {
   /// sync error, etc.) — shown as a note in the observed section.
   final String? observedError;
 
+  /// Mapped strength-ledger rows for the Wilks block (empty on error /
+  /// when the build has no strength view).
+  final List<StrengthRow> strengthRows;
+
+  /// The strength domain's `wilks_series` metric config from
+  /// dashboards.yaml. Null → no Wilks block.
+  final MetricConfig? wilksConfig;
+
   const _ProgramData({
     required this.docs,
     required this.daily,
     this.observedError,
+    this.strengthRows = const [],
+    this.wilksConfig,
   });
 }
 
@@ -111,10 +148,39 @@ class _ProgramScreenState extends State<ProgramScreen> {
       view: widget.weightView,
       repo: widget.weightRepo,
     );
+
+    // Strength rows for the Wilks block — the same raw-list →
+    // strengthRowFromRecord path the domain screen's dashboard uses.
+    // Errors degrade to an empty list (the block shows a placeholder).
+    var strengthRows = const <StrengthRow>[];
+    if (widget.strengthRepo != null && widget.strengthView != null) {
+      try {
+        final recs = await widget.strengthRepo!.list(widget.strengthView!);
+        strengthRows = [for (final r in recs) ?strengthRowFromRecord(r)];
+      } catch (_) {}
+    }
+
+    // wilks_series config: whichever domain declares it (strength).
+    // One config source — this screen can never disagree with the
+    // strength domain's chart about the reference/floor.
+    MetricConfig? wilksConfig;
+    if (widget.dashboards != null) {
+      try {
+        final domains = await widget.dashboards!.load();
+        for (final d in domains ?? const <DomainConfig>[]) {
+          for (final m in d.metrics) {
+            if (m.id == 'wilks_series') wilksConfig ??= m;
+          }
+        }
+      } catch (_) {}
+    }
+
     return _ProgramData(
       docs: docs,
       daily: series.daily,
       observedError: series.error,
+      strengthRows: strengthRows,
+      wilksConfig: wilksConfig,
     );
   }
 
@@ -233,6 +299,16 @@ class _ProgramView extends StatelessWidget {
           targetTo: targetTo,
           error: data.observedError,
         ),
+        if (data.wilksConfig != null) ...[
+          const SizedBox(height: 8),
+          _WilksCard(
+            config: data.wilksConfig!,
+            strengthRows: data.strengthRows,
+            daily: data.daily,
+            today: today,
+            blockStart: blockStart,
+          ),
+        ],
         const SizedBox(height: 16),
         _SectionLabel('Verdict'),
         _VerdictCard(
@@ -863,6 +939,117 @@ class _WeightChart extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// OBSERVED §2: the Wilks block, below the weight chart. Chart = the
+/// strength domain's monthly `wilks_series` (rendered through the SAME
+/// shared [MetricChart], computed by the same [computeMetric] — cut-
+/// start reference + acceptable-drop floor lines included). Stat line =
+/// the weekly-current [wilksStability] output the PHASE hero shows
+/// ("Wilks 327.5 · floor 319.3 · 0 wks below"), so home, strength
+/// domain, and this screen can never disagree.
+class _WilksCard extends StatelessWidget {
+  final MetricConfig config;
+  final List<StrengthRow> strengthRows;
+  final List<WeightRow> daily;
+  final DateTime today;
+
+  /// Fallback reference anchor when the config has no `from:` — same
+  /// default the hero's Wilks eigenvectors use.
+  final DateTime? blockStart;
+
+  const _WilksCard({
+    required this.config,
+    required this.strengthRows,
+    required this.daily,
+    required this.today,
+    required this.blockStart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final data = computeMetric(
+      config,
+      DomainMetricInputs(
+        strengthRows: strengthRows,
+        weightDaily: daily,
+        today: today,
+      ),
+    );
+
+    // Weekly-current stat line (the monthly chart is the trend; THIS is
+    // where the cut stands right now).
+    final weeks = strengthRows.isEmpty || daily.isEmpty
+        ? const <WilksWeek>[]
+        : weeklyWilksSeries(strengthRows, daily, through: today);
+    final s = wilksStability(
+      weeks: weeks,
+      from: config.from ?? blockStart,
+      floorPct: config.floorPct,
+    );
+    String? statLine;
+    if (s.current != null) {
+      statLine = [
+        'Wilks ${s.current!.toStringAsFixed(1)}',
+        if (s.floor != null) 'floor ${s.floor!.toStringAsFixed(1)}',
+        if (s.floor != null)
+          '${s.weeksBelowFloor} wk${s.weeksBelowFloor == 1 ? '' : 's'} below',
+      ].join(' · ');
+    }
+
+    return Card(
+      elevation: 0,
+      color: scheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              (config.label ?? 'Wilks').toUpperCase(),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                letterSpacing: 1.1,
+                fontWeight: FontWeight.w700,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 4),
+            switch (data) {
+              MetricSeries() => MetricChart(
+                series: data,
+                today: today,
+                goalNote: config.goalNote,
+              ),
+              _ => Text(
+                data is MetricUnavailable ? data.message : 'unavailable',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            },
+            if (statLine != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                statLine,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              Text(
+                'weekly-current (chart is monthly)',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );

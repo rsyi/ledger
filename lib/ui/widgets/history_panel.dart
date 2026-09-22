@@ -8,6 +8,7 @@ import '../../services/list_display_render.dart';
 import '../../services/sheets_repository.dart';
 import '../../services/warehouse_connector.dart';
 import 'chart_bottom_axis.dart';
+import 'chart_range.dart';
 import 'pinned_tooltip_line_chart.dart';
 
 /// Opens a modal bottom sheet listing past records that share [dim]'s
@@ -397,9 +398,14 @@ String _dayKey(Object? raw) {
 /// Line chart of per-day max [topMetric] scores. Reuses the already-computed
 /// [dayMaxes] map (keyed by yyyy-MM-dd) so we don't re-evaluate the measure
 /// expression. One dot per day; tap a dot for a date + value tooltip.
-/// Intentionally minimal — no zoom/pan; the domain dashboards cover the
-/// richer analytics views.
-class _TrendChart extends StatelessWidget {
+///
+/// Range chips `3M · 1Y · All` (2026-09-22, default All — the chart's
+/// original full-history view) clip the same computed series by date.
+/// Trailing windows anchor at the LAST entry, not the wall clock, so a
+/// value not logged in months still gets a meaningful 3M. Chips that
+/// would be empty or identical to All hide; the pinned tooltip clears
+/// on range switch. Selection is in-memory sheet state, not persisted.
+class _TrendChart extends StatefulWidget {
   final ViewSchema view;
   final Map<String, double> dayMaxes;
   final String metricName;
@@ -411,9 +417,16 @@ class _TrendChart extends StatelessWidget {
   });
 
   @override
+  State<_TrendChart> createState() => _TrendChartState();
+}
+
+class _TrendChartState extends State<_TrendChart> {
+  ChartRange? _selected;
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    if (dayMaxes.isEmpty) {
+    if (widget.dayMaxes.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -424,18 +437,16 @@ class _TrendChart extends StatelessWidget {
         ),
       );
     }
-    // Build spots: x = days-since-epoch (float), y = score. Sorted ascending
-    // so the line draws left-to-right without backtracking.
-    final entries = dayMaxes.entries.toList()
+    // Day-ascending points so the line draws left-to-right without
+    // backtracking.
+    final entries = widget.dayMaxes.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
-    final spots = <FlSpot>[];
-    for (final e in entries) {
-      final dt = DateTime.tryParse(e.key);
-      if (dt == null) continue;
-      final x = dt.millisecondsSinceEpoch / (1000 * 60 * 60 * 24);
-      spots.add(FlSpot(x, e.value));
-    }
-    if (spots.isEmpty) {
+    final points = <ChartSeriesPoint>[
+      for (final e in entries)
+        if (DateTime.tryParse(e.key) case final DateTime dt)
+          (day: dt, value: e.value),
+    ];
+    if (points.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -446,8 +457,23 @@ class _TrendChart extends StatelessWidget {
         ),
       );
     }
-    final xMin = spots.first.x;
+
+    final anchor = points.last.day;
+    final chips = visibleRanges(
+      points: points,
+      ranges: const [ChartRange.m3, ChartRange.y1, ChartRange.all],
+      today: anchor,
+    );
+    final range = resolveRange(chips, _selected ?? ChartRange.all);
+    final clipped = clipSeriesToRange(points, range, anchor);
+
+    // x = days-since-epoch (float), y = score.
+    double dayX(DateTime d) => d.millisecondsSinceEpoch / (1000 * 60 * 60 * 24);
+    final spots = [for (final p in clipped) FlSpot(dayX(p.day), p.value)];
+    final windowStart = range.startFor(anchor) ?? clipped.first.day;
+    var xMin = dayX(windowStart);
     final xMax = spots.last.x;
+    if (xMax - xMin < 1) xMin = xMax - 1;
     final yValues = spots.map((s) => s.y).toList();
     final yMin = yValues.reduce((a, b) => a < b ? a : b);
     final yMax = yValues.reduce((a, b) => a > b ? a : b);
@@ -458,11 +484,23 @@ class _TrendChart extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Daily max · $metricName',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Daily max · ${widget.metricName}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              if (chips.length > 1)
+                ChartRangeSelector(
+                  ranges: chips,
+                  selected: range,
+                  onChanged: (r) => setState(() => _selected = r),
+                ),
+            ],
           ),
           const SizedBox(height: 8),
           Expanded(
@@ -470,6 +508,9 @@ class _TrendChart extends StatelessWidget {
             // plot's pixel width to estimate label overlap.
             child: LayoutBuilder(
               builder: (context, constraints) => PinnedTooltipLineChart(
+                // Re-key on range switch so the pinned tooltip clears
+                // with the window.
+                key: ValueKey(range),
                 data: LineChartData(
                   minX: xMin,
                   maxX: xMax,

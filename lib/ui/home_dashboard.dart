@@ -452,8 +452,11 @@ class HomeDashboardState extends State<HomeDashboard> {
     final wsDay = weekStartDayOf(currentVersion(program));
     String? weekTypeOf(DateTime weekStart) => program == null
         ? null
-        : programCurrent(program, docs?.phase, anchorMondayOf(weekStart))
-              ?.weekType;
+        : programCurrent(
+            program,
+            docs?.phase,
+            anchorMondayOf(weekStart),
+          )?.weekType;
     final graded = rows.isEmpty ? const <GradedSet>[] : gradeSets(rows);
     final recent = <String, ({double value, DateTime date})>{};
     for (final lift in synthesisLifts) {
@@ -501,8 +504,11 @@ class HomeDashboardState extends State<HomeDashboard> {
     return _EngineData(
       week: latestStatusWeek(status ?? const [], _today, weekStartDay: wsDay),
       climbTarget: slice?.targetsInForce['climbing_sessions'],
-      lastFourByFour: lastBike4x4(status ?? const [], _today,
-          weekStartDay: wsDay),
+      lastFourByFour: lastBike4x4(
+        status ?? const [],
+        _today,
+        weekStartDay: wsDay,
+      ),
       templateLine: templateOneLiner(slice),
     );
   }
@@ -693,8 +699,7 @@ class HomeDashboardState extends State<HomeDashboard> {
 
   Future<void> _openStrengthSheet() async {
     final d = await _strength;
-    String liftLine(Map<String, ({double value, DateTime date})> m) =>
-        m.isEmpty
+    String liftLine(Map<String, ({double value, DateTime date})> m) => m.isEmpty
         ? '—'
         : synthesisLifts
               .where(m.containsKey)
@@ -1078,8 +1083,9 @@ class HomeDashboardState extends State<HomeDashboard> {
         '${v == null ? '—' : fmtLb(v.toDouble())}/${targetText(target)}';
     String done(String key, Object? target) =>
         fmt(row == null ? null : asNum(row[key]), target);
-    final liveClimb =
-        widget.climbingRepo == null ? null : live?.climbingSessions;
+    final liveClimb = widget.climbingRepo == null
+        ? null
+        : live?.climbingSessions;
     // Live counts (current accounting week, computed from local rows
     // at open) with the nightly row as fallback — matches the strip.
     const liveSource =
@@ -1498,10 +1504,7 @@ class _LiftNumbersRow extends StatelessWidget {
               children: [
                 ?suffix,
                 if (value != null && date != null)
-                  TextSpan(
-                    text: ' ${fmtAge(date, today)}',
-                    style: ageStyle,
-                  ),
+                  TextSpan(text: ' ${fmtAge(date, today)}', style: ageStyle),
               ],
             ),
             textAlign: TextAlign.right,
@@ -1525,7 +1528,10 @@ class _LiftNumbersRow extends StatelessWidget {
           cell(
             trend.valueLb,
             trend.asOf,
-            suffix: TextSpan(text: glyph, style: numStyle?.copyWith(color: color)),
+            suffix: TextSpan(
+              text: glyph,
+              style: numStyle?.copyWith(color: color),
+            ),
           ),
           cell(best?.value, best?.date),
         ],
@@ -1780,10 +1786,7 @@ class _HeroCard extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    [
-                      ?hero.blockLine,
-                      ?hero.trajectory,
-                    ].join('   ·   '),
+                    [?hero.blockLine, ?hero.trajectory].join('   ·   '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -1899,6 +1902,12 @@ class _EigenChip extends StatelessWidget {
 
 /// Mini line chart: the eigenvector's series plus faint reference /
 /// floor guide lines (Wilks). Pure paint — no interaction.
+///
+/// Deliberately EXCLUDED from the 2026-09-22 chart range selectors:
+/// at 54×24 px there is no room for chip chrome, and the hero's fixed
+/// window IS the signal (a glanceable recent-trend cue). The full-size
+/// charts behind the chevron (domain Trends / Program) carry the
+/// user-controllable ranges.
 class _Sparkline extends StatelessWidget {
   final List<({DateTime day, double value})> points;
   final double? reference;
@@ -1966,7 +1975,8 @@ class _SparklinePainter extends CustomPainter {
     final span = (t1 - t0) < 1 ? 1.0 : t1 - t0;
     double x(DateTime d) =>
         (d.millisecondsSinceEpoch - t0) / span * (size.width - 3) + 1.5;
-    double y(double v) => size.height - 2 - (v - lo) / (hi - lo) * (size.height - 4);
+    double y(double v) =>
+        size.height - 2 - (v - lo) / (hi - lo) * (size.height - 4);
 
     final guide = Paint()
       ..color = guideColor

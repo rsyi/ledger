@@ -10,7 +10,7 @@
 //      label changes (the manifest references `@string/app_name`).
 //   2. Regenerates launcher icons via `flutter_launcher_icons` from the
 //      icon path in the config.
-//   3. Runs `tool/sync_assets.sh` so schemas/templates/apps/SA-key are
+//   3. Runs `tool/sync_assets.sh` so schemas/templates/SA-key are
 //      bundled fresh.
 //   4. `flutter build apk --release`.
 //   5. `adb install -r` + `adb shell monkey` (launches the app).
@@ -92,7 +92,6 @@ Future<int> main(List<String> argv) async {
       environment: {
         'SCHEMAS_SRC': p.join(configDir, 'views'),
         'TEMPLATES_SRC': p.join(configDir, 'templates'),
-        'APPS_SRC': p.join(configDir, 'apps'),
       },
     );
     if (r != 0) return r;

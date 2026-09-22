@@ -42,7 +42,6 @@ import '../services/program_current.dart';
 import '../services/program_provider.dart';
 import '../services/week_planner.dart';
 import '../services/wm_store.dart';
-import 'apps_screen.dart';
 import 'chat_screen.dart';
 import 'domain_screen.dart';
 import 'program_screen.dart';
@@ -69,7 +68,7 @@ const kCoachChatViewName = 'coach_chat';
 ///      domains — read-only, read-friendly). Views the config doesn't
 ///      claim still list under LOG so nothing becomes unreachable;
 ///      missing/bad config falls back to the flat "Ledgers" section.
-///   4. "Apps" + "Integrations" entries at the bottom
+///   4. The "Integrations" entry at the bottom
 ///
 /// Database + schemas are baked into the APK at build time (via
 /// `tool/brand.dart` resolving `config.yml` + `.env`). No in-app
@@ -465,7 +464,7 @@ class _HomeScreenState extends State<HomeScreen> {
               final data = snap.data!;
               // Only show writable data-entry trackers (paired with
               // .input.yml, not read-only). Analytics-only views still
-              // live in data.views for the chat / apps screen to query.
+              // live in data.views for the chat to query.
               // coach_chat is a chat, not a tracker — excluded here,
               // rendered as the pinned Coach row instead.
               final entryViews = data.views
@@ -760,24 +759,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             readOnlyViews: readOnlyViews,
                             onOpenDomain: openDomain,
                             onOpenView: openView,
-                          ),
-                          const Divider(height: 1),
-                          // Apps tile.
-                          ListTile(
-                            leading: const Icon(Icons.bar_chart),
-                            title: const Text('Apps'),
-                            subtitle: const Text(
-                              'Interactive analytics from .app.yml',
-                            ),
-                            trailing: const Icon(Icons.chevron_right),
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => AppsScreen(
-                                  views: data.views,
-                                  repository: data.repository,
-                                ),
-                              ),
-                            ),
                           ),
                           const Divider(height: 1),
                           // Integrations tile.

@@ -10,11 +10,10 @@ cd "$(dirname "$0")/.."
 
 SCHEMAS_SRC="${SCHEMAS_SRC:-$HOME/repos/airledger-schemas/views}"
 TEMPLATES_SRC="${TEMPLATES_SRC:-$HOME/repos/airledger-schemas/templates}"
-APPS_SRC="${APPS_SRC:-$HOME/repos/airledger-schemas/apps}"
 SA_KEY_SRC="${SA_KEY_SRC:-$HOME/.config/airledger/service-account.json}"
 CONFIG_SRC="${CONFIG_SRC:-$HOME/.config/airledger/config.yaml}"
 
-mkdir -p assets/schemas assets/templates assets/apps
+mkdir -p assets/schemas assets/templates
 
 # Schemas: clear and recopy so deletions in the source propagate. Copies
 # all paired files (.view.yml, .input.yml, .template.yml) into one flat
@@ -36,15 +35,9 @@ echo "synced $(ls assets/schemas/*.view.yml 2>/dev/null | wc -l | tr -d ' ') vie
 # paired by basename: views/<view>.<name>.template.yml.
 rm -rf assets/templates
 
-# Apps: mirror apps/*.app.yml
+# Legacy apps/ assets are gone (the .app.yml runtime was removed
+# 2026-09-21, superseded by domain dashboards) — clear stale copies.
 rm -rf assets/apps
-mkdir -p assets/apps
-if [ -d "$APPS_SRC" ]; then
-  cp -R "$APPS_SRC"/. assets/apps/
-  echo "synced $(find assets/apps -name '*.app.yml' | wc -l | tr -d ' ') app(s) from $APPS_SRC"
-else
-  echo "no apps dir at $APPS_SRC (skipping)"
-fi
 
 # Service account key
 cp "$SA_KEY_SRC" assets/service-account.json

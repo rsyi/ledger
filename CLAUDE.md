@@ -214,7 +214,12 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   DomainScreen.weightView passed from home) / grade_pyramid (MetricBars
   horizontal bars, numeric v-grades desc then vIntro/vB tail, routes
   counted in a note) / session_frequency (sessions per ISO week, 12 wks
-  zero-filled) / hr_4x4_series (max HR per session day)). Entry domains:
+  zero-filled) / hr_4x4_series (max HR per session day)). These
+  dashboards SUPERSEDED the old ".app.yml Apps" paradigm — the home
+  Apps tile, apps_screen/app_viewer_screen, AppRuntime/AppLoader/AppDef,
+  assets/apps wiring, and airledger-fitness apps/ were all removed
+  2026-09-21 (AnalyticsEngine + LocalDb stay — chat run_query + weight
+  series use them). Entry domains:
   header over the normal timeline via TimelineScreen's `header` slot.
   Integration domains: `_DomainRecordsScreen` — read-friendly list
   (header scrolls as item 0, date-grouped one-line records via pure

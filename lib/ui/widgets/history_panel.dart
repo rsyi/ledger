@@ -397,8 +397,8 @@ String _dayKey(Object? raw) {
 /// Line chart of per-day max [topMetric] scores. Reuses the already-computed
 /// [dayMaxes] map (keyed by yyyy-MM-dd) so we don't re-evaluate the measure
 /// expression. One dot per day; tap a dot for a date + value tooltip.
-/// Intentionally minimal — no zoom/pan; for that use the dedicated app
-/// viewer (`apps/strength_1rm.app.yml` is the equivalent over there).
+/// Intentionally minimal — no zoom/pan; the domain dashboards cover the
+/// richer analytics views.
 class _TrendChart extends StatelessWidget {
   final ViewSchema view;
   final Map<String, double> dayMaxes;

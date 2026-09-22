@@ -66,17 +66,15 @@ principle.
 
 - **In-app Settings** for overriding the bundled spreadsheet id and
   configuring a GitHub repo for live schema refresh
-- **Remote schema sync** — pull `.view.yml`, templates, and `.app.yml`
-  files from a configured GitHub repo into the app's docs cache.
-  Schema-only edits land without rebuilding the APK
+- **Remote schema sync** — pull `.view.yml` and template files from a
+  configured GitHub repo into the app's docs cache. Schema-only edits
+  land without rebuilding the APK
 - **Loaders prefer the cache** — `SchemaLoader` / `TemplateLoader` use
   the synced cache when present, falling back to bundled assets when
   not
 
 ### Analytics
 
-- **`.app.yml` light runtime** — pure-Dart interpreter for
-  control / task / display compositions on top of the CRUD substrate
 - **Local SQLite cache** synced from the warehouse for analytics queries
 - **[airlayer](https://github.com/oxy-hq/airlayer) FFI bindings** for
   semantic-layer SQL compilation
@@ -102,7 +100,6 @@ project root:
     ledger.yaml       <- branding (app_name, package_id, icon)
     views/*.view.yml  <- CRUD forms
     templates/*/*.yml <- planned-entry presets
-    apps/*.app.yml    <- airledger analytics apps
     assets/icon.png   <- launcher icon source (1024×1024)
 ```
 
@@ -201,7 +198,6 @@ lib/
     view_schema.dart        ViewSchema, Dimension, InputSpec, Plannable, ...
     template.dart           Template + TemplateVariable
     planned_entry.dart      Local plan row (pre-log), template-attribution-aware
-    app_def.dart            .app.yml definitions (controls, tasks, displays)
   services/
     schema_parser.dart      Pure-Dart YAML → ViewSchema
     schema_loader.dart      Loads views (cache > bundled assets)
@@ -218,10 +214,8 @@ lib/
     settings_store.dart     shared_preferences-backed runtime settings
     remote_sync.dart        GitHub Contents API → docs cache for schemas
     oxy_config_discovery.dart   walk-up config.yml discovery (airlayer pattern)
-    analytics_engine.dart   airlayer FFI + sqflite for .app.yml queries
+    analytics_engine.dart   airlayer FFI + sqflite for analytics queries
     local_db.dart           sqflite cache synced from the warehouse
-    app_loader.dart         YAML → AppDef
-    app_runtime.dart        controls + tasks + displays runtime
   ui/
     home_screen.dart        Lists views, AppBar reads OS app label
     timeline_screen.dart    Merged timeline (logged + planned + template grouping)
@@ -229,8 +223,6 @@ lib/
     templates_screen.dart   Pin + apply with live preview
     template_vars_dialog.dart   Per-template input prompt + live preview
     settings_screen.dart    Database + GitHub config
-    apps_screen.dart        Pick + run .app.yml apps
-    app_viewer_screen.dart  Render controls / tasks / displays
     widgets/field_widgets.dart  buildFieldWidget dispatch
 assets/                     auto-populated by tool/sync_assets.sh
 docs/

@@ -686,8 +686,8 @@ class _Stat extends StatelessWidget {
 /// (solid line), and the current block's target line (dashed, from→to
 /// across the block's dates). X spans ~3 weeks before the block through
 /// the block's end so early-block views still show recent history.
-/// Static (no zoom) — this is an overview, the Apps screen has the
-/// interactive charts. Same fl_chart machinery as app_viewer_screen.
+/// Static (no zoom) — this is an overview; the domain dashboards carry
+/// the richer charts.
 class _WeightChart extends StatelessWidget {
   final List<WeightRow> daily;
   final DateTime today;

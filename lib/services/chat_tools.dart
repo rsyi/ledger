@@ -768,8 +768,7 @@ class ChatToolset {
   }
 
   /// Map user-facing op aliases to the textual operator names airlayer's
-  /// filter grammar expects. Mirrors app_runtime._airlayerOp so the chat's
-  /// run_query and .app.yml semantic_query tasks behave the same way.
+  /// filter grammar expects (equals/gt/gte/... as the grammar spells them).
   static String _airlayerOp(String op) {
     switch (op) {
       case 'eq':

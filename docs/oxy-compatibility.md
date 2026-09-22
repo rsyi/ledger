@@ -167,7 +167,6 @@ sibling concerns sharing `config.yml`:
     ledger.yaml         # branding (app_name, icon, package_id) — ledger-only
     views/*.view.yml    # CRUD forms (each names a datasource from config.yml)
     templates/*/*.yml   # planned-entry presets
-    apps/*.app.yml      # ledger apps (analytics built on the CRUD substrate)
 ```
 
 `ledger.yaml` does *not* point at the shared config explicitly. The

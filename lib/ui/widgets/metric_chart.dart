@@ -26,11 +26,17 @@ class MetricChart extends StatelessWidget {
   final DateTime today;
   final String? goalNote;
 
+  /// Plot height. The 130px default is header/inline size; the domain
+  /// screens' Trends mode passes a taller value so charts get the room
+  /// the old squeezed-above-the-ledger layout never had.
+  final double height;
+
   const MetricChart({
     super.key,
     required this.series,
     required this.today,
     this.goalNote,
+    this.height = 130,
   });
 
   static double _x(DateTime d) =>
@@ -108,7 +114,7 @@ class MetricChart extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SizedBox(
-          height: 130,
+          height: height,
           // LayoutBuilder: the bottom-axis tick keeper needs the plot's
           // pixel width to estimate label overlap (chart_bottom_axis).
           child: LayoutBuilder(

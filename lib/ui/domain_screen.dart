@@ -1,19 +1,29 @@
-/// Domain screen (app-IA redesign P2) — one screen per dashboards.yaml
-/// domain:
+/// Domain screen — one screen per dashboards.yaml domain, records
+/// FIRST (per-domain UX redesign 2026-09-21: the old layout stacked the
+/// full metric dashboard above the ledger, scrunching the records the
+/// user actually came for).
 ///
-///   HEADER  the domain dashboard: per-metric stat chips and/or a series
-///           chart, computed by services/domain_metrics.dart from the
-///           domain's own view data. Every metric degrades independently
-///           to a dim placeholder — the timeline below never blocks on
-///           the dashboard.
-///   BODY    entry domains: the existing timeline with full affordances
-///           (FAB, forms, planning, selection) via [TimelineScreen]'s
-///           `header` slot. Integration domains (P3): a denser
-///           read-friendly record list — date-grouped, one line per
-///           record with the domain's salient `list_fields`, newest
-///           first, no per-row chrome; the dashboard header scrolls as
-///           the first list item. The read-only timeline stays
-///           reachable via the app-bar calendar icon (date navigation).
+/// Domains with metrics get TWO MODES, toggled by the compact segmented
+/// control in the strip above the records:
+///
+///   LOG/RECORDS (default)  the ledger fills the screen. Entry domains:
+///        the existing timeline with full affordances (FAB, forms,
+///        planning, selection) via [TimelineScreen]'s `header` slot.
+///        Integration domains: the denser read-friendly record list —
+///        date-grouped, one line per record with the domain's salient
+///        `list_fields`, newest first — with the read-only timeline
+///        behind the app-bar calendar icon, and (when the view is
+///        writable) an overflow "Add entry manually" escape hatch for
+///        integration gaps (travel, dead scale battery). The only
+///        metrics chrome is the ONE-LINE headline strip (`headline:`
+///        ids in dashboards.yaml, sensible defaults otherwise).
+///   TRENDS  the full metric dashboard — every configured metric,
+///        full-height charts, no ledger squeezed underneath.
+///
+/// Metric inputs load once per screen open and feed both modes. Every
+/// metric degrades independently to a dim placeholder — the records
+/// never block on the dashboard. Domains without metrics (daily_notes)
+/// skip the strip and Trends entirely.
 library;
 
 import 'package:flutter/material.dart';
@@ -34,6 +44,7 @@ import '../services/program_metrics.dart' show StrengthRow, WeightRow;
 import '../services/qbo_service.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
+import 'form_screen.dart';
 import 'timeline_screen.dart';
 import 'widgets/metric_chart.dart';
 
@@ -64,11 +75,11 @@ const _recordMetricIds = {
   'hr_4x4_series',
 };
 
-class DomainScreen extends StatelessWidget {
+class DomainScreen extends StatefulWidget {
   final DomainConfig domain;
 
-  /// The domain's primary view — backs both the timeline body and the
-  /// header's metric inputs.
+  /// The domain's primary view — backs both the records body and the
+  /// metric inputs.
   final ViewSchema view;
   final WarehouseConnector repository;
 
@@ -106,88 +117,27 @@ class DomainScreen extends StatelessWidget {
     this.today,
   });
 
-  bool get _integration => domain.paradigm == DomainParadigm.integration;
-
   @override
-  Widget build(BuildContext context) {
-    final header = domain.metrics.isEmpty
-        ? null
-        : DomainDashboardHeader(
-            domain: domain,
-            view: view,
-            repository: repository,
-            analytics: analytics,
-            weightView: weightView,
-            weightRepository: weightRepository,
-            today: today,
-          );
-    // Integration domains are read surfaces: the denser record list is
-    // the body; the read-only timeline stays one calendar-icon away.
-    if (_integration) {
-      return _DomainRecordsScreen(
-        domain: domain,
-        view: view,
-        repository: repository,
-        header: header,
-      );
-    }
-    return TimelineScreen(
-      view: view,
-      repository: repository,
-      llm: llm,
-      llmCache: llmCache,
-      chatModel: chatModel,
-      github: github,
-      analytics: analytics,
-      qboSpec: qboSpec,
-      qboService: qboService,
-      header: header,
-    );
-  }
+  State<DomainScreen> createState() => _DomainScreenState();
 }
 
-// ---------------------------------------------------------------------------
-// Dashboard header
-// ---------------------------------------------------------------------------
-
-/// Loads the metric inputs once (per screen open) and renders every
-/// configured metric: stat chips for stat/best kinds, a compact line
-/// chart for series. Each metric that can't compute renders a dim
-/// placeholder; a total input failure degrades the whole header to
-/// placeholders — never an error screen.
-class DomainDashboardHeader extends StatefulWidget {
-  final DomainConfig domain;
-  final ViewSchema view;
-  final WarehouseConnector repository;
-  final AnalyticsEngine? analytics;
-
-  /// Bodyweight reference for cross-domain metrics (protein band). See
-  /// [DomainScreen.weightView].
-  final ViewSchema? weightView;
-  final WarehouseConnector? weightRepository;
-
-  final DateTime? today;
-
-  const DomainDashboardHeader({
-    super.key,
-    required this.domain,
-    required this.view,
-    required this.repository,
-    this.analytics,
-    this.weightView,
-    this.weightRepository,
-    this.today,
-  });
-
-  @override
-  State<DomainDashboardHeader> createState() => _DomainDashboardHeaderState();
-}
-
-class _DomainDashboardHeaderState extends State<DomainDashboardHeader> {
+class _DomainScreenState extends State<DomainScreen> {
   late final DateTime _today = widget.today ?? DateTime.now();
-  late final Future<DomainMetricInputs> _inputs = _load();
 
-  Future<DomainMetricInputs> _load() async {
+  /// 0 = records (Log), 1 = Trends. Plain state field; the IndexedStack
+  /// below keeps both modes alive so toggling never loses timeline
+  /// state (selected date, scroll, selection).
+  int _mode = 0;
+
+  /// One inputs load per screen open, shared by the headline strip and
+  /// the Trends dashboard. Re-fired by the Trends refresh action and
+  /// the record list's pull-to-refresh.
+  late Future<DomainMetricInputs> _inputs = _loadInputs();
+
+  bool get _integration => widget.domain.paradigm == DomainParadigm.integration;
+  bool get _hasMetrics => widget.domain.metrics.isNotEmpty;
+
+  Future<DomainMetricInputs> _loadInputs() async {
     final ids = {for (final m in widget.domain.metrics) m.id};
     var strengthRows = const <StrengthRow>[];
     var weightDaily = const <WeightRow>[];
@@ -242,30 +192,220 @@ class _DomainDashboardHeaderState extends State<DomainDashboardHeader> {
     );
   }
 
+  void _reloadInputs() {
+    setState(() => _inputs = _loadInputs());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final recordsBody = _integration
+        ? _DomainRecordsScreen(
+            domain: widget.domain,
+            view: widget.view,
+            repository: widget.repository,
+            header: _hasMetrics ? _modeBar() : null,
+            onRefreshExtras: _hasMetrics ? _reloadInputs : null,
+          )
+        : TimelineScreen(
+            view: widget.view,
+            repository: widget.repository,
+            llm: widget.llm,
+            llmCache: widget.llmCache,
+            chatModel: widget.chatModel,
+            github: widget.github,
+            analytics: widget.analytics,
+            qboSpec: widget.qboSpec,
+            qboService: widget.qboService,
+            header: _hasMetrics ? _modeBar() : null,
+          );
+    if (!_hasMetrics) return recordsBody;
+    return IndexedStack(
+      index: _mode,
+      children: [
+        recordsBody,
+        _TrendsScreen(
+          domain: widget.domain,
+          inputs: _inputs,
+          today: _today,
+          modeBar: _modeBar(),
+          onRefresh: _reloadInputs,
+        ),
+      ],
+    );
+  }
+
+  Widget _modeBar() => _ModeBar(
+    domain: widget.domain,
+    inputs: _inputs,
+    mode: _mode,
+    recordsLabel: _integration ? 'Records' : 'Log',
+    onMode: (m) => setState(() => _mode = m),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mode bar: headline strip + Log/Trends toggle
+// ---------------------------------------------------------------------------
+
+/// One compact row: the domain's 2-3 headline numbers on the left, the
+/// mode toggle on the right. Rendered pinned above the records (via the
+/// timeline's `header` slot / the record list's header) and as the
+/// first row of the Trends body, so the toggle never moves.
+class _ModeBar extends StatelessWidget {
+  final DomainConfig domain;
+  final Future<DomainMetricInputs> inputs;
+  final int mode;
+  final String recordsLabel;
+  final ValueChanged<int> onMode;
+
+  const _ModeBar({
+    required this.domain,
+    required this.inputs,
+    required this.mode,
+    required this.recordsLabel,
+    required this.onMode,
+  });
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
       width: double.infinity,
       color: scheme.surfaceContainerLow,
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-      child: FutureBuilder<DomainMetricInputs>(
-        future: _inputs,
+      padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: FutureBuilder<DomainMetricInputs>(
+              future: inputs,
+              builder: (context, snap) {
+                final data = snap.data;
+                final stats = data == null
+                    ? const <MetricStat>[]
+                    : headlineStats(domain, data);
+                if (stats.isEmpty) {
+                  return Text(
+                    data == null ? '…' : '',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  );
+                }
+                return Text.rich(
+                  TextSpan(
+                    children: [
+                      for (final (i, s) in stats.indexed) ...[
+                        if (i > 0)
+                          TextSpan(
+                            text: '  ·  ',
+                            style: TextStyle(color: scheme.outline),
+                          ),
+                        TextSpan(
+                          text: '${s.label} ',
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                        TextSpan(
+                          text: s.value,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  style: Theme.of(context).textTheme.bodySmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          SegmentedButton<int>(
+            segments: [
+              ButtonSegment(value: 0, label: Text(recordsLabel)),
+              const ButtonSegment(value: 1, label: Text('Trends')),
+            ],
+            selected: {mode},
+            onSelectionChanged: (s) => onMode(s.first),
+            showSelectedIcon: false,
+            style: const ButtonStyle(
+              visualDensity: VisualDensity(horizontal: -3, vertical: -3),
+              padding: WidgetStatePropertyAll(
+                EdgeInsets.symmetric(horizontal: 10),
+              ),
+              textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Trends mode: the full metric dashboard
+// ---------------------------------------------------------------------------
+
+/// Full-height metric dashboard — every configured metric with room to
+/// breathe (charts at 220px instead of the header-strip 130px). Each
+/// metric that can't compute renders a dim placeholder; a total input
+/// failure degrades everything to placeholders — never an error screen.
+class _TrendsScreen extends StatelessWidget {
+  final DomainConfig domain;
+  final Future<DomainMetricInputs> inputs;
+  final DateTime today;
+  final Widget modeBar;
+  final VoidCallback onRefresh;
+
+  const _TrendsScreen({
+    required this.domain,
+    required this.inputs,
+    required this.today,
+    required this.modeBar,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(domain.name),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: onRefresh,
+            tooltip: 'Refresh',
+          ),
+        ],
+      ),
+      body: FutureBuilder<DomainMetricInputs>(
+        future: inputs,
         builder: (context, snap) {
-          final inputs = snap.data;
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          final data = snap.data;
+          return ListView(
             children: [
-              for (final m in widget.domain.metrics) ...[
-                _MetricBlock(
-                  config: m,
-                  data: inputs == null
-                      ? const MetricUnavailable('…')
-                      : computeMetric(m, inputs),
-                  today: _today,
+              modeBar,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final m in domain.metrics) ...[
+                      _MetricBlock(
+                        config: m,
+                        data: data == null
+                            ? const MetricUnavailable('…')
+                            : computeMetric(m, data),
+                        today: today,
+                        chartHeight: 220,
+                      ),
+                      if (m != domain.metrics.last) const SizedBox(height: 20),
+                    ],
+                  ],
                 ),
-                if (m != widget.domain.metrics.last) const SizedBox(height: 8),
-              ],
+              ),
             ],
           );
         },
@@ -279,11 +419,13 @@ class _MetricBlock extends StatelessWidget {
   final MetricConfig config;
   final MetricData data;
   final DateTime today;
+  final double chartHeight;
 
   const _MetricBlock({
     required this.config,
     required this.data,
     required this.today,
+    this.chartHeight = 130,
   });
 
   @override
@@ -322,6 +464,7 @@ class _MetricBlock extends StatelessWidget {
             series: data as MetricSeries,
             today: today,
             goalNote: config.goalNote,
+            height: chartHeight,
           ),
           MetricBars(bars: final bars, note: final note) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -443,24 +586,32 @@ class _BarList extends StatelessWidget {
 // Integration read view — the record list
 // ---------------------------------------------------------------------------
 
-/// Read-friendly body for integration domains: the dashboard header
-/// scrolls as the first item, then date-grouped records — one line per
-/// record, salient fields only, newest first, no per-row chrome. The
-/// list is a lazy [ListView.builder] over flattened rows, so climbing's
-/// ~1.4k records render in chunks as you scroll. Pull to refresh; the
-/// app-bar calendar icon opens the classic read-only timeline for
-/// date navigation.
+/// Read-friendly body for integration domains: the mode bar pinned on
+/// top, then date-grouped records — one line per record, salient fields
+/// only, newest first, no per-row chrome. The list is a lazy
+/// [ListView.builder] over flattened rows, so climbing's ~1.4k records
+/// render in chunks as you scroll. Pull to refresh; the app-bar
+/// calendar icon opens the classic read-only timeline for date
+/// navigation. Writable views (weight — ledger-synced but
+/// integration-fed) get an overflow "Add entry manually" that opens the
+/// normal form: Withings gaps happen (travel, dead scale battery), so
+/// the integration paradigm keeps a manual escape hatch.
 class _DomainRecordsScreen extends StatefulWidget {
   final DomainConfig domain;
   final ViewSchema view;
   final WarehouseConnector repository;
   final Widget? header;
 
+  /// Re-fires the domain screen's metric inputs on pull-to-refresh so
+  /// the headline strip / Trends stay in step with fresh records.
+  final VoidCallback? onRefreshExtras;
+
   const _DomainRecordsScreen({
     required this.domain,
     required this.view,
     required this.repository,
     this.header,
+    this.onRefreshExtras,
   });
 
   @override
@@ -488,6 +639,12 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
 
   String get _dateKey => widget.view.dateField ?? 'date';
 
+  /// Manual escape hatch available only when the view actually accepts
+  /// writes (input overlay, not read-only). kaya_ascents-style direct
+  /// sheet reads stay pure read surfaces.
+  bool get _canAddManually =>
+      widget.view.hasInputOverlay && !widget.view.readOnly;
+
   Future<List<_ListRow>> _load() async {
     final records = await widget.repository.list(widget.view);
     final groups = groupRecordsByDay(records, dateKey: _dateKey);
@@ -500,6 +657,7 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
   }
 
   Future<void> _refresh() async {
+    widget.onRefreshExtras?.call();
     final fresh = _load();
     setState(() => _rows = fresh);
     await fresh;
@@ -517,6 +675,16 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
     );
   }
 
+  Future<void> _addManually() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            FormScreen(view: widget.view, repository: widget.repository),
+      ),
+    );
+    if (mounted) await _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -528,54 +696,71 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
             tooltip: 'Browse by date',
             onPressed: _openTimeline,
           ),
+          if (_canAddManually)
+            PopupMenuButton<String>(
+              tooltip: 'More',
+              onSelected: (v) {
+                if (v == 'add') _addManually();
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'add', child: Text('Add entry manually')),
+              ],
+            ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: FutureBuilder<List<_ListRow>>(
-          future: _rows,
-          builder: (context, snap) {
-            final rows = snap.data;
-            // Header always occupies slot 0 so the dashboard shows even
-            // while records load / when the fetch fails.
-            final extra = widget.header == null ? 0 : 1;
-            Widget trailing;
-            if (snap.hasError) {
-              trailing = _note(context, 'couldn’t load records');
-            } else if (rows == null) {
-              trailing = const Padding(
-                padding: EdgeInsets.symmetric(vertical: 32),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            } else if (rows.isEmpty) {
-              trailing = _note(context, 'no records yet');
-            } else {
-              trailing = const SizedBox.shrink();
-            }
-            final items = rows ?? const <_ListRow>[];
-            return ListView.builder(
-              // Refresh must work even when the list is short/errored.
-              physics: const AlwaysScrollableScrollPhysics(),
-              itemCount: extra + items.length + 1,
-              itemBuilder: (context, i) {
-                if (extra == 1 && i == 0) return widget.header!;
-                final idx = i - extra;
-                if (idx == items.length) return trailing;
-                return switch (items[idx]) {
-                  _DayRow(day: final day, count: final count) => _dayHeading(
-                    context,
-                    day,
-                    count,
-                  ),
-                  _RecordRow(record: final record) => _recordLine(
-                    context,
-                    record,
-                  ),
-                };
-              },
-            );
-          },
-        ),
+      body: Column(
+        children: [
+          // Pinned, not a list item — the Trends toggle shouldn't
+          // scroll away with the records.
+          if (widget.header != null) widget.header!,
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: FutureBuilder<List<_ListRow>>(
+                future: _rows,
+                builder: (context, snap) {
+                  final rows = snap.data;
+                  Widget trailing;
+                  if (snap.hasError) {
+                    trailing = _note(context, 'couldn’t load records');
+                  } else if (rows == null) {
+                    trailing = const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 32),
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  } else if (rows.isEmpty) {
+                    trailing = _note(
+                      context,
+                      'No records yet — this ledger fills in from '
+                      'Integrations (Log tab, bottom row).'
+                      '${_canAddManually ? '\nOr use ⋮ → "Add entry manually".' : ''}',
+                    );
+                  } else {
+                    trailing = const SizedBox.shrink();
+                  }
+                  final items = rows ?? const <_ListRow>[];
+                  return ListView.builder(
+                    // Refresh must work even when the list is
+                    // short/errored.
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: items.length + 1,
+                    itemBuilder: (context, i) {
+                      if (i == items.length) return trailing;
+                      return switch (items[i]) {
+                        _DayRow(day: final day, count: final count) =>
+                          _dayHeading(context, day, count),
+                        _RecordRow(record: final record) => _recordLine(
+                          context,
+                          record,
+                        ),
+                      };
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

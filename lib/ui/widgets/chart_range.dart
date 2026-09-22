@@ -137,16 +137,21 @@ List<ChartRange> visibleRanges({
 }
 
 /// Map [preferred] onto [visible]: itself when offered, else the next
-/// larger window (the sparse-series widen), else All.
+/// LARGER window (the sparse-series widen), else All — never a
+/// narrower chip (a hidden 3M default means 3M ≡ All or was sparse;
+/// either way widening is the faithful fallback).
 ChartRange resolveRange(List<ChartRange> visible, ChartRange preferred) {
   if (visible.contains(preferred)) return preferred;
   if (preferred.months != null) {
     for (final r in visible) {
       if (r.months != null && r.months! > preferred.months!) return r;
     }
+    return ChartRange.all;
   }
+  // Preferred All yet hidden (caller passed a fixed-only chip list):
+  // the widest fixed chip is the closest thing.
   for (final r in visible.reversed) {
-    if (r.months != null) return r; // preferred=All, only fixed chips left
+    if (r.months != null) return r;
   }
   return ChartRange.all;
 }

@@ -130,6 +130,17 @@ void main() {
       );
     });
 
+    test('never narrows: 3M hidden with only 1M/All visible resolves to '
+        'All, not 1M', () {
+      // Data started ~6 weeks ago: 3M ≡ All (hidden), 1M is a real
+      // window. The old default (3M ≈ 84 days) showed everything —
+      // All is the faithful fallback; 1M would silently zoom in.
+      expect(
+        resolveRange([ChartRange.m1, ChartRange.all], ChartRange.m3),
+        ChartRange.all,
+      );
+    });
+
     test('falls back to All', () {
       expect(resolveRange([ChartRange.all], ChartRange.m3), ChartRange.all);
       expect(resolveRange(const [], ChartRange.m3), ChartRange.all);

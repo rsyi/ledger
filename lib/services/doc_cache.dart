@@ -7,7 +7,11 @@
 /// must degrade gracefully); a successful fetch refreshes the entry.
 library;
 
-import 'coach_brain.dart' show CoachDocFetcher;
+/// Fetches one repo file's content; null when missing. Signature-
+/// compatible with coach_brain's CoachDocFetcher (kept separate so pure
+/// consumers — domain_config/domain_metrics, CLI tools — don't drag the
+/// coach's Flutter imports).
+typedef DocFetcher = Future<String?> Function(String path);
 
 class DocCache {
   DocCache._();
@@ -26,7 +30,7 @@ class DocCache {
   /// deliberately NOT served — matches the extracted behavior).
   static Future<String?> fetch(
     String path,
-    CoachDocFetcher fetchDoc, {
+    DocFetcher fetchDoc, {
     DateTime Function() now = DateTime.now,
   }) async {
     final at = now();

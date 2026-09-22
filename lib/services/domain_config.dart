@@ -17,7 +17,6 @@ library;
 
 import 'package:yaml/yaml.dart';
 
-import 'coach_brain.dart' show CoachDocFetcher;
 import 'doc_cache.dart';
 
 /// Repo path of the presentation config.
@@ -169,7 +168,7 @@ List<MetricConfig> _parseMetrics(Object? raw) {
 /// Fetch + parse with the shared 1 h [DocCache]. Null on missing/bad
 /// config (home falls back to the Ledgers section).
 class DomainConfigProvider {
-  final CoachDocFetcher fetchDoc;
+  final DocFetcher fetchDoc;
 
   /// Injectable clock — tests pass a fixed value.
   final DateTime Function() now;

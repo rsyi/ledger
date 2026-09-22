@@ -196,6 +196,23 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     coach/{goals,routine,metrics,PROMPT}.md` — goals: CUT active;
     routine: weekly rules ↔ template names (heavy squat/deadlift
     alternation etc.).
+- **App IA redesign P1+P2 (2026-09-21)**: spec = airledger docs/
+  superpowers/specs/2026-09-22-app-ia-redesign-spec.md. Presentation
+  config `app/dashboards.yaml` in airledger-fitness (ENGINE-FREE —
+  fetched via GitHub, shared 1 h DocCache, pull-to-refresh bust; NO
+  dylib/schema-mirror work ever): domains strength/weight/cardio/
+  daily_notes (entry) + climbing/meals (integration), each views/icon/
+  metrics. Home: Ledgers expandable → LOG (entry domains + any
+  unclaimed views) and CONNECTED (integration) sections; missing/bad
+  config falls back to the old Ledgers tile (never breaks). Domain rows
+  open `domain_screen.dart`: dashboard header (domain_metrics.dart pure
+  engine — pl_total / e1rm_reference / all_time_best_weight / bw_series
+  w/ 154 goal line / bf_series built; kcal/protein/grade_pyramid/
+  session_frequency/hr_4x4 = "coming soon" placeholders for P3) over
+  the normal timeline via TimelineScreen's new `header` slot;
+  integration paradigm rides the new `forceReadOnly` (state `_readOnly`
+  getter = forceReadOnly || view.readOnly). P3 remaining: those five
+  metrics + a denser read-friendly record list for integration domains.
 - **Plan-then-log**: PlanStore (device-local) planned entries; one-tap
   Log-now stamps at press time; template group headers have "Log all".
   The coach does NOT write rows (v1 draft-rows pattern was removed).

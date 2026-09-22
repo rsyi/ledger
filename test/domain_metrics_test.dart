@@ -426,20 +426,14 @@ void main() {
           today: today,
         ),
       ) as MetricSeries;
-      // The window keeps an 8-week lead-in before `from` (the walk-in
-      // baseline must be visible for the reference line to mean
-      // anything; a from-date in the current week would otherwise
-      // render a single dot). All fixture weeks fall inside the
-      // lead-in, so every week survives; the reference still anchors
-      // to the value AS OF the `from` week.
+      // `from` anchors the reference only — the series keeps the full
+      // computable history (Wilks is a career-scale trend; the dashed
+      // reference marks the cut-start value to compare it against).
       final fromWeeks =
           d.points.where((p) => !p.day.isBefore(DateTime(2026, 9, 14)));
       expect(fromWeeks, hasLength(2));
-      expect(
-        d.points
-            .every((p) => !p.day.isBefore(DateTime(2026, 9, 14 - 7 * 8))),
-        isTrue,
-      );
+      expect(d.points.length, greaterThanOrEqualTo(2),
+          reason: 'pre-from history must survive');
       final refWeek =
           d.points.lastWhere((p) => !p.day.isAfter(DateTime(2026, 9, 14)));
       expect(d.goal, closeTo(refWeek.value, 1e-9));

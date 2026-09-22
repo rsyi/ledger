@@ -417,17 +417,11 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
           if (!w.weekStart.isAfter(fromMonday)) ref = w;
         }
         reference = ref.wilks;
-        // Keep 8 weeks of lead-in before the window start: the point of
-        // the reference line is comparing the cut against the walk-in
-        // baseline, and a window that begins this week would render as
-        // a single dot (calendar-component arithmetic — DST-safe).
-        final leadIn = DateTime(
-            fromMonday.year, fromMonday.month, fromMonday.day - 7 * 8);
-        final clipped = [
-          for (final p in points)
-            if (!p.day.isBefore(leadIn)) p,
-        ];
-        if (clipped.isNotEmpty) points = clipped;
+        // `from` anchors the REFERENCE only; the series itself shows
+        // the full computable history (user 2026-09-22: "wilks should
+        // be tracked for longer"). Wilks is a career-scale number —
+        // clipping it to the block hid the trend the reference line is
+        // there to be compared against.
       }
       return MetricSeries(points: points, goal: reference, unit: m.unit);
 

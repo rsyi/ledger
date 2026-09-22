@@ -417,9 +417,15 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
           if (!w.weekStart.isAfter(fromMonday)) ref = w;
         }
         reference = ref.wilks;
+        // Keep 8 weeks of lead-in before the window start: the point of
+        // the reference line is comparing the cut against the walk-in
+        // baseline, and a window that begins this week would render as
+        // a single dot (calendar-component arithmetic — DST-safe).
+        final leadIn = DateTime(
+            fromMonday.year, fromMonday.month, fromMonday.day - 7 * 8);
         final clipped = [
           for (final p in points)
-            if (!p.day.isBefore(fromMonday)) p,
+            if (!p.day.isBefore(leadIn)) p,
         ];
         if (clipped.isNotEmpty) points = clipped;
       }

@@ -43,7 +43,14 @@ const _strengthMetricIds = {
   'pl_total',
   'e1rm_reference',
   'all_time_best_weight',
+  'wilks',
+  'wilks_series',
 };
+
+/// Metric ids on NON-weight domains that also need the daily weigh-in
+/// series as a bodyweight reference (wilks: kg bodyweight for the
+/// coefficient; protein_series additionally gates on its band config).
+const _bodyweightRefMetricIds = {'wilks', 'wilks_series'};
 
 /// Metric ids that need the domain's own daily weigh-in series.
 const _weightMetricIds = {'bw_series', 'bf_series'};
@@ -213,9 +220,10 @@ class _DomainDashboardHeaderState extends State<DomainDashboardHeader> {
         );
         weightDaily = series.daily;
       } catch (_) {}
-    } else if (widget.domain.metrics.any(
-          (m) => m.id == 'protein_series' && m.goalBandPerLb != null,
-        ) &&
+    } else if ((ids.any(_bodyweightRefMetricIds.contains) ||
+            widget.domain.metrics.any(
+              (m) => m.id == 'protein_series' && m.goalBandPerLb != null,
+            )) &&
         widget.weightView != null) {
       try {
         final series = await loadDailyWeighIns(

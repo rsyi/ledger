@@ -36,9 +36,10 @@ enum MetricKind { stat, best, series }
 /// One dashboard-header metric declaration.
 class MetricConfig {
   /// Built-in id (pl_total, e1rm_reference, all_time_best_weight,
-  /// bw_series, bf_series, kcal_series, protein_series, grade_pyramid,
-  /// session_frequency, hr_4x4_series). Ids the metric engine doesn't
-  /// know render as a placeholder, never an error.
+  /// wilks, wilks_series, bw_series, bf_series, kcal_series,
+  /// protein_series, grade_pyramid, session_frequency, hr_4x4_series).
+  /// Ids the metric engine doesn't know render as a placeholder, never
+  /// an error.
   final String id;
   final MetricKind kind;
   final String? label;
@@ -61,6 +62,13 @@ class MetricConfig {
   /// Main-lift filter for per-lift strength metrics.
   final List<String> lifts;
 
+  /// Series window start (yaml `from: "2026-09-21"`): clip the series
+  /// to days on/after this date, and — for wilks_series — anchor the
+  /// dashed reference line to the metric's value AS OF this date (the
+  /// stability target for "hold through the cut"). Null when absent or
+  /// unparseable.
+  final DateTime? from;
+
   const MetricConfig({
     required this.id,
     this.kind = MetricKind.stat,
@@ -70,6 +78,7 @@ class MetricConfig {
     this.goalNote,
     this.goalBandPerLb,
     this.lifts = const [],
+    this.from,
   });
 }
 
@@ -187,6 +196,7 @@ List<MetricConfig> _parseMetrics(Object? raw) {
         lifts: lifts is List
             ? [for (final l in lifts) l.toString()]
             : const [],
+        from: DateTime.tryParse(m['from']?.toString() ?? ''),
       ),
     );
   }

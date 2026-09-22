@@ -7,7 +7,9 @@
 /// unit-tested; the UI stays layout-only.
 ///
 /// Full built-in vocabulary (P2 + P3): pl_total, e1rm_reference,
-/// all_time_best_weight (strength), bw_series, bf_series (weight),
+/// all_time_best_weight, wilks, wilks_series (strength — wilks is the
+/// WILKS-2020 SBD score, see services/wilks.dart), bw_series, bf_series
+/// (weight),
 /// kcal_series, protein_series (meals — daily sums; protein carries a
 /// bodyweight-scaled goal band), grade_pyramid, session_frequency
 /// (climbing), hr_4x4_series (cardio). Unknown ids return a
@@ -19,8 +21,10 @@ import 'domain_config.dart';
 import 'home_synthesis.dart'
     show allTimeBestE1rms, fmtLb, synthesisLifts;
 import 'program_metrics.dart'
-    show StrengthRow, WeightRow, liftReferencesAsOf, mainLiftByExercise;
+    show StrengthRow, WeightRow, liftReferencesAsOf, mainLiftByExercise,
+        mondayOf;
 import 'program_observed.dart' show sevenDayAvgSeries;
+import 'wilks.dart';
 
 // ---------------------------------------------------------------------------
 // Display data types
@@ -359,6 +363,67 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       }
       final best = allTimeBestWeights(inputs.strengthRows, inputs.today);
       return _perLiftStats(best, lifts, withUnit);
+
+    case 'wilks':
+    case 'wilks_series':
+      // WILKS-2020 SBD score (squat+bench+deadlift only — NOT the
+      // 4-lift pl_total). Weekly best capped e1RM per lift (reps <= 5,
+      // carried forward when untrained) at that week's 7-day-avg
+      // bodyweight. All semantics + verified constants: wilks.dart.
+      if (inputs.strengthRows.isEmpty) {
+        return const MetricUnavailable('no strength history');
+      }
+      if (inputs.weightDaily.isEmpty) {
+        return const MetricUnavailable('no weigh-ins for bodyweight');
+      }
+      final weeks = weeklyWilksSeries(
+        inputs.strengthRows,
+        inputs.weightDaily,
+        through: inputs.today,
+      );
+      if (weeks.isEmpty) {
+        return const MetricUnavailable(
+          'no squat/bench/deadlift sets with reps ≤ 5 yet',
+        );
+      }
+      if (m.id == 'wilks') {
+        final last = weeks.last;
+        return MetricStats(
+          [
+            MetricStat(
+              label: 'Wilks (SBD)',
+              value: last.wilks.toStringAsFixed(1),
+            ),
+          ],
+          note: 'total ${fmtLb(last.totalLbs.roundToDouble())} lb @ '
+              '${last.bodyweightLbs.toStringAsFixed(1)} lb bw'
+              '${last.carried.isEmpty ? '' : ' · carried: ${last.carried.join(', ')}'}',
+        );
+      }
+      // wilks_series: window from m.from (block-0 start) with the
+      // dashed reference at the value AS OF that date — the stability
+      // target through the cut. No `from` → full series, no reference.
+      var points = [
+        for (final w in weeks) (day: w.weekStart, value: w.wilks),
+      ];
+      double? reference;
+      final from = m.from;
+      if (from != null) {
+        final fromMonday = mondayOf(from);
+        // Value as of the window start: last week at/before it (the
+        // Wilks the cut was walked into with), else the first point.
+        var ref = weeks.first;
+        for (final w in weeks) {
+          if (!w.weekStart.isAfter(fromMonday)) ref = w;
+        }
+        reference = ref.wilks;
+        final clipped = [
+          for (final p in points)
+            if (!p.day.isBefore(fromMonday)) p,
+        ];
+        if (clipped.isNotEmpty) points = clipped;
+      }
+      return MetricSeries(points: points, goal: reference, unit: m.unit);
 
     case 'bw_series':
       if (inputs.weightDaily.isEmpty) {

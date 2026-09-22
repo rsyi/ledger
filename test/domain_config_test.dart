@@ -22,6 +22,10 @@ domains:
       - id: all_time_best_weight
         kind: best
         lifts: [squat, bench, deadlift, press]
+      - id: wilks_series
+        kind: series
+        from: "2026-09-21"
+        goal_note: "hold stable through the cut"
   - name: weight
     paradigm: entry
     views: [weight]
@@ -75,7 +79,7 @@ void main() {
       expect(strength.views, ['strength']);
       expect(strength.primaryView, 'strength');
       expect(strength.icon, 'dumbbell');
-      expect(strength.metrics, hasLength(3));
+      expect(strength.metrics, hasLength(4));
       expect(strength.metrics[0].id, 'pl_total');
       expect(strength.metrics[0].kind, MetricKind.stat);
       expect(strength.metrics[0].label, 'PL total');
@@ -84,6 +88,8 @@ void main() {
       expect(strength.metrics[1].lifts,
           ['squat', 'bench', 'deadlift', 'press']);
       expect(strength.metrics[2].kind, MetricKind.best);
+      expect(strength.metrics[3].from, DateTime(2026, 9, 21));
+      expect(strength.metrics[2].from, isNull); // absent key → null
 
       final weight = domains[1];
       expect(weight.metrics[0].id, 'bw_series');

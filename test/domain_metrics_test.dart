@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/services/domain_config.dart';
 import 'package:airledger/services/domain_metrics.dart';
 import 'package:airledger/services/program_metrics.dart';
+import 'package:airledger/services/wilks.dart';
 
 StrengthRow row(String exercise, double weight, int reps, String date) =>
     StrengthRow(
@@ -386,10 +387,69 @@ void main() {
       expect(d.points.last.value, 191);
     });
 
+    test('wilks stat: SBD-only total at weekly bodyweight', () {
+      final daily = [
+        WeightRow(date: DateTime(2026, 9, 14), weightLbs: 165),
+        WeightRow(date: DateTime(2026, 9, 16), weightLbs: 163),
+      ];
+      final d = computeMetric(
+        const MetricConfig(id: 'wilks'),
+        DomainMetricInputs(
+          strengthRows: strengthRows,
+          weightDaily: daily,
+          today: today,
+        ),
+      ) as MetricStats;
+      // All sets fall in weeks of Aug 31 / Sep 7; bw first appears in
+      // the week of Sep 14, so that week (all lifts carried) is the
+      // first computable point, carried into today's week of Sep 21.
+      final total = e1rm(315, 3) + e1rm(225, 5) + e1rm(405, 2);
+      final expected =
+          total * kgPerLb * wilks2020MaleCoeff(164 * kgPerLb);
+      expect(d.stats.single.label, 'Wilks (SBD)');
+      expect(d.stats.single.value, expected.toStringAsFixed(1));
+      expect(d.note, contains('@ 164.0 lb bw'));
+      expect(d.note, contains('carried: squat, bench, deadlift'));
+    });
+
+    test('wilks_series clips to `from` and anchors the reference there',
+        () {
+      final daily = [
+        for (var i = 0; i < 21; i++)
+          WeightRow(date: DateTime(2026, 9, 1 + i), weightLbs: 164),
+      ];
+      final d = computeMetric(
+        MetricConfig(id: 'wilks_series', from: DateTime(2026, 9, 14)),
+        DomainMetricInputs(
+          strengthRows: strengthRows,
+          weightDaily: daily,
+          today: today,
+        ),
+      ) as MetricSeries;
+      // Weeks of Sep 14 + Sep 21 remain; the reference equals the
+      // value as of the `from` week (flat bw + carried lifts → same
+      // value throughout here).
+      expect(d.points, hasLength(2));
+      expect(d.points.first.day, DateTime(2026, 9, 14));
+      expect(d.goal, closeTo(d.points.first.value, 1e-9));
+    });
+
+    test('wilks without weigh-ins degrades honestly', () {
+      expect(
+        computeMetric(
+          const MetricConfig(id: 'wilks'),
+          DomainMetricInputs(strengthRows: strengthRows, today: today),
+        ),
+        isA<MetricUnavailable>(),
+      );
+    });
+
     test('empty inputs degrade to MetricUnavailable', () {
       final empty = DomainMetricInputs(today: today);
       for (final id in [
         'pl_total',
+        'wilks',
+        'wilks_series',
         'e1rm_reference',
         'all_time_best_weight',
         'bw_series',

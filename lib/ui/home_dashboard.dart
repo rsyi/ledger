@@ -414,6 +414,9 @@ class HomeDashboardState extends State<HomeDashboard> {
     final daily = (await _weights)?.daily ?? const <WeightRow>[];
     final rows = await _strengthRows;
     final wsDay = await _weekStartDay();
+    // Actual-max basis (weeklyWilksSeries' default since 2026-09-22) —
+    // the hero's wilks_stability verdict grades real lifted numbers,
+    // same basis as the strength domain's chart and stat.
     final wilksWeeks = rows.isEmpty || daily.isEmpty
         ? const <WilksWeek>[]
         : weeklyWilksSeries(rows, daily, through: _today, weekStartDay: wsDay);

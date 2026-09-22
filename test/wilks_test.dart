@@ -70,7 +70,7 @@ void main() {
     ];
 
     test('computes per-week bests, bw mean, and the WILKS-2020 score', () {
-      final s = weeklyWilksSeries(rows, weights);
+      final s = weeklyWilksSeries(rows, weights, basis: WilksBasis.e1rm);
       expect(s, hasLength(2));
 
       final w1 = s[0];
@@ -91,7 +91,7 @@ void main() {
     });
 
     test('carries untrained lifts forward and reports them', () {
-      final s = weeklyWilksSeries(rows, weights);
+      final s = weeklyWilksSeries(rows, weights, basis: WilksBasis.e1rm);
       final w2 = s[1];
       expect(w2.weekStart, DateTime(2026, 9, 14));
       final total2 = 305 * (1 + 1 / 30) + // new squat best
@@ -111,13 +111,15 @@ void main() {
           _set('2026-09-14', 'Barbell Deadlift', 400, 1),
         ],
         weights,
+        basis: WilksBasis.e1rm,
       );
       expect(s, hasLength(1));
       expect(s.single.weekStart, DateTime(2026, 9, 14));
     });
 
     test('bodyweight carries across weeks with no weigh-ins', () {
-      final s = weeklyWilksSeries(rows, [_bw('2026-09-07', 164)]);
+      final s = weeklyWilksSeries(rows, [_bw('2026-09-07', 164)],
+          basis: WilksBasis.e1rm);
       expect(s, hasLength(2));
       expect(s[1].bodyweightLbs, 164);
     });
@@ -127,6 +129,7 @@ void main() {
         rows,
         weights,
         through: DateTime(2026, 9, 30), // week of Mon 09-28: no data
+        basis: WilksBasis.e1rm,
       );
       expect(s, hasLength(4));
       expect(s.last.weekStart, DateTime(2026, 9, 28));
@@ -176,7 +179,7 @@ void main() {
 
     test('groups by calendar month, bw = mean of the month\'s weigh-ins',
         () {
-      final s = monthlyWilksSeries(rows, weights);
+      final s = monthlyWilksSeries(rows, weights, basis: WilksBasis.e1rm);
       expect(s, hasLength(2));
 
       final aug = s[0];
@@ -193,7 +196,7 @@ void main() {
     });
 
     test('deload sets do not drag the month — best-of wins', () {
-      final s = monthlyWilksSeries(rows, weights);
+      final s = monthlyWilksSeries(rows, weights, basis: WilksBasis.e1rm);
       final sep = s[1];
       expect(sep.monthStart, DateTime(2026, 9, 1));
       // Squat = the 09-01 top single, NOT the 09-21 deload 5x250.
@@ -202,13 +205,13 @@ void main() {
     });
 
     test('carries untrained lifts forward and reports them', () {
-      final s = monthlyWilksSeries(rows, weights);
+      final s = monthlyWilksSeries(rows, weights, basis: WilksBasis.e1rm);
       final sep = s[1];
       expect(sep.carried, ['bench', 'deadlift']);
     });
 
     test('bodyweight carries into months with no weigh-ins, flagged', () {
-      final s = monthlyWilksSeries(rows, weights);
+      final s = monthlyWilksSeries(rows, weights, basis: WilksBasis.e1rm);
       expect(s[1].bodyweightLbs, closeTo(165, 1e-9));
       expect(s[1].bwCarried, isTrue);
     });
@@ -222,6 +225,7 @@ void main() {
           _set('2026-09-05', 'Barbell Deadlift', 400, 1),
         ],
         weights,
+        basis: WilksBasis.e1rm,
       );
       expect(s, hasLength(1));
       expect(s.single.monthStart, DateTime(2026, 9, 1));
@@ -232,6 +236,7 @@ void main() {
         rows,
         weights,
         through: DateTime(2026, 11, 15), // Oct + Nov: no data at all
+        basis: WilksBasis.e1rm,
       );
       expect(s, hasLength(4));
       expect(s[2].monthStart, DateTime(2026, 10, 1));
@@ -250,6 +255,148 @@ void main() {
       );
       // Weigh-ins but no lifts → still empty (never guess a total).
       expect(monthlyWilksSeries([], weights), isEmpty);
+    });
+  });
+
+  group('actual-max basis (the display standard, 2026-09-22)', () {
+    // User, verbatim: "my wilks should be tracked against my absolute
+    // max score for wilks ever. That should be the benchmark, but done
+    // against actually max lift numbers, not e1RM."
+    final weights = [_bw('2026-08-04', 164), _bw('2026-08-20', 166)];
+
+    test('month picks the heaviest weight ACTUALLY lifted — 405×2 '
+        'counts as 405, not its e1RM', () {
+      final s = monthlyWilksSeries(
+        [
+          _set('2026-08-03', 'Barbell Squat', 405, 2), // → 405, not 432
+          _set('2026-08-05', 'Flat Barbell Bench Press', 225, 3),
+          _set('2026-08-10', 'Barbell Deadlift', 455, 1),
+        ],
+        weights,
+        basis: WilksBasis.actualMax,
+      );
+      expect(s, hasLength(1));
+      expect(s.single.totalLbs, closeTo(405 + 225 + 455, 1e-9));
+    });
+
+    test('any reps >= 1 qualifies — a heavy high-rep set is still a '
+        'lifted number', () {
+      final s = monthlyWilksSeries(
+        [
+          // reps 8 would NOT qualify on the e1RM basis (reps <= 5).
+          _set('2026-08-03', 'Barbell Squat', 315, 8),
+          _set('2026-08-05', 'Flat Barbell Bench Press', 185, 10),
+          _set('2026-08-10', 'Barbell Deadlift', 365, 6),
+        ],
+        weights,
+        basis: WilksBasis.actualMax,
+      );
+      expect(s, hasLength(1));
+      expect(s.single.totalLbs, closeTo(315 + 185 + 365, 1e-9));
+    });
+
+    test('carries untrained lifts and bodyweight across months', () {
+      final s = monthlyWilksSeries(
+        [
+          _set('2026-08-03', 'Barbell Squat', 405, 2),
+          _set('2026-08-05', 'Flat Barbell Bench Press', 225, 3),
+          _set('2026-08-10', 'Barbell Deadlift', 455, 1),
+          // September: only squat trained, LIGHTER — best-of-month is
+          // 385, but bench + deadlift carry at their August values.
+          _set('2026-09-14', 'Barbell Squat', 385, 5),
+        ],
+        weights, // no September weigh-in → bw carries at Aug mean 165
+        basis: WilksBasis.actualMax,
+      );
+      expect(s, hasLength(2));
+      expect(s[1].totalLbs, closeTo(385 + 225 + 455, 1e-9));
+      expect(s[1].carried, ['bench', 'deadlift']);
+      expect(s[1].bodyweightLbs, closeTo(165, 1e-9));
+      expect(s[1].bwCarried, isTrue);
+    });
+
+    test('weekly series takes the same basis (weekly-current stat)', () {
+      final s = weeklyWilksSeries(
+        [
+          _set('2026-09-07', 'Barbell Squat', 405, 2),
+          _set('2026-09-08', 'Flat Barbell Bench Press', 225, 8),
+          _set('2026-09-10', 'Barbell Deadlift', 455, 1),
+        ],
+        [_bw('2026-09-07', 164)],
+        basis: WilksBasis.actualMax,
+      );
+      expect(s, hasLength(1));
+      expect(s.single.totalLbs, closeTo(405 + 225 + 455, 1e-9));
+    });
+
+    test('actual-max wilks <= e1RM wilks for the same data (an actual '
+        'lift is never more than its estimate)', () {
+      final rows = [
+        _set('2026-08-03', 'Barbell Squat', 300, 1),
+        _set('2026-08-05', 'Flat Barbell Bench Press', 200, 3),
+        _set('2026-08-10', 'Barbell Deadlift', 400, 2),
+        _set('2026-09-01', 'Barbell Squat', 305, 5),
+        _set('2026-09-15', 'Barbell Deadlift', 410, 1),
+      ];
+      final actual = monthlyWilksSeries(
+        rows,
+        weights,
+        basis: WilksBasis.actualMax,
+      );
+      final e1rm = monthlyWilksSeries(rows, weights, basis: WilksBasis.e1rm);
+      expect(actual, hasLength(e1rm.length));
+      for (var i = 0; i < actual.length; i++) {
+        expect(
+          actual[i].wilks,
+          lessThanOrEqualTo(e1rm[i].wilks),
+          reason: 'month ${actual[i].monthStart}',
+        );
+      }
+    });
+
+    test('actualMax is the default basis', () {
+      final rows = [
+        _set('2026-08-03', 'Barbell Squat', 405, 2),
+        _set('2026-08-05', 'Flat Barbell Bench Press', 225, 3),
+        _set('2026-08-10', 'Barbell Deadlift', 455, 1),
+      ];
+      expect(
+        monthlyWilksSeries(rows, weights).single.totalLbs,
+        closeTo(405 + 225 + 455, 1e-9),
+      );
+      expect(
+        weeklyWilksSeries(rows, weights).first.totalLbs,
+        closeTo(405 + 225 + 455, 1e-9),
+      );
+    });
+  });
+
+  group('wilksBenchmark', () {
+    WilksMonth m(int year, int month, double wilks) => WilksMonth(
+          monthStart: DateTime(year, month),
+          wilks: wilks,
+          totalLbs: 1000,
+          bodyweightLbs: 164,
+        );
+
+    test('returns the all-time max point with its month', () {
+      final best = wilksBenchmark([
+        m(2024, 1, 310.0),
+        m(2024, 2, 342.1), // the peak
+        m(2024, 3, 320.0),
+        m(2026, 9, 335.0),
+      ]);
+      expect(best!.wilks, 342.1);
+      expect(best.monthStart, DateTime(2024, 2));
+    });
+
+    test('ties keep the earliest month', () {
+      final best = wilksBenchmark([m(2024, 1, 330.0), m(2024, 5, 330.0)]);
+      expect(best!.monthStart, DateTime(2024, 1));
+    });
+
+    test('empty series → null', () {
+      expect(wilksBenchmark(const []), isNull);
     });
   });
 
@@ -274,6 +421,7 @@ void main() {
         w,
         through: DateTime(2026, 9, 22),
         weekStartDay: DateTime.saturday,
+        basis: WilksBasis.e1rm,
       );
       for (final wk in weeks) {
         expect(wk.weekStart.weekday, DateTime.saturday);

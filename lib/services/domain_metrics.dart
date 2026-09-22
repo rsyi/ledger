@@ -9,8 +9,9 @@
 /// Full built-in vocabulary (P2 + P3): pl_total, e1rm_reference,
 /// all_time_best_weight, wilks, wilks_series (strength — wilks is the
 /// WILKS-2020 SBD score, weekly-current stat; wilks_series is the
-/// MONTHLY trend, see services/wilks.dart), bw_series, bf_series
-/// (weight),
+/// MONTHLY trend; both on the ACTUAL-MAX basis since 2026-09-22 —
+/// heaviest weight actually lifted, not e1RM — see services/wilks.dart),
+/// bw_series, bf_series (weight),
 /// kcal_series, protein_series (meals — daily sums; protein carries a
 /// bodyweight-scaled goal band), grade_pyramid, session_frequency
 /// (climbing), hr_4x4_series (cardio). Unknown ids return a
@@ -60,7 +61,9 @@ class MetricStats extends MetricData {
 /// A daily line chart: raw [points], optional smoothed [avg] overlay,
 /// optional flat [goal] target line, optional acceptable-drop [floor]
 /// line (a second dashed line under the goal — wilks_series' "act if
-/// you sink under this" during a cut), optional shaded goal band
+/// you sink under this" during a cut), optional all-time [benchmark]
+/// line with its caption [benchmarkNote] ("best ever 342.1 · Mar '25"
+/// — wilks_series' absolute-max yardstick), optional shaded goal band
 /// ([bandLow]..[bandHigh] — both set or both null). [fullHistory] asks
 /// the chart to plot the whole series instead of its default trailing
 /// window (monthly series — a month-cadence trend inside an 84-day
@@ -70,6 +73,8 @@ class MetricSeries extends MetricData {
   final List<({DateTime day, double value})> avg;
   final double? goal;
   final double? floor;
+  final double? benchmark;
+  final String? benchmarkNote;
   final double? bandLow;
   final double? bandHigh;
   final String? unit;
@@ -79,6 +84,8 @@ class MetricSeries extends MetricData {
     this.avg = const [],
     this.goal,
     this.floor,
+    this.benchmark,
+    this.benchmarkNote,
     this.bandLow,
     this.bandHigh,
     this.unit,
@@ -387,10 +394,11 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
 
     case 'wilks':
       // WILKS-2020 SBD score (squat+bench+deadlift only — NOT the
-      // 4-lift pl_total). The stat stays WEEKLY-current: best capped
-      // e1RM per lift (reps <= 5, carried forward when untrained) at
-      // that week's 7-day-avg bodyweight. All semantics + verified
-      // constants: wilks.dart.
+      // 4-lift pl_total). The stat stays WEEKLY-current, on the
+      // ACTUAL-MAX basis (2026-09-22): heaviest weight actually lifted
+      // per lift that week (any reps >= 1, carried forward when
+      // untrained) at that week's 7-day-avg bodyweight. All semantics
+      // + verified constants: wilks.dart.
       if (inputs.strengthRows.isEmpty) {
         return const MetricUnavailable('no strength history');
       }
@@ -428,6 +436,10 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       // can't drag a point, monthly-mean bodyweight carried through
       // months with no weigh-in (which is what lets the series run
       // back through sparse weigh-in eras instead of truncating).
+      // Basis = ACTUAL MAX (2026-09-22, user: "done against actually
+      // max lift numbers, not e1RM") — the heaviest weight lifted, so
+      // the series tracks real strength through the cut, and its
+      // all-time max is the benchmark line below.
       if (inputs.strengthRows.isEmpty) {
         return const MetricUnavailable('no strength history');
       }
@@ -452,15 +464,21 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       final points = [
         for (final mo in months) (day: mo.monthStart, value: mo.wilks),
       ];
+      // The BENCHMARK: the all-time max of the monthly series, drawn
+      // as its own line + "best ever 3XX · Mmm 'yy" caption — the
+      // absolute-max yardstick the user tracks against.
+      final bench = wilksBenchmark(months);
       // `from` anchors the dashed REFERENCE at the WEEKLY value as of
-      // that date — the Wilks the cut was walked into with (327.5 on
-      // 2026-09-21). Weekly, not monthly, on purpose: the cut-start
-      // month's point keeps absorbing best-of-month sets logged during
-      // the cut itself, which would move the yardstick. The series
-      // shows the full computable history (user 2026-09-22: "wilks
-      // should be tracked for longer"). floor_pct then hangs the
-      // acceptable-drop line under the reference: reference ×
-      // (1 − pct/100); 3+ weeks below the floor = the act signal.
+      // that date — the Wilks the cut was walked into with. Weekly,
+      // not monthly, on purpose: the cut-start month's point keeps
+      // absorbing best-of-month sets logged during the cut itself,
+      // which would move the yardstick. Recomputed on the actual-max
+      // basis since 2026-09-22 (same basis as the series — apples to
+      // apples). The series shows the full computable history (user
+      // 2026-09-22: "wilks should be tracked for longer"). floor_pct
+      // then hangs the acceptable-drop line under the reference:
+      // reference × (1 − pct/100); 3+ weeks below the floor = the act
+      // signal.
       double? reference;
       final from = m.from;
       if (from != null) {
@@ -487,6 +505,12 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
         points: points,
         goal: reference,
         floor: floor,
+        benchmark: bench?.wilks,
+        benchmarkNote: bench == null
+            ? null
+            : 'best ever ${bench.wilks.toStringAsFixed(1)} · '
+                '${_monthAbbr[bench.monthStart.month - 1]} '
+                "'${(bench.monthStart.year % 100).toString().padLeft(2, '0')}",
         unit: m.unit,
         fullHistory: true,
       );
@@ -572,6 +596,11 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       return MetricUnavailable('unknown metric "${m.id}"');
   }
 }
+
+const _monthAbbr = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
 
 // ---------------------------------------------------------------------------
 // Headline strip

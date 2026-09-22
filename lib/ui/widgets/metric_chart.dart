@@ -16,7 +16,9 @@ import 'pinned_tooltip_line_chart.dart';
 /// Compact series chart: raw points (faint), optional smoothed line
 /// (solid), optional flat goal line (dashed tertiary), optional
 /// acceptable-drop floor line (dotted error color — the "act if you
-/// sink under this" line, e.g. wilks_series' cut floor).
+/// sink under this" line, e.g. wilks_series' cut floor), optional
+/// all-time benchmark line (long-dashed secondary + "best ever …"
+/// caption — wilks_series' absolute-max yardstick, 2026-09-22).
 ///
 /// Windowing (2026-09-22): a compact range-chip row above the plot
 /// re-windows the SAME already-loaded series client-side (clip by
@@ -113,6 +115,7 @@ class _MetricChartState extends State<MetricChart> {
     final avgSpots = [for (final p in avg) FlSpot(_x(p.day), p.value)];
     final goal = series.goal;
     final floor = series.floor;
+    final benchmark = series.benchmark;
     final bandLow = series.bandLow;
     final bandHigh = series.bandHigh;
 
@@ -121,6 +124,7 @@ class _MetricChartState extends State<MetricChart> {
       for (final s in avgSpots) s.y,
       ?goal,
       ?floor,
+      ?benchmark,
       ?bandLow,
       ?bandHigh,
     ];
@@ -259,6 +263,21 @@ class _MetricChartState extends State<MetricChart> {
                       dashArray: [2, 4],
                       dotData: const FlDotData(show: false),
                     ),
+                  // All-time benchmark: long-dashed, secondary-toned —
+                  // distinct from the goal (tertiary) and floor (error)
+                  // so "best ever" reads as its own yardstick.
+                  if (benchmark != null)
+                    LineChartBarData(
+                      spots: [
+                        FlSpot(xMin, benchmark),
+                        FlSpot(xMax, benchmark),
+                      ],
+                      isCurved: false,
+                      barWidth: 1.5,
+                      color: scheme.secondary,
+                      dashArray: [8, 4],
+                      dotData: const FlDotData(show: false),
+                    ),
                 ],
                 lineTouchData: LineTouchData(
                   enabled: true,
@@ -290,11 +309,16 @@ class _MetricChartState extends State<MetricChart> {
             ),
           ),
         ),
-        if (goal != null || floor != null || hasBand || widget.goalNote != null)
+        if (goal != null ||
+            floor != null ||
+            hasBand ||
+            widget.goalNote != null ||
+            series.benchmarkNote != null)
           Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text(
               [
+                ?series.benchmarkNote,
                 if (goal != null)
                   'goal ${goal.toStringAsFixed(goal == goal.roundToDouble() ? 0 : 1)}'
                       '${series.unit == null ? '' : ' ${series.unit}'}',

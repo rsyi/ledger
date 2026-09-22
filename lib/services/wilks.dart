@@ -3,16 +3,35 @@
 /// Classic 3-lift Wilks: total = squat + bench + deadlift ONLY. The
 /// app's `pl_total` is a 4-lift sum (it includes press), so it is NOT
 /// comparable to powerlifting references — this metric is, and the UI
-/// labels it "Wilks (SBD)" to make the distinction explicit.
+/// labels it "Wilks (SBD, actual lifts)" to make the distinction
+/// explicit.
+///
+/// TWO BASES ([WilksBasis]), one shared engine:
+///
+///   • [WilksBasis.actualMax] — THE DISPLAY STANDARD (user 2026-09-22:
+///     "my wilks should be tracked against my absolute max score for
+///     wilks ever. That should be the benchmark, but done against
+///     actually max lift numbers, not e1RM"). Per period per lift the
+///     value is the heaviest weight ACTUALLY lifted over sets with any
+///     reps >= 1 and weight > 0 — a 405×2 counts as 405: it is a
+///     lifted number, not an estimate, so the rep count neither
+///     inflates it (no Epley) nor disqualifies it (no reps cap).
+///     The all-time max of the monthly series is the benchmark the
+///     current score is tracked against ([wilksBenchmark]).
+///   • [WilksBasis.e1rm] — the original estimate basis: best capped
+///     e1RM (Epley, reps capped at 12 — the same [epleyE1rm]
+///     expression used everywhere) over sets with reps <= 5 and
+///     weight > 0. Retired from display 2026-09-22; kept for
+///     comparisons/tests. (The §2.5 effort-grading reference machinery
+///     in program_metrics.dart is separate and untouched.)
 ///
 /// Weekly cadence (ISO weeks keyed by Monday, matching the §2.5
 /// rollup):
-///   • per lift, the week's value = best capped e1RM (Epley, reps
-///     capped at 12 — the same [epleyE1rm] expression used everywhere)
-///     over sets logged that week with reps <= 5 and weight > 0;
-///     when a lift wasn't trained that week the last known weekly
-///     value carries forward (the maintenance cut trains each lift
-///     weekly, so carries stay short);
+///   • per lift, the week's value = the basis' best qualifying number
+///     over sets logged that week; when a lift wasn't trained that
+///     week the last known weekly value carries forward (the
+///     maintenance cut trains each lift weekly, so carries stay
+///     short);
 ///   • bodyweight = that ISO week's 7-day average — the mean of the
 ///     daily weigh-in series over Mon..Sun — carried forward across
 ///     weeks with no weigh-ins;
@@ -53,6 +72,29 @@ const double kgPerLb = 0.45359237;
 /// The classic powerlifting three: the lifts a Wilks total sums.
 const List<String> wilksLifts = ['squat', 'bench', 'deadlift'];
 
+/// Which per-set number a Wilks series is built from (library docs).
+enum WilksBasis {
+  /// Best capped e1RM over reps <= 5 sets — the retired estimate basis.
+  e1rm,
+
+  /// Heaviest weight actually lifted, any reps >= 1 — the display
+  /// standard (405×2 counts as 405).
+  actualMax,
+}
+
+/// The basis' qualifying value for one set, or null when the set does
+/// not qualify. THE one place both series functions read a set.
+double? _basisValue(StrengthRow r, WilksBasis basis) {
+  if (r.weight <= 0 || r.reps <= 0) return null;
+  switch (basis) {
+    case WilksBasis.e1rm:
+      if (r.reps > 5) return null;
+      return epleyE1rm(r.weight, r.reps);
+    case WilksBasis.actualMax:
+      return r.weight;
+  }
+}
+
 /// WILKS-2020 male coefficient at [bodyweightKg] (see library docs for
 /// the constants and their source).
 double wilks2020MaleCoeff(double bodyweightKg) {
@@ -74,15 +116,16 @@ class WilksWeek {
   final DateTime weekStart;
   final double wilks;
 
-  /// SBD total in lbs (best-of-week capped e1RMs, carries included).
+  /// SBD total in lbs (best-of-week per-lift values on the series'
+  /// [WilksBasis], carries included).
   final double totalLbs;
 
   /// The week's bodyweight reference in lbs (7-day average, possibly
   /// carried from an earlier week).
   final double bodyweightLbs;
 
-  /// Lifts whose value this week is carried forward (not trained with
-  /// a qualifying reps<=5 set this week).
+  /// Lifts whose value this week is carried forward (no qualifying set
+  /// on the series' basis this week).
   final List<String> carried;
 
   const WilksWeek({
@@ -104,22 +147,26 @@ class WilksWeek {
 /// [weekStartDay] keys the weeks (program.yaml v7 `week_start` —
 /// saturday makes a Saturday PR count toward the CURRENT week's stat).
 /// The monthly trend series below is untouched by the key.
+///
+/// [basis] selects the per-set number (library docs); the default is
+/// the actual-max display standard.
 List<WilksWeek> weeklyWilksSeries(
   List<StrengthRow> strengthRows,
   List<WeightRow> weighIns, {
   DateTime? through,
   int weekStartDay = DateTime.monday,
+  WilksBasis basis = WilksBasis.actualMax,
 }) {
   DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
   DateTime wk(DateTime d) => weekStartOf(d, weekStartDay);
 
-  // Best qualifying e1RM per (week start, lift).
+  // Best qualifying value per (week start, lift).
   final bestByWeek = <DateTime, Map<String, double>>{};
   for (final r in strengthRows) {
     final lift = mainLiftByExercise[r.exercise];
     if (lift == null || !wilksLifts.contains(lift)) continue;
-    if (r.reps <= 0 || r.reps > 5 || r.weight <= 0) continue;
-    final e = epleyE1rm(r.weight, r.reps);
+    final e = _basisValue(r, basis);
+    if (e == null) continue;
     final m = bestByWeek[wk(r.date)] ??= {};
     if ((m[lift] ?? 0) < e) m[lift] = e;
   }
@@ -180,7 +227,8 @@ class WilksMonth {
   final DateTime monthStart;
   final double wilks;
 
-  /// SBD total in lbs (best-of-month capped e1RMs, carries included).
+  /// SBD total in lbs (best-of-month per-lift values on the series'
+  /// [WilksBasis], carries included).
   final double totalLbs;
 
   /// The month's bodyweight reference in lbs — mean of the month's
@@ -188,7 +236,7 @@ class WilksMonth {
   final double bodyweightLbs;
 
   /// Lifts whose value this month is carried forward (no qualifying
-  /// reps<=5 set this month).
+  /// set on the series' basis this month).
   final List<String> carried;
 
   /// True when the month had no weigh-in and [bodyweightLbs] is the
@@ -216,17 +264,18 @@ List<WilksMonth> monthlyWilksSeries(
   List<StrengthRow> strengthRows,
   List<WeightRow> weighIns, {
   DateTime? through,
+  WilksBasis basis = WilksBasis.actualMax,
 }) {
   DateTime monthOf(DateTime d) => DateTime(d.year, d.month);
 
-  // Best qualifying e1RM per (month, lift).
+  // Best qualifying value per (month, lift).
   final bestByMonth = <DateTime, Map<String, double>>{};
   for (final r in strengthRows) {
     final lift = mainLiftByExercise[r.exercise];
     if (lift == null || !wilksLifts.contains(lift)) continue;
-    if (r.reps <= 0 || r.reps > 5 || r.weight <= 0) continue;
+    final e = _basisValue(r, basis);
+    if (e == null) continue;
     final mo = monthOf(r.date);
-    final e = epleyE1rm(r.weight, r.reps);
     final m = bestByMonth[mo] ??= {};
     if ((m[lift] ?? 0) < e) m[lift] = e;
   }
@@ -278,4 +327,18 @@ List<WilksMonth> monthlyWilksSeries(
     );
   }
   return out;
+}
+
+/// The all-time best point of a monthly Wilks series — the BENCHMARK
+/// the current score is tracked against (user 2026-09-22: "my wilks
+/// should be tracked against my absolute max score for wilks ever").
+/// Meaningful on the actual-max basis: best-ever done against actually
+/// lifted numbers. Ties keep the EARLIEST month (that's when the mark
+/// was first hit). Null for an empty series.
+WilksMonth? wilksBenchmark(List<WilksMonth> series) {
+  WilksMonth? best;
+  for (final m in series) {
+    if (best == null || m.wilks > best.wilks) best = m;
+  }
+  return best;
 }

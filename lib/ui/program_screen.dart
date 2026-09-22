@@ -1087,7 +1087,9 @@ class _WilksCard extends StatelessWidget {
     );
 
     // Weekly-current stat line (the monthly chart is the trend; THIS is
-    // where the cut stands right now).
+    // where the cut stands right now). Actual-max basis — the series
+    // default since 2026-09-22, same basis as the chart above and the
+    // home hero.
     final weeks = strengthRows.isEmpty || daily.isEmpty
         ? const <WilksWeek>[]
         : weeklyWilksSeries(

@@ -403,7 +403,8 @@ void main() {
       // All sets fall in weeks of Aug 31 / Sep 7; bw first appears in
       // the week of Sep 14, so that week (all lifts carried) is the
       // first computable point, carried into today's week of Sep 21.
-      final total = e1rm(315, 3) + e1rm(225, 5) + e1rm(405, 2);
+      // ACTUAL-MAX basis (2026-09-22): the weights lifted, not e1RMs.
+      const total = 315.0 + 225 + 405;
       final expected =
           total * kgPerLb * wilks2020MaleCoeff(164 * kgPerLb);
       expect(d.stats.single.label, 'Wilks (SBD)');
@@ -450,7 +451,8 @@ void main() {
         d.points.map((p) => p.day),
         [DateTime(2026, 7, 1), DateTime(2026, 8, 1), DateTime(2026, 9, 1)],
       );
-      final julTotal = e1rm(300, 1) + e1rm(200, 3) + e1rm(400, 1);
+      // ACTUAL-MAX basis: monthly totals are the weights lifted.
+      const julTotal = 300.0 + 200 + 400;
       expect(
         d.points[0].value,
         closeTo(julTotal * kgPerLb * wilks2020MaleCoeff(166 * kgPerLb), 1e-9),
@@ -458,18 +460,26 @@ void main() {
       expect(d.points[1].value, closeTo(d.points[0].value, 1e-9));
       // The Sep monthly point takes the month's best squat (the 09-21
       // single).
-      final sepTotal = e1rm(325, 1) + e1rm(200, 3) + e1rm(400, 1);
+      const sepTotal = 325.0 + 200 + 400;
       expect(
         d.points[2].value,
         closeTo(sepTotal * kgPerLb * wilks2020MaleCoeff(164 * kgPerLb), 1e-9),
       );
       // Reference = the WEEKLY value as of `from` (week of 09-14:
       // squat still 305) — the Wilks the cut was walked into with, not
-      // the cut-start month's eventual best. Floor hangs 2.5% under it.
-      final refTotal = e1rm(305, 1) + e1rm(200, 3) + e1rm(400, 1);
+      // the cut-start month's eventual best — on the SAME actual-max
+      // basis as the series. Floor hangs 2.5% under it.
+      const refTotal = 305.0 + 200 + 400;
       final ref = refTotal * kgPerLb * wilks2020MaleCoeff(164 * kgPerLb);
       expect(d.goal, closeTo(ref, 1e-9));
       expect(d.floor, closeTo(ref * 0.975, 1e-9));
+      // Benchmark = the all-time max of the monthly series (Sep here),
+      // with its month in the caption.
+      expect(d.benchmark, closeTo(d.points[2].value, 1e-9));
+      expect(
+        d.benchmarkNote,
+        "best ever ${d.points[2].value.toStringAsFixed(1)} · Sep '26",
+      );
       // The chart must not clip monthly history to its 84-day window.
       expect(d.fullHistory, isTrue);
     });

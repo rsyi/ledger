@@ -14,6 +14,15 @@
 ///     unpin, a different spot to move the pin, empty space to clear;
 ///   • gesture end clears only the transient preview — the pin stays.
 ///
+/// [PinnedTooltipLineChart.touchableBars] restricts which bars the
+/// touch layer may hit (the phantom-data-point fix, 2026-09-22): a
+/// touch response includes the nearest spot from EVERY bar, so overlay
+/// lines (7-day average, goal/floor/benchmark/target) used to get an
+/// indicator dot AND a same-date tooltip row next to the real
+/// measurement — one logged weigh-in read as two "data points" for
+/// that day. Callers pass their data bar indices; reference lines
+/// stay lines.
+///
 /// Callers build [LineChartData] exactly as before (including
 /// [LineTouchData.touchTooltipData] for tooltip content/appearance);
 /// any `handleBuiltInTouches` / `touchCallback` in the passed data are
@@ -23,10 +32,36 @@ library;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
+/// Touched (barIndex, spotIndex) pairs from [response], restricted to
+/// [touchableBars] (null → every bar, the pre-fix behavior). Null when
+/// nothing touchable was hit — callers treat that exactly like a touch
+/// on empty space (no preview; a tap clears the pin).
+List<(int, int)>? touchablePositions(
+  LineTouchResponse? response,
+  Set<int>? touchableBars,
+) {
+  final spots = response?.lineBarSpots;
+  if (spots == null || spots.isEmpty) return null;
+  final out = [
+    for (final s in spots)
+      if (touchableBars == null || touchableBars.contains(s.barIndex))
+        (s.barIndex, s.spotIndex),
+  ];
+  return out.isEmpty ? null : out;
+}
+
 class PinnedTooltipLineChart extends StatefulWidget {
   final LineChartData data;
 
-  const PinnedTooltipLineChart({super.key, required this.data});
+  /// Indices into [LineChartData.lineBarsData] whose spots may be
+  /// previewed/pinned (library docs). Null → all bars.
+  final Set<int>? touchableBars;
+
+  const PinnedTooltipLineChart({
+    super.key,
+    required this.data,
+    this.touchableBars,
+  });
 
   @override
   State<PinnedTooltipLineChart> createState() =>
@@ -43,12 +78,6 @@ class _PinnedTooltipLineChartState extends State<PinnedTooltipLineChart> {
   /// for display, cleared when the gesture ends.
   List<(int, int)>? _transient;
 
-  static List<(int, int)>? _positions(LineTouchResponse? response) {
-    final spots = response?.lineBarSpots;
-    if (spots == null || spots.isEmpty) return null;
-    return [for (final s in spots) (s.barIndex, s.spotIndex)];
-  }
-
   static bool _same(List<(int, int)>? a, List<(int, int)>? b) {
     if (a == null || b == null) return identical(a, b);
     if (a.length != b.length) return false;
@@ -62,8 +91,8 @@ class _PinnedTooltipLineChartState extends State<PinnedTooltipLineChart> {
     if (!mounted) return;
     if (event is FlTapUpEvent) {
       // Tap: pin (or toggle off when re-tapping the pinned spot; clear
-      // when tapping empty space — _positions is null there).
-      final tapped = _positions(response);
+      // when tapping empty space — touchablePositions is null there).
+      final tapped = touchablePositions(response, widget.touchableBars);
       setState(() {
         _transient = null;
         _pinned = _same(tapped, _pinned) ? null : tapped;
@@ -75,7 +104,7 @@ class _PinnedTooltipLineChartState extends State<PinnedTooltipLineChart> {
       if (_transient != null) setState(() => _transient = null);
       return;
     }
-    final touched = _positions(response);
+    final touched = touchablePositions(response, widget.touchableBars);
     if (!_same(touched, _transient)) {
       setState(() => _transient = touched);
     }

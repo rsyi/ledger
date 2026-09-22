@@ -173,6 +173,12 @@ class _MetricChartState extends State<MetricChart> {
               // Re-key on range switch: the spot indices change under
               // the pin, so the pinned tooltip clears with the window.
               key: ValueKey(range),
+              // Only the DATA series is touchable (its bar sits right
+              // after the optional band pair). Without this, the avg /
+              // goal / floor / benchmark overlays each contributed a
+              // same-date tooltip row + indicator dot — one real point
+              // reading as several (the Sep-22 duplicate-weights bug).
+              touchableBars: {bars.length},
               data: LineChartData(
                 minX: xMin,
                 maxX: xMax,

@@ -939,6 +939,12 @@ class _WeightChartState extends State<_WeightChart> {
               // Re-key on range switch so the pinned tooltip clears
               // with the window (spot indices shift under the pin).
               key: ValueKey(range),
+              // Only the daily weigh-in bar is touchable: the 7-day
+              // average and block-target overlays otherwise get a
+              // same-date tooltip row + indicator dot — one logged
+              // weigh-in reading as two "weights" for that day (the
+              // Sep-22 bug). No weigh-ins in window → nothing to pin.
+              touchableBars: dailySpots.isNotEmpty ? const {0} : const <int>{},
               data: LineChartData(
                 minX: xMin,
                 maxX: xMax,

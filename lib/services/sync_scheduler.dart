@@ -25,6 +25,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'engine_ledger_connector.dart';
 import 'integrations/registry.dart';
+import 'transient_retry.dart';
 
 class SyncScheduler with WidgetsBindingObserver {
   SyncScheduler._(this._ledger, this._viewsJson, this._prefs);
@@ -124,7 +125,30 @@ class SyncScheduler with WidgetsBindingObserver {
       // rides this same cycle's push to the Sheet. pullDue() contains
       // its own failures — a source outage never blocks the sync.
       await IntegrationRegistry.instance?.pullDue();
-      final results = await _ledger.repo.sync(_viewsJson);
+      // The engine reports per-view failures as `error` strings (e.g.
+      // "push insert: error sending request … dns error"), not throws.
+      // A network-switch/cold-radio blip mid-sync would otherwise stick
+      // as "Last sync failed" until the next trigger — so when EVERY
+      // error looks transient, rethrow into retryTransient and re-sync
+      // after a short delay (dirty rows survive a failed round; a
+      // re-sync is idempotent). Real failures (or a transient one still
+      // failing after the retries) surface exactly as before.
+      final results = await retryTransient(
+        () async {
+          final res = await _ledger.repo.sync(_viewsJson);
+          final errors = res
+              .map((r) => r['error'])
+              .whereType<String>()
+              .toList();
+          if (errors.isNotEmpty &&
+              errors.every(isTransientNetworkError)) {
+            throw _TransientSyncFailure(errors.join('; '));
+          }
+          return res;
+        },
+        attempts: 4,
+        delay: const Duration(milliseconds: 1500),
+      );
       final errors = results
           .map((r) => r['error'])
           .whereType<String>()
@@ -133,11 +157,25 @@ class SyncScheduler with WidgetsBindingObserver {
       lastSync.value = DateTime.now();
     } catch (e) {
       // Input-shape / transport-level failure: keep dirty rows, note
-      // the error, retry at the next trigger.
+      // the error, retry at the next trigger. (Transport throws from
+      // the engine also pass through retryTransient above when their
+      // message matches the transient patterns.)
       lastError.value = e.toString();
     } finally {
       syncing.value = false;
       await refreshPending();
     }
   }
+}
+
+/// Wraps per-view engine sync errors that all look like transient
+/// connectivity failures so [retryTransient] retries them. toString()
+/// is the raw joined error text — [isTransientNetworkError] matches on
+/// it, and it is what `lastError` shows if the retries run out.
+class _TransientSyncFailure implements Exception {
+  _TransientSyncFailure(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
 }

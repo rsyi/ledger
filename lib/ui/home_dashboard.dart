@@ -25,11 +25,17 @@
 ///             Program screen's declared-vs-observed verdict, condensed
 ///             to a chip.
 ///   STRENGTH  per lift, the three numbers the working-max spec §0 says
-///             never to confuse: est 1RM (42-day reference — the
-///             measurement), WM (the controller setting percentages
-///             hang off) with its 4-week direction arrow, and the
-///             all-time best e1RM from full strength history (cached
-///             per session). Pain caps show as a labeled chip.
+///             never to confuse — full labels + age tags (2026-09-22):
+///             recent e1RM (best capped e1RM in the last 14 days of
+///             real work — light weeks + sub-0.75-effort sets excluded,
+///             window widens until it finds something and the age tag
+///             tells the story; DISPLAY-ONLY — the §2.5 42-day
+///             reference is unchanged internally), working max (the
+///             controller setting percentages hang off) with its
+///             4-week direction arrow, and the all-time best e1RM from
+///             full strength history (cached per session). Every
+///             number carries a "3d"/"2w"/"5mo" age tag. Pain caps
+///             show as a labeled chip.
 ///   EXECUTION this week's working / near-max / bench counts vs the
 ///             program targets, + fired-flag count. Data: the current
 ///             program_status row (read-only sheet path).
@@ -62,7 +68,7 @@ import '../services/home_synthesis.dart';
 import '../services/phase_eigenvectors.dart';
 import '../services/program_current.dart';
 import '../services/program_metrics.dart'
-    show StrengthRow, WeightRow, liftReferencesAsOf;
+    show GradedSet, StrengthRow, WeightRow, anchorMondayOf, gradeSets;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/warehouse_connector.dart';
@@ -182,33 +188,38 @@ class _EngineData {
   });
 }
 
-/// STRENGTH card data: the spec-§0 trio per lift.
+/// STRENGTH card data: the spec-§0 trio per lift, each value paired
+/// with the date it was set (→ age tags).
 class _StrengthData {
-  /// WM value + 4-week direction + pain cap, per lift.
+  /// WM value + effective_from + 4-week direction + pain cap, per lift.
   final List<LiftTrend> trends;
 
-  /// est 1RM: 42-day reference e1RM per lift (the measurement).
-  final Map<String, double> est;
+  /// recent e1RM: best capped e1RM in the trailing 14 days of real
+  /// work (light weeks + effort < 0.75 excluded; window widens until
+  /// found), with the date of the set.
+  final Map<String, ({double value, DateTime date})> recent;
 
-  /// All-time best e1RM per lift (full history, session-cached).
-  final Map<String, double> best;
+  /// All-time best e1RM per lift + the date it was set (full history,
+  /// session-cached).
+  final Map<String, ({double value, DateTime date})> best;
 
   const _StrengthData({
     required this.trends,
-    required this.est,
+    required this.recent,
     required this.best,
   });
 
   bool get isEmpty =>
-      trends.every((t) => t.valueLb == null) && est.isEmpty && best.isEmpty;
+      trends.every((t) => t.valueLb == null) && recent.isEmpty && best.isEmpty;
 }
 
 class HomeDashboardState extends State<HomeDashboard> {
   late final DateTime _today;
 
-  /// All-time best e1RMs are computed from FULL strength history —
-  /// once per app session (process-wide), busted by [reload].
-  static Map<String, double>? _bestE1rmCache;
+  /// All-time best e1RMs (+ the dates they were set) are computed from
+  /// FULL strength history — once per app session (process-wide),
+  /// busted by [reload].
+  static Map<String, ({double value, DateTime date})>? _bestE1rmCache;
 
   /// Test hook.
   @visibleForTesting
@@ -432,15 +443,35 @@ class HomeDashboardState extends State<HomeDashboard> {
     final snap = await _wm;
     final rows = await _strengthRows;
     if (snap == null && rows.isEmpty) return null;
-    final est = rows.isEmpty
-        ? const <String, double>{}
-        : liftReferencesAsOf(rows, _today);
+    // recent e1RM (2026-09-22): 14-day best of REAL work — light
+    // accounting weeks (program week_type via the anchor Monday) and
+    // sub-0.75-effort sets excluded. DISPLAY-ONLY; the §2.5 42-day
+    // reference feeding the controller/planner is untouched.
+    final docs = await _docs;
+    final program = docs?.program;
+    final wsDay = weekStartDayOf(currentVersion(program));
+    String? weekTypeOf(DateTime weekStart) => program == null
+        ? null
+        : programCurrent(program, docs?.phase, anchorMondayOf(weekStart))
+              ?.weekType;
+    final graded = rows.isEmpty ? const <GradedSet>[] : gradeSets(rows);
+    final recent = <String, ({double value, DateTime date})>{};
+    for (final lift in synthesisLifts) {
+      final r = recentBestE1rm(
+        graded,
+        lift,
+        _today,
+        weekTypeOf: program == null ? null : weekTypeOf,
+        weekStartDay: wsDay,
+      );
+      if (r != null) recent[lift] = r;
+    }
     final best = rows.isEmpty
-        ? const <String, double>{}
-        : (_bestE1rmCache ??= allTimeBestE1rms(rows));
+        ? const <String, ({double value, DateTime date})>{}
+        : (_bestE1rmCache ??= allTimeBestE1rmsWithDates(rows));
     return _StrengthData(
       trends: liftTrends(snap, _today),
-      est: est,
+      recent: recent,
       best: best,
     );
   }
@@ -662,17 +693,24 @@ class HomeDashboardState extends State<HomeDashboard> {
 
   Future<void> _openStrengthSheet() async {
     final d = await _strength;
-    String liftLine(Map<String, double> m) => m.isEmpty
+    String liftLine(Map<String, ({double value, DateTime date})> m) =>
+        m.isEmpty
         ? '—'
         : synthesisLifts
               .where(m.containsKey)
-              .map((l) => '$l ${fmtLb(m[l]!.roundToDouble())}')
+              .map(
+                (l) =>
+                    '$l ${fmtLb(m[l]!.value.roundToDouble())} '
+                    '(${fmtAge(m[l]!.date, _today)})',
+              )
               .join(' · ');
     final wmLine = d == null
         ? '—'
         : [
             for (final t in d.trends)
-              if (t.valueLb != null) '${t.lift} ${fmtLb(t.valueLb!)}',
+              if (t.valueLb != null)
+                '${t.lift} ${fmtLb(t.valueLb!)}'
+                    '${t.asOf == null ? '' : ' (${fmtAge(t.asOf!, _today)})'}',
           ].join(' · ');
     final capped = [
       for (final t in d?.trends ?? const <LiftTrend>[])
@@ -682,29 +720,34 @@ class HomeDashboardState extends State<HomeDashboard> {
       title: 'Strength',
       entries: [
         _DetailEntry(
-          label: 'est 1RM (e1RM)',
-          value: liftLine(d?.est ?? const {}),
+          label: 'recent e1RM',
+          value: liftLine(d?.recent ?? const {}),
           explain:
-              'The measurement: best Epley-estimated 1RM over '
-              'qualifying sets (reps ≤ 8) in the trailing 42 days, '
-              'from your logged strength rows.',
+              'What you\'ve actually shown recently: the best '
+              'estimated 1RM over the last 14 days of real work — '
+              'deload (light-week) sets and easy sets under 75% effort '
+              'don\'t count. When there\'s no real work in the window '
+              'it slides back to your newest qualifying set; the age '
+              'tag tells you how current the number is.',
         ),
         _DetailEntry(
-          label: 'WM (working max)',
+          label: 'working max',
           value: wmLine.isEmpty ? '—' : wmLine,
           explain:
               'The controller\'s setting that percentages hang off — '
               'not your measured max. Moves on top-set RPE readings, '
               'test singles, and manual overrides (working_max tab). '
-              'Arrow = 4-week direction.',
+              'Arrow = 4-week direction; age = when the current value '
+              'took effect.',
         ),
         _DetailEntry(
-          label: 'best (all-time e1RM)',
+          label: 'all-time best',
           value: liftLine(d?.best ?? const {}),
           explain:
               'Your best-ever estimated 1RM (Epley, reps capped at '
               '12) over the full strength history — the ceiling the '
-              'other two numbers sit under.',
+              'other two numbers sit under; the age tag says when you '
+              'set it.',
         ),
         if (capped.isNotEmpty)
           _DetailEntry(
@@ -887,8 +930,9 @@ class HomeDashboardState extends State<HomeDashboard> {
               for (final t in d.trends)
                 _LiftNumbersRow(
                   trend: t,
-                  est: d.est[t.lift],
+                  recent: d.recent[t.lift],
                   best: d.best[t.lift],
+                  today: _today,
                 ),
               if (capped.isNotEmpty) ...[
                 const SizedBox(height: 4),
@@ -1363,7 +1407,9 @@ class _VerdictChip extends StatelessWidget {
   }
 }
 
-/// Column headers for the STRENGTH card's three spec-§0 numbers.
+/// Column headers for the STRENGTH card's three spec-§0 numbers —
+/// FULL labels (2026-09-22): the abbreviations ("e1RM"/"WM"/"best")
+/// made the three numbers read as one.
 class _LiftHeaderRow extends StatelessWidget {
   const _LiftHeaderRow();
 
@@ -1379,13 +1425,25 @@ class _LiftHeaderRow extends StatelessWidget {
         children: [
           const SizedBox(width: 44),
           Expanded(
-            child: Text('e1RM', textAlign: TextAlign.right, style: style),
+            child: Text(
+              'recent e1RM',
+              textAlign: TextAlign.right,
+              style: style,
+            ),
           ),
           Expanded(
-            child: Text('WM', textAlign: TextAlign.right, style: style),
+            child: Text(
+              'working max',
+              textAlign: TextAlign.right,
+              style: style,
+            ),
           ),
           Expanded(
-            child: Text('best', textAlign: TextAlign.right, style: style),
+            child: Text(
+              'all-time best',
+              textAlign: TextAlign.right,
+              style: style,
+            ),
           ),
         ],
       ),
@@ -1393,16 +1451,21 @@ class _LiftHeaderRow extends StatelessWidget {
   }
 }
 
-/// One lift's three numbers: est 1RM (measurement), WM (controller
-/// setting, with its 4-week direction glyph), all-time best e1RM.
+/// One lift's three numbers, aligned under the header's columns, each
+/// with an age tag ("3d"/"2w"/"5mo") saying when it was set: recent
+/// e1RM (14-day best of real work), working max (controller setting,
+/// with its 4-week direction glyph; age = when it took effect),
+/// all-time best e1RM.
 class _LiftNumbersRow extends StatelessWidget {
   final LiftTrend trend;
-  final double? est;
-  final double? best;
+  final ({double value, DateTime date})? recent;
+  final ({double value, DateTime date})? best;
+  final DateTime today;
   const _LiftNumbersRow({
     required this.trend,
-    required this.est,
+    required this.recent,
     required this.best,
+    required this.today,
   });
 
   @override
@@ -1418,7 +1481,33 @@ class _LiftNumbersRow extends StatelessWidget {
       fontWeight: FontWeight.w700,
       fontFeatures: const [FontFeature.tabularFigures()],
     );
+    final ageStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
+      fontSize: 8.5,
+      color: scheme.outline,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
     String lb(double? v) => v == null ? '—' : fmtLb(v.roundToDouble());
+    // Number + a small dim age tag ("315 3d"). The tag rides along on
+    // EVERY number so a stale value can never masquerade as current.
+    Widget cell(double? value, DateTime? date, {InlineSpan? suffix}) =>
+        Expanded(
+          child: Text.rich(
+            TextSpan(
+              text: lb(value),
+              style: numStyle,
+              children: [
+                ?suffix,
+                if (value != null && date != null)
+                  TextSpan(
+                    text: ' ${fmtAge(date, today)}',
+                    style: ageStyle,
+                  ),
+              ],
+            ),
+            textAlign: TextAlign.right,
+            maxLines: 1,
+          ),
+        );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: Row(
@@ -1432,27 +1521,13 @@ class _LiftNumbersRow extends StatelessWidget {
               ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
-          Expanded(
-            child: Text(lb(est), textAlign: TextAlign.right, style: numStyle),
+          cell(recent?.value, recent?.date),
+          cell(
+            trend.valueLb,
+            trend.asOf,
+            suffix: TextSpan(text: glyph, style: numStyle?.copyWith(color: color)),
           ),
-          Expanded(
-            child: Text.rich(
-              TextSpan(
-                text: lb(trend.valueLb),
-                style: numStyle,
-                children: [
-                  TextSpan(
-                    text: glyph,
-                    style: numStyle?.copyWith(color: color),
-                  ),
-                ],
-              ),
-              textAlign: TextAlign.right,
-            ),
-          ),
-          Expanded(
-            child: Text(lb(best), textAlign: TextAlign.right, style: numStyle),
-          ),
+          cell(best?.value, best?.date),
         ],
       ),
     );

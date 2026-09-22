@@ -83,21 +83,21 @@ void main() {
     expect(find.text('no status data'), findsNWidgets(2));
   });
 
-  testWidgets('STRENGTH renders est-1RM / WM / best columns from the '
-      'strength ledger even without a wm store', (tester) async {
+  testWidgets('STRENGTH renders recent-e1RM / working-max / all-time-best '
+      'columns with age tags even without a wm store', (tester) async {
     HomeDashboardState.clearBestE1rmCache();
     final strengthRepo = _FakeStatusRepo([
       {
         'date': DateTime(2026, 9, 21),
         'exercise': 'Barbell Squat',
         'weight': 300,
-        'reps': 1, // e1rm 310 — inside the 42-day window
+        'reps': 1, // e1rm 310 — recent (2d old at `today`)
       },
       {
         'date': DateTime(2025, 1, 6),
         'exercise': 'Barbell Squat',
         'weight': 320,
-        'reps': 1, // e1rm ~330.7 — all-time best, outside the window
+        'reps': 1, // e1rm ~330.7 — all-time best, long outside the window
       },
     ]);
     await tester.pumpWidget(_wrap(HomeDashboard(
@@ -106,11 +106,19 @@ void main() {
       today: DateTime(2026, 9, 23),
     )));
     await tester.pumpAndSettle();
-    expect(find.text('e1RM'), findsOneWidget); // column headers
-    expect(find.text('WM'), findsOneWidget);
-    expect(find.text('best'), findsOneWidget);
-    expect(find.text('310'), findsOneWidget); // 42-day reference
-    expect(find.text('331'), findsOneWidget); // all-time best (rounded)
+    // Full column labels (2026-09-22 redesign — no abbreviations).
+    expect(find.text('recent e1RM'), findsOneWidget);
+    expect(find.text('working max'), findsOneWidget);
+    expect(find.text('all-time best'), findsOneWidget);
+    // Numbers carry age tags: "310 2d" (recent) / "331 21mo" (best).
+    expect(
+      find.textContaining('310 2d', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('331 21mo', findRichText: true),
+      findsOneWidget,
+    );
   });
 
   testWidgets('tapping a card opens its detail sheet; Open action present',
@@ -149,7 +157,8 @@ void main() {
     expect(openedStatus, isTrue);
   });
 
-  testWidgets('STRENGTH detail sheet explains WM vs est 1RM', (tester) async {
+  testWidgets('STRENGTH detail sheet explains the three numbers',
+      (tester) async {
     HomeDashboardState.clearBestE1rmCache();
     await tester.pumpWidget(_wrap(HomeDashboard(
       strengthView: _strengthView,
@@ -166,12 +175,22 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('STRENGTH'));
     await tester.pumpAndSettle();
-    expect(find.text('WM (working max)'), findsOneWidget);
+    // Labels appear in the card header AND the sheet (full labels both
+    // places since the 2026-09-22 redesign).
+    expect(find.text('working max'), findsNWidgets(2));
+    expect(find.text('recent e1RM'), findsNWidgets(2));
+    expect(find.text('all-time best'), findsNWidgets(2));
+    // The copy explains each number's semantics.
+    expect(find.textContaining('not your measured max'), findsOneWidget);
     expect(
-      find.textContaining('not your measured max'),
+      find.textContaining('last 14 days of real work'),
       findsOneWidget,
     );
-    expect(find.textContaining('trailing 42 days'), findsOneWidget);
+    expect(
+      find.textContaining('the age tag tells you'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('reps capped at'), findsOneWidget);
   });
 
   testWidgets('EXECUTION/ENGINE render status-row numbers and flag chip',

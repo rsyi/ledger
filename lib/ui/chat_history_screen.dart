@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../models/chat_session.dart';
 import '../models/github_config.dart';
 import '../models/model_config.dart';
 import '../services/analytics_engine.dart';

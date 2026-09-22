@@ -126,7 +126,7 @@ class ChatToolset {
           'description': v.description,
           'dimensions': dims,
           'measures': meas,
-          if (recent != null) 'recent_rows': recent,
+          'recent_rows': ?recent,
         });
       },
     );

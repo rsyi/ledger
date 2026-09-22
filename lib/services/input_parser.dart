@@ -241,7 +241,7 @@ DimensionOverlay _parseDimensionOverlay(YamlMap node) {
   //   3. `input.options:` inside the legacy input: block (legacy dropdown)
   final optionsNode = node['options'] ??
       node['samples'] ??
-      (isLegacy ? (legacyInput as YamlMap)['options'] : null);
+      (isLegacy ? legacyInput['options'] : null);
 
   return DimensionOverlay(
     input: hasInputConfig ? _parseInput(formSource) : null,

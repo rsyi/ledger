@@ -278,6 +278,20 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 - Commits: conventional style, trailer
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`; per-task
   commits are the norm in all repos (user approved).
+- **Sheets round-trip stability is a sync invariant** (the 2026-09-21
+  429 push storm): the engine pushes with USER_ENTERED, so Sheets
+  PARSES what we write — ISO-T datetimes become native datetime cells
+  and pull back SPACE-separated ("2026-09-16 10:00:00"); numbers
+  reshape (Float(26.0) → "26" → Int(26)). Anything decode can't map
+  back to the pushed value corrupts the local row via TakeRemote, and
+  if an ingest source owns that field it re-dirties + re-pushes every
+  cycle → per-row writes → 429 forever. Engine-side guards (2026-09-21):
+  parse_datetime accepts space forms, CellValue::equivalent /
+  records_equivalent (Int==Float, missing-key==Null) in ingest + merge,
+  sync updates batched via values:batchUpdate, 429s retried with
+  Retry-After-aware capped backoff. If you add a new dimension TYPE or
+  wire format, extend `sync_engine.rs::SheetsFaithfulRemote` and the
+  steady-state test FIRST.
 
 ## Open follow-ups
 

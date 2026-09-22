@@ -4,8 +4,10 @@
 ///
 /// `app/dashboards.yaml` in the schemas repo groups views into DOMAINS,
 /// each with a paradigm (`entry` → home LOG section, full timeline;
-/// `integration` → CONNECTED section, read-only timeline), an icon, and
-/// a metrics list for the domain screen's dashboard header.
+/// `integration` → CONNECTED section, read-friendly record list with
+/// the read-only timeline a calendar-icon away), an icon, a metrics
+/// list for the domain screen's dashboard header, and optional
+/// `list_fields` (the record list's salient columns).
 ///
 /// ENGINE-FREE by design (adaptation decision 1): fetched straight from
 /// GitHub through the shared [DocCache] (1 h TTL, pull-to-refresh bust)
@@ -50,6 +52,12 @@ class MetricConfig {
   /// Human context for the goal when it isn't a bare number.
   final String? goalNote;
 
+  /// Bodyweight-relative goal band (yaml `goal_band_per_lb: [0.8, 1.0]`)
+  /// — the metric engine scales it by the current 7-day-avg bodyweight
+  /// and the chart shades the range (protein_series). Normalized so
+  /// low <= high; null when absent or malformed.
+  final ({double low, double high})? goalBandPerLb;
+
   /// Main-lift filter for per-lift strength metrics.
   final List<String> lifts;
 
@@ -60,8 +68,21 @@ class MetricConfig {
     this.unit,
     this.goal,
     this.goalNote,
+    this.goalBandPerLb,
     this.lifts = const [],
   });
+}
+
+/// One entry of a domain's `list_fields:` — a salient column for the
+/// read-friendly record list (integration domains). Yaml accepts a bare
+/// string (`grade`) or a map (`{ field: calories, unit: kcal }`).
+class DomainListField {
+  final String field;
+
+  /// Appended after numeric values ("222 kcal").
+  final String? unit;
+
+  const DomainListField({required this.field, this.unit});
 }
 
 /// One domain: a home row + a domain screen.
@@ -77,12 +98,17 @@ class DomainConfig {
 
   final List<MetricConfig> metrics;
 
+  /// Salient columns for the read-friendly record list. Empty → the UI
+  /// falls back to the view's `list_display`.
+  final List<DomainListField> listFields;
+
   const DomainConfig({
     required this.name,
     required this.paradigm,
     required this.views,
     this.icon,
     this.metrics = const [],
+    this.listFields = const [],
   });
 
   /// The view backing the domain screen's timeline.
@@ -129,6 +155,7 @@ List<DomainConfig>? parseDomainConfigs(String? raw) {
         views: views,
         icon: d['icon']?.toString(),
         metrics: _parseMetrics(d['metrics']),
+        listFields: _parseListFields(d['list_fields']),
       ),
     );
   }
@@ -156,11 +183,43 @@ List<MetricConfig> _parseMetrics(Object? raw) {
         unit: m['unit']?.toString(),
         goal: goal is num ? goal.toDouble() : null,
         goalNote: m['goal_note']?.toString(),
+        goalBandPerLb: _parseBand(m['goal_band_per_lb']),
         lifts: lifts is List
             ? [for (final l in lifts) l.toString()]
             : const [],
       ),
     );
+  }
+  return out;
+}
+
+/// `goal_band_per_lb: [low, high]` → normalized record. Anything that
+/// isn't a two-number list degrades to null (no band).
+({double low, double high})? _parseBand(Object? raw) {
+  if (raw is! List || raw.length != 2) return null;
+  final a = raw[0];
+  final b = raw[1];
+  if (a is! num || b is! num) return null;
+  final lo = a.toDouble();
+  final hi = b.toDouble();
+  return lo <= hi ? (low: lo, high: hi) : (low: hi, high: lo);
+}
+
+/// `list_fields:` entries — bare string, or map with `field` (+ `unit`).
+/// Blank / field-less entries are skipped.
+List<DomainListField> _parseListFields(Object? raw) {
+  if (raw is! List) return const [];
+  final out = <DomainListField>[];
+  for (final f in raw) {
+    if (f is Map) {
+      final field = f['field']?.toString().trim() ?? '';
+      if (field.isEmpty) continue;
+      out.add(DomainListField(field: field, unit: f['unit']?.toString()));
+    } else {
+      final field = f?.toString().trim() ?? '';
+      if (field.isEmpty) continue;
+      out.add(DomainListField(field: field));
+    }
   }
   return out;
 }

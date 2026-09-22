@@ -602,6 +602,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               data.quickbooks?.specFor(view.name) == null
                           ? null
                           : data.qboService,
+                      // Bodyweight reference for cross-domain metrics
+                      // (meals' protein goal band scales by current bw).
+                      weightView: weightView,
+                      weightRepository: weightView == null
+                          ? null
+                          : data.registry.forView(weightView),
                     ),
                   ),
                 );

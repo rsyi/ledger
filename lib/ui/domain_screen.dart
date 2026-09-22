@@ -6,15 +6,14 @@
 ///           domain's own view data. Every metric degrades independently
 ///           to a dim placeholder — the timeline below never blocks on
 ///           the dashboard.
-///   BODY    the existing timeline. Entry domains keep the full
-///           affordances (FAB, forms, planning, selection); integration
-///           domains ride the same read-only gating as `read_only`
-///           views via [TimelineScreen.forceReadOnly] (a denser
-///           read-friendly list is P3).
-///
-/// Implemented as a thin composition over [TimelineScreen] (its new
-/// `header` slot) so the timeline's date bar, caching, and mutation
-/// machinery stay single-sourced.
+///   BODY    entry domains: the existing timeline with full affordances
+///           (FAB, forms, planning, selection) via [TimelineScreen]'s
+///           `header` slot. Integration domains (P3): a denser
+///           read-friendly record list — date-grouped, one line per
+///           record with the domain's salient `list_fields`, newest
+///           first, no per-row chrome; the dashboard header scrolls as
+///           the first list item. The read-only timeline stays
+///           reachable via the app-bar calendar icon (date navigation).
 library;
 
 import 'package:fl_chart/fl_chart.dart';
@@ -27,6 +26,7 @@ import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
 import '../services/domain_config.dart';
 import '../services/domain_metrics.dart';
+import '../services/domain_records.dart';
 import '../services/github_client.dart';
 import '../services/home_synthesis.dart' show strengthRowFromRecord;
 import '../services/llm_client.dart';
@@ -44,8 +44,18 @@ const _strengthMetricIds = {
   'all_time_best_weight',
 };
 
-/// Metric ids that need the weigh-in series / raw weight records.
+/// Metric ids that need the domain's own daily weigh-in series.
 const _weightMetricIds = {'bw_series', 'bf_series'};
+
+/// Metric ids computed from the primary view's raw records.
+const _recordMetricIds = {
+  'bf_series',
+  'kcal_series',
+  'protein_series',
+  'grade_pyramid',
+  'session_frequency',
+  'hr_4x4_series',
+};
 
 class DomainScreen extends StatelessWidget {
   final DomainConfig domain;
@@ -63,6 +73,12 @@ class DomainScreen extends StatelessWidget {
   final QboPushSpec? qboSpec;
   final QboService? qboService;
 
+  /// The weight view + its repo, for metrics that scale against current
+  /// bodyweight from OTHER domains (protein_series' goal band on meals).
+  /// Null → those metrics render bandless; nothing breaks.
+  final ViewSchema? weightView;
+  final WarehouseConnector? weightRepository;
+
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -78,6 +94,8 @@ class DomainScreen extends StatelessWidget {
     this.github,
     this.qboSpec,
     this.qboService,
+    this.weightView,
+    this.weightRepository,
     this.today,
   });
 
@@ -85,28 +103,38 @@ class DomainScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final header = domain.metrics.isEmpty
+        ? null
+        : DomainDashboardHeader(
+            domain: domain,
+            view: view,
+            repository: repository,
+            analytics: analytics,
+            weightView: weightView,
+            weightRepository: weightRepository,
+            today: today,
+          );
+    // Integration domains are read surfaces: the denser record list is
+    // the body; the read-only timeline stays one calendar-icon away.
+    if (_integration) {
+      return _DomainRecordsScreen(
+        domain: domain,
+        view: view,
+        repository: repository,
+        header: header,
+      );
+    }
     return TimelineScreen(
       view: view,
       repository: repository,
-      // Integration domains are read surfaces: no post-log hooks, no
-      // QBO push — mirrors the read-only view pathway.
-      llm: _integration ? null : llm,
-      llmCache: _integration ? null : llmCache,
+      llm: llm,
+      llmCache: llmCache,
       chatModel: chatModel,
       github: github,
       analytics: analytics,
-      qboSpec: _integration ? null : qboSpec,
-      qboService: _integration ? null : qboService,
-      forceReadOnly: _integration,
-      header: domain.metrics.isEmpty
-          ? null
-          : DomainDashboardHeader(
-              domain: domain,
-              view: view,
-              repository: repository,
-              analytics: analytics,
-              today: today,
-            ),
+      qboSpec: qboSpec,
+      qboService: qboService,
+      header: header,
     );
   }
 }
@@ -125,6 +153,12 @@ class DomainDashboardHeader extends StatefulWidget {
   final ViewSchema view;
   final WarehouseConnector repository;
   final AnalyticsEngine? analytics;
+
+  /// Bodyweight reference for cross-domain metrics (protein band). See
+  /// [DomainScreen.weightView].
+  final ViewSchema? weightView;
+  final WarehouseConnector? weightRepository;
+
   final DateTime? today;
 
   const DomainDashboardHeader({
@@ -133,6 +167,8 @@ class DomainDashboardHeader extends StatefulWidget {
     required this.view,
     required this.repository,
     this.analytics,
+    this.weightView,
+    this.weightRepository,
     this.today,
   });
 
@@ -148,16 +184,25 @@ class _DomainDashboardHeaderState extends State<DomainDashboardHeader> {
     final ids = {for (final m in widget.domain.metrics) m.id};
     var strengthRows = const <StrengthRow>[];
     var weightDaily = const <WeightRow>[];
-    var weightRecords = <Map<String, Object?>>[];
+    var records = const <Map<String, Object?>>[];
 
-    if (ids.any(_strengthMetricIds.contains)) {
+    // One raw fetch of the primary view serves the strength mapping AND
+    // every record-based metric (bf/meals/climbing/cardio).
+    if (ids.any(_strengthMetricIds.contains) ||
+        ids.any(_recordMetricIds.contains)) {
       try {
-        final recs = await widget.repository.list(widget.view);
-        strengthRows = [for (final r in recs) ?strengthRowFromRecord(r)];
+        records = await widget.repository.list(widget.view);
       } catch (_) {
         // offline → metrics degrade individually
       }
     }
+    if (ids.any(_strengthMetricIds.contains)) {
+      strengthRows = [for (final r in records) ?strengthRowFromRecord(r)];
+    }
+
+    // Daily weigh-ins: the weight domain reads its OWN view; other
+    // domains needing a bodyweight reference (protein band) read the
+    // passed-in weight view. On the weight domain they're the same.
     if (ids.any(_weightMetricIds.contains)) {
       try {
         final series = await loadDailyWeighIns(
@@ -167,14 +212,24 @@ class _DomainDashboardHeaderState extends State<DomainDashboardHeader> {
         );
         weightDaily = series.daily;
       } catch (_) {}
+    } else if (widget.domain.metrics.any(
+          (m) => m.id == 'protein_series' && m.goalBandPerLb != null,
+        ) &&
+        widget.weightView != null) {
       try {
-        weightRecords = (await widget.repository.list(widget.view)).toList();
+        final series = await loadDailyWeighIns(
+          analytics: widget.analytics,
+          view: widget.weightView,
+          repo: widget.weightRepository,
+        );
+        weightDaily = series.daily;
       } catch (_) {}
     }
+
     return DomainMetricInputs(
       strengthRows: strengthRows,
       weightDaily: weightDaily,
-      weightRecords: weightRecords,
+      records: records,
       today: _today,
     );
   }
@@ -260,6 +315,17 @@ class _MetricBlock extends StatelessWidget {
             today: today,
             goalNote: config.goalNote,
           ),
+          MetricBars(bars: final bars, note: final note) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _BarList(bars: bars),
+              if (note != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: _dim(context, note),
+                ),
+            ],
+          ),
           MetricUnavailable(message: final msg) => _dim(context, msg),
         },
       ],
@@ -308,6 +374,64 @@ class _StatChip extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Horizontal bar list (grade pyramid): one row per grade — label,
+/// count-proportional bar, count. Not a chart widget on purpose: a
+/// pyramid is a ranked list, and rows must stay readable at any count.
+class _BarList extends StatelessWidget {
+  final List<({String label, int count})> bars;
+  const _BarList({required this.bars});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final maxCount = bars.fold<int>(1, (m, b) => b.count > m ? b.count : m);
+    final labelStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return Column(
+      children: [
+        for (final b in bars)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 1.5),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 44,
+                  child: Text(b.label, style: labelStyle),
+                ),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FractionallySizedBox(
+                      widthFactor: b.count / maxCount,
+                      child: Container(
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: scheme.primary.withValues(alpha: 0.75),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 36,
+                  child: Text(
+                    '${b.count}',
+                    textAlign: TextAlign.right,
+                    style: labelStyle?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
@@ -364,16 +488,40 @@ class _MetricChart extends StatelessWidget {
     final rawSpots = [for (final p in points) FlSpot(_x(p.day), p.value)];
     final avgSpots = [for (final p in avg) FlSpot(_x(p.day), p.value)];
     final goal = series.goal;
+    final bandLow = series.bandLow;
+    final bandHigh = series.bandHigh;
 
     final ys = [
       for (final s in rawSpots) s.y,
       for (final s in avgSpots) s.y,
       ?goal,
+      ?bandLow,
+      ?bandHigh,
     ];
     final yMin = ys.reduce((a, b) => a < b ? a : b);
     final yMax = ys.reduce((a, b) => a > b ? a : b);
     final yPad = ((yMax - yMin).abs() * 0.1).clamp(0.5, 5.0);
     final rangeDays = xMax - xMin;
+
+    // Goal band (protein): two flat bounds shaded between via
+    // fl_chart's betweenBarsData — a range target, not a line. Indices
+    // into lineBarsData are positional, so the band pair goes FIRST and
+    // everything after is data.
+    final bars = <LineChartBarData>[];
+    final hasBand = bandLow != null && bandHigh != null;
+    if (hasBand) {
+      for (final bound in [bandLow, bandHigh]) {
+        bars.add(
+          LineChartBarData(
+            spots: [FlSpot(xMin, bound), FlSpot(xMax, bound)],
+            isCurved: false,
+            barWidth: 0.8,
+            color: scheme.tertiary.withValues(alpha: 0.35),
+            dotData: const FlDotData(show: false),
+          ),
+        );
+      }
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -423,7 +571,16 @@ class _MetricChart extends StatelessWidget {
                   ),
                 ),
               ),
+              betweenBarsData: [
+                if (hasBand)
+                  BetweenBarsData(
+                    fromIndex: 0,
+                    toIndex: 1,
+                    color: scheme.tertiary.withValues(alpha: 0.12),
+                  ),
+              ],
               lineBarsData: [
+                ...bars,
                 LineChartBarData(
                   spots: rawSpots,
                   isCurved: false,
@@ -484,13 +641,16 @@ class _MetricChart extends StatelessWidget {
             ),
           ),
         ),
-        if (goal != null || goalNote != null)
+        if (goal != null || hasBand || goalNote != null)
           Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text(
               [
                 if (goal != null)
                   'goal ${goal.toStringAsFixed(goal == goal.roundToDouble() ? 0 : 1)}'
+                      '${series.unit == null ? '' : ' ${series.unit}'}',
+                if (hasBand)
+                  'goal ${bandLow.round()}–${bandHigh.round()}'
                       '${series.unit == null ? '' : ' ${series.unit}'}',
                 ?goalNote,
               ].join(' · '),
@@ -500,6 +660,215 @@ class _MetricChart extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Integration read view — the record list
+// ---------------------------------------------------------------------------
+
+/// Read-friendly body for integration domains: the dashboard header
+/// scrolls as the first item, then date-grouped records — one line per
+/// record, salient fields only, newest first, no per-row chrome. The
+/// list is a lazy [ListView.builder] over flattened rows, so climbing's
+/// ~1.4k records render in chunks as you scroll. Pull to refresh; the
+/// app-bar calendar icon opens the classic read-only timeline for
+/// date navigation.
+class _DomainRecordsScreen extends StatefulWidget {
+  final DomainConfig domain;
+  final ViewSchema view;
+  final WarehouseConnector repository;
+  final Widget? header;
+
+  const _DomainRecordsScreen({
+    required this.domain,
+    required this.view,
+    required this.repository,
+    this.header,
+  });
+
+  @override
+  State<_DomainRecordsScreen> createState() => _DomainRecordsScreenState();
+}
+
+/// One flattened list row: a day heading or a record line.
+sealed class _ListRow {
+  const _ListRow();
+}
+
+class _DayRow extends _ListRow {
+  final DateTime day;
+  final int count;
+  const _DayRow(this.day, this.count);
+}
+
+class _RecordRow extends _ListRow {
+  final Map<String, Object?> record;
+  const _RecordRow(this.record);
+}
+
+class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
+  late Future<List<_ListRow>> _rows = _load();
+
+  String get _dateKey => widget.view.dateField ?? 'date';
+
+  Future<List<_ListRow>> _load() async {
+    final records = await widget.repository.list(widget.view);
+    final groups = groupRecordsByDay(records, dateKey: _dateKey);
+    return [
+      for (final g in groups) ...[
+        _DayRow(g.day, g.records.length),
+        for (final r in g.records) _RecordRow(r),
+      ],
+    ];
+  }
+
+  Future<void> _refresh() async {
+    final fresh = _load();
+    setState(() => _rows = fresh);
+    await fresh;
+  }
+
+  void _openTimeline() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TimelineScreen(
+          view: widget.view,
+          repository: widget.repository,
+          forceReadOnly: true,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.domain.name),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.calendar_month_outlined),
+            tooltip: 'Browse by date',
+            onPressed: _openTimeline,
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        child: FutureBuilder<List<_ListRow>>(
+          future: _rows,
+          builder: (context, snap) {
+            final rows = snap.data;
+            // Header always occupies slot 0 so the dashboard shows even
+            // while records load / when the fetch fails.
+            final extra = widget.header == null ? 0 : 1;
+            Widget trailing;
+            if (snap.hasError) {
+              trailing = _note(context, 'couldn’t load records');
+            } else if (rows == null) {
+              trailing = const Padding(
+                padding: EdgeInsets.symmetric(vertical: 32),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            } else if (rows.isEmpty) {
+              trailing = _note(context, 'no records yet');
+            } else {
+              trailing = const SizedBox.shrink();
+            }
+            final items = rows ?? const <_ListRow>[];
+            return ListView.builder(
+              // Refresh must work even when the list is short/errored.
+              physics: const AlwaysScrollableScrollPhysics(),
+              itemCount: extra + items.length + 1,
+              itemBuilder: (context, i) {
+                if (extra == 1 && i == 0) return widget.header!;
+                final idx = i - extra;
+                if (idx == items.length) return trailing;
+                return switch (items[idx]) {
+                  _DayRow(day: final day, count: final count) =>
+                    _dayHeading(context, day, count),
+                  _RecordRow(record: final record) =>
+                    _recordLine(context, record),
+                };
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _note(BuildContext context, String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+    child: Text(
+      text,
+      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+        fontStyle: FontStyle.italic,
+      ),
+    ),
+  );
+
+  Widget _dayHeading(BuildContext context, DateTime day, int count) {
+    final scheme = Theme.of(context).colorScheme;
+    final now = DateTime.now();
+    final fmt = day.year == now.year ? 'EEE, MMM d' : 'EEE, MMM d, yyyy';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+      child: Row(
+        children: [
+          Text(
+            DateFormat(fmt).format(day).toUpperCase(),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              letterSpacing: 1.1,
+              fontWeight: FontWeight.w700,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '$count',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: scheme.outline,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _recordLine(BuildContext context, Map<String, Object?> record) {
+    final scheme = Theme.of(context).colorScheme;
+    final parts = recordLineParts(
+      widget.view,
+      widget.domain.listFields,
+      record,
+    );
+    final lead = parts.isEmpty ? '—' : parts.first;
+    final rest = parts.skip(1).join(' · ');
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 3, 16, 3),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: lead,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            if (rest.isNotEmpty)
+              TextSpan(
+                text: ' · $rest',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+          ],
+        ),
+        style: Theme.of(context).textTheme.bodyMedium,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
     );
   }
 }

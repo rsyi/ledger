@@ -44,17 +44,30 @@ domains:
     paradigm: integration
     views: [climbing]
     icon: mountain
+    list_fields: [grade, color, gym, ascent_type]
     metrics:
       - id: session_frequency
         kind: series
         goal: 2
+  - name: meals
+    paradigm: integration
+    views: [meals]
+    list_fields:
+      - meal
+      - { field: calories, unit: kcal }
+      - { field: protein_g, unit: g }
+    metrics:
+      - id: protein_series
+        kind: series
+        unit: g
+        goal_band_per_lb: [0.8, 1.0]
 ''';
 
 void main() {
   group('parseDomainConfigs', () {
     test('parses the fixture shape', () {
       final domains = parseDomainConfigs(fixtureYaml)!;
-      expect(domains, hasLength(4));
+      expect(domains, hasLength(5));
 
       final strength = domains[0];
       expect(strength.name, 'strength');
@@ -84,6 +97,59 @@ void main() {
       final climbing = domains[3];
       expect(climbing.paradigm, DomainParadigm.integration);
       expect(climbing.metrics.single.goal, 2);
+      // Bare-string list_fields: field only, no unit.
+      expect(
+        climbing.listFields.map((f) => f.field),
+        ['grade', 'color', 'gym', 'ascent_type'],
+      );
+      expect(climbing.listFields.every((f) => f.unit == null), isTrue);
+
+      final meals = domains[4];
+      // Map-form list_fields carry a unit; mixed with bare strings.
+      expect(meals.listFields, hasLength(3));
+      expect(meals.listFields[0].field, 'meal');
+      expect(meals.listFields[0].unit, isNull);
+      expect(meals.listFields[1].field, 'calories');
+      expect(meals.listFields[1].unit, 'kcal');
+      expect(meals.listFields[2].field, 'protein_g');
+      expect(meals.listFields[2].unit, 'g');
+      // goal_band_per_lb parses to a (low, high) record.
+      final band = meals.metrics.single.goalBandPerLb!;
+      expect(band.low, 0.8);
+      expect(band.high, 1.0);
+      // Domains without list_fields keep the empty default (heuristic
+      // fallback downstream).
+      expect(domains[0].listFields, isEmpty);
+      // Metrics without a band keep null.
+      expect(domains[0].metrics[0].goalBandPerLb, isNull);
+    });
+
+    test('malformed list_fields / goal_band_per_lb degrade, never throw', () {
+      final domains = parseDomainConfigs('''
+domains:
+  - name: x
+    views: [x]
+    list_fields:
+      - ""
+      - { unit: kcal }
+      - ok
+      - 42
+    metrics:
+      - id: protein_series
+        goal_band_per_lb: [0.8]
+      - id: kcal_series
+        goal_band_per_lb: "not a list"
+      - id: bw_series
+        goal_band_per_lb: [1.0, 0.8]
+''')!;
+      final d = domains.single;
+      // Blank / field-less entries dropped; scalars coerce to strings.
+      expect(d.listFields.map((f) => f.field), ['ok', '42']);
+      // Wrong-arity and non-list bands → null.
+      expect(d.metrics[0].goalBandPerLb, isNull);
+      expect(d.metrics[1].goalBandPerLb, isNull);
+      // Reversed bounds normalize to low <= high.
+      expect(d.metrics[2].goalBandPerLb, (low: 0.8, high: 1.0));
     });
 
     test('null / empty / malformed input → null (fallback signal)', () {
@@ -151,8 +217,8 @@ domains:
         },
         now: () => clock,
       );
-      expect((await provider.load())!, hasLength(4));
-      expect((await provider.load())!, hasLength(4));
+      expect((await provider.load())!, hasLength(5));
+      expect((await provider.load())!, hasLength(5));
       expect(calls, 1); // second load served from cache
 
       clock = clock.add(const Duration(hours: 2));

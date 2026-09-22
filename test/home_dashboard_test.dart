@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/models/database_config.dart';
 import 'package:airledger/models/view_schema.dart';
+import 'package:airledger/services/domain_config.dart';
 import 'package:airledger/services/program_provider.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
@@ -197,5 +198,142 @@ void main() {
     expect(find.text('14/—'), findsOneWidget); // no targets without docs
     expect(find.text('2 ⚑'), findsOneWidget);
     expect(find.textContaining('4x4 max HR 191'), findsOneWidget);
+  });
+
+  // -------------------------------------------------------------------------
+  // PHASE hero (dashboards.yaml `phases:` section)
+  // -------------------------------------------------------------------------
+
+  const phaseYaml = '''
+versions:
+  - version: 1
+    value: cut
+    effective_from: "2025-10-06"
+    target_weight_lb: 154
+    target_rate_lb_per_week: -0.75
+''';
+
+  const programYaml = '''
+versions:
+  - version: 1
+    effective_from: "2026-09-21"
+    id: bulk-2026-27
+    blocks:
+      - { n: 0, dates: ["2026-09-21", "2026-12-13"], emphasis: cut, weight: [163, 154] }
+    targets:
+      near_max_sets_wk: 4
+''';
+
+  const dashYamlWithPhases = '''
+domains:
+  - name: strength
+    views: [strength]
+phases:
+  cut:
+    eigenvectors:
+      - id: weight_loss
+        label: weight
+        rate_band: [-1.0, -0.5]
+        act_above: 0.2
+      - id: wilks_stability
+        label: strength
+        from: "2026-09-21"
+        floor_pct: 2.5
+''';
+
+  Future<String?> fetcher(String path) async => switch (path) {
+        'coach/phase.yaml' => phaseYaml,
+        'coach/program.yaml' => programYaml,
+        'app/dashboards.yaml' => dashYamlWithPhases,
+        _ => null,
+      };
+
+  testWidgets('PHASE hero renders from phases config; grid condenses to '
+      'STRENGTH + THIS WEEK', (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestE1rmCache();
+    // Weigh-ins declining ~0.75 lb/wk into Sep 23 — cut on pace.
+    final weightRepo = _FakeStatusRepo([
+      for (var i = 0; i < 28; i++)
+        {
+          'date': DateTime(2026, 8, 27).add(Duration(days: i)),
+          'weight_lbs': 165.0 - i * (0.75 / 7),
+        },
+    ]);
+    final weightView = ViewSchema(
+      name: 'weight',
+      datasource: 'gsheets',
+      table: 'weight',
+      entities: const [],
+      measures: const [],
+      dimensions: [
+        Dimension(name: 'date', type: DimensionType.date, expr: 'date'),
+      ],
+    );
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(fetcher),
+      dashboards: DomainConfigProvider(fetcher),
+      weightView: weightView,
+      weightRepo: weightRepo,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+
+    // Hero header + eigenvector rows.
+    expect(find.text('CUT'), findsOneWidget);
+    expect(find.textContaining('block 0'), findsOneWidget);
+    expect(find.textContaining('163 → 154 lb by Dec 13'), findsOneWidget);
+    expect(find.text('WEIGHT'), findsOneWidget);
+    expect(find.text('STRENGTH'), findsNWidgets(2)); // hero row + card label
+    expect(find.text('ON TRACK'), findsOneWidget); // weight on pace
+    // No strength rows served → Wilks row is unknown, not an error.
+    expect(find.textContaining('no Wilks history'), findsOneWidget);
+    expect(find.textContaining('target -0.75'), findsOneWidget);
+
+    // Condensed layout: BODY / EXECUTION / ENGINE cards are gone,
+    // replaced by the merged THIS WEEK strip.
+    expect(find.text('BODY'), findsNothing);
+    expect(find.text('EXECUTION'), findsNothing);
+    expect(find.text('ENGINE'), findsNothing);
+    expect(find.text('THIS WEEK'), findsOneWidget);
+  });
+
+  testWidgets('hero weight row taps through to the Program screen',
+      (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestE1rmCache();
+    var openedProgram = false;
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(fetcher),
+      dashboards: DomainConfigProvider(fetcher),
+      onOpenProgram: () => openedProgram = true,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('WEIGHT'));
+    expect(openedProgram, isTrue);
+  });
+
+  testWidgets('no phases section → legacy four-card grid unchanged',
+      (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestE1rmCache();
+    Future<String?> noPhases(String path) async => switch (path) {
+          'coach/phase.yaml' => phaseYaml,
+          'coach/program.yaml' => programYaml,
+          'app/dashboards.yaml' => 'domains:\n  - name: s\n    views: [s]\n',
+          _ => null,
+        };
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(noPhases),
+      dashboards: DomainConfigProvider(noPhases),
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+    expect(find.text('BODY'), findsOneWidget);
+    expect(find.text('STRENGTH'), findsOneWidget);
+    expect(find.text('EXECUTION'), findsOneWidget);
+    expect(find.text('ENGINE'), findsOneWidget);
+    expect(find.text('THIS WEEK'), findsNothing);
   });
 }

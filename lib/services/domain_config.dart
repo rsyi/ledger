@@ -260,4 +260,10 @@ class DomainConfigProvider {
 
   Future<List<DomainConfig>?> load() async =>
       parseDomainConfigs(await DocCache.fetch(kDashboardsPath, fetchDoc, now: now));
+
+  /// The raw file, for parsers beyond the domain list (the home hero's
+  /// `phases:` eigenvectors — services/phase_eigenvectors.dart). Same
+  /// shared cache entry as [load].
+  Future<String?> loadRaw() =>
+      DocCache.fetch(kDashboardsPath, fetchDoc, now: now);
 }

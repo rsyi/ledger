@@ -1,5 +1,25 @@
-/// Home-screen progress synthesis — four at-a-glance cards, one per
-/// progress axis:
+/// Home-screen progress synthesis — PHASE hero + supporting cards.
+///
+/// PHASE HERO (top, full width): the declared phase's eigenvectors, per
+/// `app/dashboards.yaml` `phases:` (services/phase_eigenvectors.dart).
+/// coach/phase.yaml's current value selects the set — cut: weight_loss
+/// + wilks_stability; bulk: gain_rate + strength_gain +
+/// inputs_delivered. Each row: a big verdict chip (green agree / amber
+/// drifting / red act), the one number that matters, and a mini
+/// sparkline (7-day-avg bodyweight / weekly Wilks with reference+floor
+/// guides). Row taps NAVIGATE: weight → Program, strength → the
+/// strength domain screen, inputs → the status ledger.
+///
+/// CONDENSED GRID (below the hero — layout decision 2026-09-21): the
+/// old 2x2 four-axis grid folds to STRENGTH + a full-width THIS WEEK
+/// strip (EXECUTION and ENGINE merged; one merged detail sheet). The
+/// BODY card is dropped in hero mode — the hero's weight row carries
+/// its 7d avg + rate + target + verdict and taps through to the same
+/// Program screen. BACK-COMPAT: no `phases:` section (or no declared
+/// phase, or no GitHub config) → the pre-hero four-card grid renders
+/// unchanged, including while the hero future is still loading.
+///
+/// The four axes (legacy grid):
 ///
 ///   BODY      bw 7-day avg + weekly rate vs the declared target + the
 ///             Program screen's declared-vs-observed verdict, condensed
@@ -36,13 +56,17 @@ import 'package:intl/intl.dart';
 
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
+import '../services/domain_config.dart' show DomainConfigProvider;
 import '../services/home_synthesis.dart';
+import '../services/phase_eigenvectors.dart';
 import '../services/program_current.dart';
-import '../services/program_metrics.dart' show StrengthRow, liftReferencesAsOf;
+import '../services/program_metrics.dart'
+    show StrengthRow, WeightRow, liftReferencesAsOf;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
+import '../services/wilks.dart' show WilksWeek, weeklyWilksSeries;
 import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
 
@@ -71,9 +95,17 @@ class HomeDashboard extends StatefulWidget {
   final ViewSchema? strengthView;
   final WarehouseConnector? strengthRepo;
 
+  /// dashboards.yaml provider (shared 1 h cache) — feeds the hero's
+  /// `phases:` eigenvector config. Null → no hero, legacy grid.
+  final DomainConfigProvider? dashboards;
+
   final VoidCallback? onOpenProgram;
   final VoidCallback? onOpenWeekPlan;
   final VoidCallback? onOpenStatus;
+
+  /// Hero strength-row tap target (the strength domain screen's Wilks
+  /// dashboard). Null → falls back to [onOpenProgram].
+  final VoidCallback? onOpenStrengthDomain;
 
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
@@ -89,9 +121,11 @@ class HomeDashboard extends StatefulWidget {
     this.statusRepo,
     this.strengthView,
     this.strengthRepo,
+    this.dashboards,
     this.onOpenProgram,
     this.onOpenWeekPlan,
     this.onOpenStatus,
+    this.onOpenStrengthDomain,
     this.today,
   });
 
@@ -172,7 +206,12 @@ class HomeDashboardState extends State<HomeDashboard> {
   late Future<WeightSeriesResult?> _weights;
   late Future<List<Map<String, Object?>>?> _status;
 
+  /// Mapped strength-ledger rows, shared by the STRENGTH card and the
+  /// hero's Wilks eigenvectors (one ledger read per load).
+  late Future<List<StrengthRow>> _strengthRows;
+
   // Derived per-card futures.
+  late Future<PhaseHeroData?> _hero;
   late Future<_BodyData?> _body;
   late Future<_StrengthData?> _strength;
   late Future<_ExecData?> _exec;
@@ -213,6 +252,8 @@ class HomeDashboardState extends State<HomeDashboard> {
           ? null
           : widget.statusRepo!.list(widget.statusView!),
     );
+    _strengthRows = _loadStrengthRows();
+    _hero = _computeHero();
     _body = _computeBody();
     _strength = _computeStrength();
     _exec = _computeExec();
@@ -220,11 +261,12 @@ class HomeDashboardState extends State<HomeDashboard> {
   }
 
   /// Pull-to-refresh entry point (home_screen's RefreshIndicator).
-  /// Busts every cache, refires the futures, and completes when all
-  /// four cards have their data (so the spinner reflects reality).
+  /// Busts every cache, refires the futures, and completes when the
+  /// hero and all cards have their data (so the spinner reflects
+  /// reality).
   Future<void> reload() async {
     setState(() => _startLoad(force: true));
-    await Future.wait([_body, _strength, _exec, _engine]);
+    await Future.wait([_hero, _body, _strength, _exec, _engine]);
   }
 
   static Future<T?> _guard<T>(Future<T?> Function() fn) async {
@@ -264,17 +306,56 @@ class HomeDashboardState extends State<HomeDashboard> {
     return _BodyData(stats: stats, targetRate: targetRate, verdict: verdict);
   }
 
+  /// Strength ledger → mapped rows. Errors (ledger unreadable) degrade
+  /// to an empty list — the WM column still renders.
+  Future<List<StrengthRow>> _loadStrengthRows() async {
+    if (widget.strengthRepo == null || widget.strengthView == null) {
+      return const [];
+    }
+    try {
+      final recs = await widget.strengthRepo!.list(widget.strengthView!);
+      return [for (final r in recs) ?strengthRowFromRecord(r)];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// PHASE hero: dashboards.yaml `phases:` config + declared phase +
+  /// the shared observed inputs → verdict rows. Null (no config / no
+  /// phase / fetch failure) keeps the legacy grid.
+  Future<PhaseHeroData?> _computeHero() async {
+    final raw = await _guard(() async => widget.dashboards?.loadRaw());
+    final phases = parsePhaseEigenvectors(raw);
+    if (phases == null) return null;
+    final docs = await _docs;
+    final phaseVersion = currentVersion(docs?.phase);
+    final phase = phaseVersion?['value']?.toString();
+    if (phase == null) return null;
+    final daily = (await _weights)?.daily ?? const <WeightRow>[];
+    final rows = await _strengthRows;
+    final wilksWeeks = rows.isEmpty || daily.isEmpty
+        ? const <WilksWeek>[]
+        : weeklyWilksSeries(rows, daily, through: _today);
+    final status = await _status;
+    final slice = _slice(docs);
+    return buildPhaseHero(
+      phases: phases,
+      phaseValue: phase,
+      targetRateLbWk: (phaseVersion?['target_rate_lb_per_week'] as num?)
+          ?.toDouble(),
+      slice: slice,
+      stats: observedWeightStats(daily, _today),
+      weightDaily: daily,
+      wilksWeeks: wilksWeeks,
+      statusWeek: latestStatusWeek(status ?? const [], _today),
+      targets: slice?.targetsInForce ?? const {},
+      today: _today,
+    );
+  }
+
   Future<_StrengthData?> _computeStrength() async {
     final snap = await _wm;
-    var rows = const <StrengthRow>[];
-    if (widget.strengthRepo != null && widget.strengthView != null) {
-      try {
-        final recs = await widget.strengthRepo!.list(widget.strengthView!);
-        rows = [for (final r in recs) ?strengthRowFromRecord(r)];
-      } catch (_) {
-        // Ledger unreadable — the WM column still renders.
-      }
-    }
+    final rows = await _strengthRows;
     if (snap == null && rows.isEmpty) return null;
     final est = rows.isEmpty
         ? const <String, double>{}
@@ -324,32 +405,73 @@ class HomeDashboardState extends State<HomeDashboard> {
     }
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-      child: Column(
-        children: [
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: _bodyCard(context)),
-                const SizedBox(width: 8),
-                Expanded(child: _strengthCard(context)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: _execCard(context)),
-                const SizedBox(width: 8),
-                Expanded(child: _engineCard(context)),
-              ],
-            ),
-          ),
-        ],
+      child: FutureBuilder<PhaseHeroData?>(
+        future: _hero,
+        builder: (context, snap) {
+          final hero = snap.connectionState == ConnectionState.done
+              ? snap.data
+              : null;
+          // No phases config / no declared phase / still loading → the
+          // pre-hero four-card grid, unchanged.
+          if (hero == null) return _legacyGrid(context);
+          return _heroLayout(context, hero);
+        },
       ),
     );
+  }
+
+  /// PHASE hero on top; the old grid condensed to STRENGTH + a merged
+  /// THIS WEEK strip below it (see the library doc for the rationale).
+  Widget _heroLayout(BuildContext context, PhaseHeroData hero) {
+    return Column(
+      children: [
+        _HeroCard(hero: hero, onNav: _navigate),
+        const SizedBox(height: 8),
+        _strengthCard(context),
+        const SizedBox(height: 8),
+        _weekCard(context),
+      ],
+    );
+  }
+
+  Widget _legacyGrid(BuildContext context) {
+    return Column(
+      children: [
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _bodyCard(context)),
+              const SizedBox(width: 8),
+              Expanded(child: _strengthCard(context)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _execCard(context)),
+              const SizedBox(width: 8),
+              Expanded(child: _engineCard(context)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Hero row taps navigate straight to the owning screen.
+  void _navigate(EigenNav nav) {
+    switch (nav) {
+      case EigenNav.program:
+        widget.onOpenProgram?.call();
+      case EigenNav.strength:
+        (widget.onOpenStrengthDomain ?? widget.onOpenProgram)?.call();
+      case EigenNav.status:
+        widget.onOpenStatus?.call();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -809,6 +931,154 @@ class HomeDashboardState extends State<HomeDashboard> {
       ),
     );
   }
+
+  // -------------------------------------------------------------------------
+  // THIS WEEK — EXECUTION + ENGINE merged into one strip (hero layout)
+  // -------------------------------------------------------------------------
+
+  Future<void> _openWeekSheet() async {
+    final d = await _exec;
+    final e = await _engine;
+    final row = d?.week?.row;
+    final t = d?.targets ?? const <String, Object?>{};
+    String done(String key, Object? target) {
+      final v = row == null ? null : asNum(row[key]);
+      return '${v == null ? '—' : fmtLb(v)}/${targetText(target)}';
+    }
+
+    final flags = row?['flags']?.toString() ?? '';
+    final ff = e?.lastFourByFour;
+    await _showDetailSheet(
+      title: 'This week',
+      entries: [
+        _DetailEntry(
+          label: 'Sets',
+          value: done('working_sets', t['working_sets']),
+          explain:
+              'Working sets this week — sets at ≥ 80% of your '
+              'reference e1RM. Source: the nightly program_status row; '
+              'the target is the program\'s targets-in-force (a cut has '
+              'no volume floor).',
+        ),
+        _DetailEntry(
+          label: 'Near-max',
+          value: done('near_max_sets', t['near_max_sets']),
+          explain:
+              'Sets at ≥ 95% effort with reps ≤ 8 — the '
+              'heavy quota (on the cut: one top single per lift).',
+        ),
+        _DetailEntry(
+          label: 'Bench days',
+          value: done('bench_days', t['bench_days']),
+          explain:
+              'Distinct days with bench sets this week. Twice is '
+              'the rule in every phase.',
+        ),
+        _DetailEntry(
+          label: 'Climb',
+          value: done('climbing_sessions', e?.climbTarget),
+          explain:
+              'Climbing sessions this week vs the block\'s allowance '
+              'from the program (kaya_ascents dates, nightly rollup).',
+        ),
+        _DetailEntry(
+          label: '4x4 max HR',
+          value: ff == null
+              ? '—'
+              : '${fmtLb(ff.maxHr)} · wk ${DateFormat('MMM d').format(ff.weekMonday)}',
+          explain:
+              'Highest heart rate hit in the most recent measured '
+              '4x4 interval session — the engine\'s top-end output proxy.',
+        ),
+        _DetailEntry(
+          label: 'Flags',
+          value: flags.trim().isEmpty ? 'none' : flags,
+          explain:
+              'Coach rules that fired for this week — evidence and '
+              'actions live in the status ledger.',
+        ),
+        _DetailEntry(
+          label: 'Today',
+          value: e?.templateLine ?? 'rest / no program',
+          explain:
+              'Today\'s session from the program\'s weekly template '
+              '(block-0 template while the cut runs).',
+        ),
+      ],
+      actionLabel: widget.onOpenStatus == null ? null : 'Open status ledger',
+      onAction: widget.onOpenStatus,
+    );
+  }
+
+  /// Full-width compact strip: the week's four quotas side by side +
+  /// today's template line. Replaces the EXECUTION and ENGINE cards in
+  /// the hero layout; their explainer entries merge into one sheet.
+  Widget _weekCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return _SynthCard(
+      label: 'This week',
+      onTap: _openWeekSheet,
+      trailingBuilder: (context) => FutureBuilder<_ExecData?>(
+        future: _exec,
+        builder: (context, snap) {
+          final row = snap.data?.week?.row;
+          if (row == null) return const SizedBox.shrink();
+          return _FlagChip(count: flagCount(row['flags']));
+        },
+      ),
+      child: FutureBuilder<List<Object?>>(
+        future: Future.wait<Object?>([_exec, _engine]),
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return const _Dim('…');
+          }
+          final d = snap.data?[0] as _ExecData?;
+          final e = snap.data?[1] as _EngineData?;
+          final week = d?.week ?? e?.week;
+          if (week == null) return const _Dim('no status data');
+          final row = week.row;
+          final t = d?.targets ?? const <String, Object?>{};
+          Widget quota(String label, String key, Object? target) => Expanded(
+            child: _TargetRow(
+              label: label,
+              done: asNum(row[key]),
+              target: target,
+            ),
+          );
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!week.isCurrentWeek) _WeekOfNote(week: week),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  quota('sets', 'working_sets', t['working_sets']),
+                  const SizedBox(width: 10),
+                  quota('near-max', 'near_max_sets', t['near_max_sets']),
+                  const SizedBox(width: 10),
+                  quota('bench', 'bench_days', t['bench_days']),
+                  const SizedBox(width: 10),
+                  quota('climb', 'climbing_sessions', e?.climbTarget),
+                ],
+              ),
+              if (e?.templateLine != null) ...[
+                const SizedBox(height: 5),
+                Text(
+                  'Today: ${e!.templateLine}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
 String _fmtSigned(double v) => '${v > 0 ? '+' : ''}${v.toStringAsFixed(2)}';
@@ -1231,6 +1501,300 @@ class _FlagChip extends StatelessWidget {
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// PHASE hero
+// ---------------------------------------------------------------------------
+
+/// Chip + accent colors per verdict (shared by the hero chip and the
+/// hero card's border tint).
+(Color bg, Color fg) _eigenColors(ColorScheme scheme, EigenVerdict v) =>
+    switch (v) {
+      EigenVerdict.agree => (
+        Colors.green.withValues(alpha: 0.18),
+        Colors.green.shade800,
+      ),
+      EigenVerdict.drifting => (
+        Colors.amber.withValues(alpha: 0.25),
+        Colors.orange.shade900,
+      ),
+      EigenVerdict.act => (scheme.errorContainer, scheme.onErrorContainer),
+      EigenVerdict.unknown => (
+        scheme.surfaceContainerHighest,
+        scheme.onSurfaceVariant,
+      ),
+    };
+
+String _eigenChipText(EigenVerdict v) => switch (v) {
+  EigenVerdict.agree => 'ON TRACK',
+  EigenVerdict.drifting => 'DRIFTING',
+  EigenVerdict.act => 'ACT',
+  EigenVerdict.unknown => '—',
+};
+
+/// The PHASE hero card: phase + block header, then one tappable row per
+/// eigenvector (verdict chip · the one number · sparkline · chevron).
+class _HeroCard extends StatelessWidget {
+  final PhaseHeroData hero;
+  final void Function(EigenNav) onNav;
+
+  const _HeroCard({required this.hero, required this.onNav});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (_, accent) = _eigenColors(scheme, hero.overall);
+    return Material(
+      color: scheme.surfaceContainer,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 11, 10, 8),
+        decoration: BoxDecoration(
+          border: Border.all(color: accent.withValues(alpha: 0.55), width: 1.2),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  hero.phaseTitle.toUpperCase(),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.4,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    [
+                      ?hero.blockLine,
+                      ?hero.trajectory,
+                    ].join('   ·   '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            for (final row in hero.rows)
+              _EigenRowTile(row: row, onTap: () => onNav(row.nav)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One eigenvector row inside the hero. Tap navigates to the owning
+/// screen (Program / strength domain / status ledger).
+class _EigenRowTile extends StatelessWidget {
+  final EigenRowData row;
+  final VoidCallback onTap;
+
+  const _EigenRowTile({required this.row, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (_, fg) = _eigenColors(scheme, row.verdict);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          children: [
+            _EigenChip(verdict: row.verdict),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    row.label.toUpperCase(),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      fontSize: 9,
+                      letterSpacing: 1.1,
+                      fontWeight: FontWeight.w700,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Text(
+                    row.detail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (row.spark.length >= 2) ...[
+              const SizedBox(width: 8),
+              _Sparkline(
+                points: row.spark,
+                reference: row.sparkReference,
+                floor: row.sparkFloor,
+                color: fg,
+              ),
+            ],
+            Icon(Icons.chevron_right, size: 18, color: scheme.outline),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The big verdict chip — fixed min width so the rows' numbers align.
+class _EigenChip extends StatelessWidget {
+  final EigenVerdict verdict;
+  const _EigenChip({required this.verdict});
+
+  @override
+  Widget build(BuildContext context) {
+    final (bg, fg) = _eigenColors(Theme.of(context).colorScheme, verdict);
+    return Container(
+      constraints: const BoxConstraints(minWidth: 66),
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        _eigenChipText(verdict),
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          fontSize: 9.5,
+          letterSpacing: 0.6,
+          color: fg,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+/// Mini line chart: the eigenvector's series plus faint reference /
+/// floor guide lines (Wilks). Pure paint — no interaction.
+class _Sparkline extends StatelessWidget {
+  final List<({DateTime day, double value})> points;
+  final double? reference;
+  final double? floor;
+  final Color color;
+
+  const _Sparkline({
+    required this.points,
+    this.reference,
+    this.floor,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size(64, 26),
+      painter: _SparklinePainter(
+        points: points,
+        reference: reference,
+        floor: floor,
+        color: color,
+        guideColor: Theme.of(context).colorScheme.outlineVariant,
+      ),
+    );
+  }
+}
+
+class _SparklinePainter extends CustomPainter {
+  final List<({DateTime day, double value})> points;
+  final double? reference;
+  final double? floor;
+  final Color color;
+  final Color guideColor;
+
+  const _SparklinePainter({
+    required this.points,
+    required this.reference,
+    required this.floor,
+    required this.color,
+    required this.guideColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (points.length < 2) return;
+    var lo = points.first.value;
+    var hi = lo;
+    for (final p in points) {
+      if (p.value < lo) lo = p.value;
+      if (p.value > hi) hi = p.value;
+    }
+    for (final g in [reference, floor]) {
+      if (g != null) {
+        if (g < lo) lo = g;
+        if (g > hi) hi = g;
+      }
+    }
+    if (hi - lo < 1e-9) {
+      lo -= 1;
+      hi += 1;
+    }
+    final t0 = points.first.day.millisecondsSinceEpoch.toDouble();
+    final t1 = points.last.day.millisecondsSinceEpoch.toDouble();
+    final span = (t1 - t0) < 1 ? 1.0 : t1 - t0;
+    double x(DateTime d) =>
+        (d.millisecondsSinceEpoch - t0) / span * (size.width - 3) + 1.5;
+    double y(double v) => size.height - 2 - (v - lo) / (hi - lo) * (size.height - 4);
+
+    final guide = Paint()
+      ..color = guideColor
+      ..strokeWidth = 1;
+    for (final g in [reference, floor]) {
+      if (g != null) {
+        // Short dashes so the guides read as thresholds, not data.
+        final gy = y(g);
+        for (var gx = 0.0; gx < size.width; gx += 5) {
+          canvas.drawLine(Offset(gx, gy), Offset(gx + 2.5, gy), guide);
+        }
+      }
+    }
+
+    final line = Paint()
+      ..color = color
+      ..strokeWidth = 1.6
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final path = Path()..moveTo(x(points.first.day), y(points.first.value));
+    for (final p in points.skip(1)) {
+      path.lineTo(x(p.day), y(p.value));
+    }
+    canvas.drawPath(path, line);
+    canvas.drawCircle(
+      Offset(x(points.last.day), y(points.last.value)),
+      2,
+      Paint()..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SparklinePainter old) =>
+      old.points != points ||
+      old.reference != reference ||
+      old.floor != floor ||
+      old.color != color ||
+      old.guideColor != guideColor;
 }
 
 /// "wk of Sep 14" note shown when the nightly hasn't written the current

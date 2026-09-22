@@ -525,6 +525,11 @@ class _HomeScreenState extends State<HomeScreen> {
               final programProvider = github == null
                   ? null
                   : ProgramProvider(CoachBrain.githubFetcher(github));
+              // Shared dashboards.yaml provider (1 h doc cache): domain
+              // sections + the home hero's `phases:` eigenvectors.
+              final domainProvider = github == null
+                  ? null
+                  : DomainConfigProvider(CoachBrain.githubFetcher(github));
               void openProgram() {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -612,6 +617,27 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }
 
+              // Hero strength row → the strength domain screen (Wilks
+              // stat + monthly series live there). Falls back silently
+              // when the config/view is missing — the caller passes
+              // onOpenProgram as the dashboard-side fallback.
+              Future<void> openStrengthDomain() async {
+                final view = dashStrengthView;
+                if (domainProvider == null || view == null) return;
+                List<DomainConfig>? domains;
+                try {
+                  domains = await domainProvider.load();
+                } catch (_) {
+                  return;
+                }
+                DomainConfig? strengthDomain;
+                for (final d in domains ?? const <DomainConfig>[]) {
+                  if (d.views.contains(view.name)) strengthDomain = d;
+                }
+                if (strengthDomain == null || !context.mounted) return;
+                openDomain(strengthDomain, view);
+              }
+
               void openWeekPlan() {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -660,6 +686,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     strengthRepo: dashStrengthView == null
                         ? null
                         : data.registry.forView(dashStrengthView),
+                    dashboards: domainProvider,
                     onOpenProgram: programProvider == null ? null : openProgram,
                     onOpenWeekPlan: programProvider == null
                         ? null
@@ -668,6 +695,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         statusView == null || data.readOnlyRepo == null
                         ? null
                         : openStatusLedger,
+                    onOpenStrengthDomain:
+                        domainProvider == null || dashStrengthView == null
+                        ? null
+                        : openStrengthDomain,
                   ),
                   if (coachView != null)
                     _CoachRow(
@@ -750,11 +781,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           // back to the flat "Ledgers" expandable.
                           _DomainSections(
                             key: _domainsKey,
-                            provider: github == null
-                                ? null
-                                : DomainConfigProvider(
-                                    CoachBrain.githubFetcher(github),
-                                  ),
+                            provider: domainProvider,
                             entryViews: entryViews,
                             readOnlyViews: readOnlyViews,
                             onOpenDomain: openDomain,

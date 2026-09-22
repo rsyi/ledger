@@ -63,7 +63,9 @@ const kCoachChatViewName = 'coach_chat';
 ///            preview row. No lists.
 ///   LOG      the tracker rows, grouped by `app/dashboards.yaml` into
 ///            LOG (entry domains) and CONNECTED (integration domains —
-///            read-only, read-friendly); unclaimed views still list
+///            read-friendly record lists; rows arrive via sync, with a
+///            manual escape hatch on writable views like weight);
+///            unclaimed views still list
 ///            under LOG so nothing becomes unreachable; missing/bad
 ///            config falls back to the flat "Ledgers" section.
 ///            Integrations sits last — it is setup for the CONNECTED
@@ -527,8 +529,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       views: {for (final v in data.views) v.name: v},
                       fetchDoc: CoachBrain.githubFetcher(github),
                     );
-              // Progress-dashboard plumbing. weight is a normal entry
-              // view (BODY reads it through airlayer); program_status is
+              // Progress-dashboard plumbing. weight is integration-
+              // paradigm on the LOG tab (Withings-fed) but the VIEW
+              // stays writable — the dashboard reads it through
+              // airlayer and manual weigh-ins still work via the
+              // domain screen's escape hatch; program_status is
               // read-only (EXECUTION/ENGINE read it via readOnlyRepo);
               // strength feeds the STRENGTH card's e1RM columns through
               // its normal ledger connector.

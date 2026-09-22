@@ -46,9 +46,10 @@
 /// best-e1RM caches and refires every card future.
 ///
 /// Every card loads independently and degrades to a placeholder when its
-/// source is missing/offline — the dashboard NEVER blocks the tracker
-/// list below it. All numeric synthesis lives in
-/// services/home_synthesis.dart (pure, tested); this file is layout.
+/// source is missing/offline — the dashboard NEVER blocks the HOME tab
+/// (the tracker rows live on the LOG tab since the 4-tab shell). All
+/// numeric synthesis lives in services/home_synthesis.dart (pure,
+/// tested); this file is layout.
 library;
 
 import 'package:flutter/material.dart';

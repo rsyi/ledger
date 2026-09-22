@@ -135,6 +135,17 @@ class TimelineScreen extends StatefulWidget {
   final QboPushSpec? qboSpec;
   final QboService? qboService;
 
+  /// Rendered above the date bar — the domain screen's dashboard header
+  /// (stat chips + series charts). Null everywhere else.
+  final Widget? header;
+
+  /// Treat this timeline as read-only even when the VIEW isn't
+  /// (integration-paradigm domains like meals: rows are ledger-synced,
+  /// but the domain screen is a read surface). Same gating as
+  /// `view.readOnly`: no FAB, no edit/move/delete/select, no planned
+  /// rows, no swipe.
+  final bool forceReadOnly;
+
   const TimelineScreen({
     super.key,
     required this.view,
@@ -149,6 +160,8 @@ class TimelineScreen extends StatefulWidget {
     this.kioskMode = false,
     this.qboSpec,
     this.qboService,
+    this.header,
+    this.forceReadOnly = false,
   });
 
   @override
@@ -156,6 +169,10 @@ class TimelineScreen extends StatefulWidget {
 }
 
 class _TimelineScreenState extends State<TimelineScreen> {
+  /// Effective read-only state: the view's own declaration OR the
+  /// caller's override (integration-paradigm domain screens).
+  bool get _readOnly => widget.forceReadOnly || widget.view.readOnly;
+
   // Intentionally not updated in didUpdateWidget — the screen is always
   // pushed fresh, so initialDate can't change under a live state.
   late DateTime _selectedDate = widget.initialDate ?? _today();
@@ -348,7 +365,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// the sheet — bypassing the form AND the plan store. The user sees
   /// the in-progress banner appear at the top once the writes land.
   Future<void> _startProduction(Template template) async {
-    if (_producing || widget.view.readOnly) return;
+    if (_producing || _readOnly) return;
     setState(() => _producing = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -388,7 +405,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
 
   /// One-tap finish: stamp end_time on every row in the batch.
   Future<void> _finishProduction(_Item item) async {
-    if (_producing || !item.isBatch || widget.view.readOnly) return;
+    if (_producing || !item.isBatch || _readOnly) return;
     setState(() => _producing = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -546,12 +563,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// Read-only views skip the PlanStore load entirely — planned items don't
   /// apply to browse-only content.
   Future<List<_Item>> _assemble(List<Record> logged) async {
-    final planned = widget.view.readOnly
+    final planned = _readOnly
         ? const <PlannedEntry>[]
         : await PlanStore.loadForDate(widget.view, _selectedDate);
     // Refresh the undo-logging mappings alongside — cheap prefs read, and
     // this also applies the store's lazy 14-day prune.
-    _undoMappings = widget.view.readOnly
+    _undoMappings = _readOnly
         ? {}
         : await PlanStore.undoMappings(widget.view);
 
@@ -611,6 +628,9 @@ class _TimelineScreenState extends State<TimelineScreen> {
         appBar: _selectionMode ? _buildSelectionAppBar() : _buildNormalAppBar(),
         body: Column(
           children: [
+            // Domain-dashboard header (domain_screen.dart) — metric
+            // chips + series charts above the date bar.
+            if (widget.header != null) widget.header!,
             if (widget.view.dateField != null)
               _DateBar(
                 selected: _selectedDate,
@@ -685,30 +705,30 @@ class _TimelineScreenState extends State<TimelineScreen> {
                           // only (no edit/delete entry points). Long-
                           // press and delete are no-ops so selection
                           // mode can never start.
-                          onTap: (item) => widget.view.readOnly
+                          onTap: (item) => _readOnly
                               ? _toggleExpand(item.keyString)
                               : (_selectionMode
                                   ? _toggleSelect(item)
                                   : _toggleExpand(item.keyString)),
-                          onEdit: widget.view.readOnly
+                          onEdit: _readOnly
                               ? (_) {}
                               : _edit,
-                          onMove: widget.view.readOnly
+                          onMove: _readOnly
                               ? (_) {}
                               : _moveToDate,
-                          onLongPress: widget.view.readOnly
+                          onLongPress: _readOnly
                               ? (_) {}
                               : _toggleSelect,
-                          onDelete: widget.view.readOnly
+                          onDelete: _readOnly
                               ? (_) {}
                               : _delete,
                           // "Revert to plan": only rows with a live
                           // undo-logging mapping show the button.
-                          revertibleIds: widget.view.readOnly
+                          revertibleIds: _readOnly
                               ? const {}
                               : _undoMappings.keys.toSet(),
                           onRevert: (item) => _revertToPlan(item.logged!),
-                          readOnly: widget.view.readOnly,
+                          readOnly: _readOnly,
                         ),
                       for (var i = 0; i < plannedRows.length; i++) ...[
                         if (i > 0 &&
@@ -766,7 +786,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
             ),
           ],
         ),
-        floatingActionButton: (_selectionMode || widget.view.readOnly)
+        floatingActionButton: (_selectionMode || _readOnly)
             ? null
             : FloatingActionButton(
                 onPressed: _create,

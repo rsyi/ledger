@@ -44,6 +44,7 @@ import '../services/week_planner.dart';
 import '../services/wm_store.dart';
 import 'apps_screen.dart';
 import 'chat_screen.dart';
+import 'domain_screen.dart';
 import 'program_screen.dart';
 import 'coach_chat_screen.dart';
 import 'coach_threads_screen.dart';
@@ -573,6 +574,39 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }
 
+              // Domain rows open the domain screen: dashboard header +
+              // the view's timeline (read-only for integration
+              // paradigm — DomainScreen handles that gating itself).
+              void openDomain(DomainConfig domain, ViewSchema view) {
+                final readOnly = view.readOnly;
+                final repo = readOnly
+                    ? data.readOnlyRepo
+                    : data.registry.forView(view);
+                if (repo == null) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => DomainScreen(
+                      domain: domain,
+                      view: view,
+                      repository: repo,
+                      analytics: data.analytics,
+                      llm: readOnly ? null : data.llm,
+                      llmCache: readOnly ? null : data.llmCache,
+                      chatModel: chatModel,
+                      github: github == null ? null : GithubClient(github),
+                      qboSpec: readOnly
+                          ? null
+                          : data.quickbooks?.specFor(view.name),
+                      qboService:
+                          readOnly ||
+                              data.quickbooks?.specFor(view.name) == null
+                          ? null
+                          : data.qboService,
+                    ),
+                  ),
+                );
+              }
+
               void openWeekPlan() {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -718,7 +752,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                             entryViews: entryViews,
                             readOnlyViews: readOnlyViews,
-                            onOpenDomain: (domain, view) => openView(view),
+                            onOpenDomain: openDomain,
                             onOpenView: openView,
                           ),
                           const Divider(height: 1),

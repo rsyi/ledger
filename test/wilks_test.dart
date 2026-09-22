@@ -441,10 +441,14 @@ void main() {
     //   315 lb at 165 lb bw → 121.97756160079403
     //   377 lb at 192 lb bw → 133.4584122788316
     //   310 lb at 165 lb bw → 120.04140982935286
+    //   320 lb at 175 lb bw → 119.45633051406521
+    //     (the home_dashboard_test STRENGTH card fixture: the all-time
+    //     top actual weight at its contemporaneous bodyweight)
     test('matches independently computed known values', () {
       expect(wilksPointsLb(315, 165), closeTo(121.97756160079403, 1e-9));
       expect(wilksPointsLb(377, 192), closeTo(133.4584122788316, 1e-9));
       expect(wilksPointsLb(310, 165), closeTo(120.04140982935286, 1e-9));
+      expect(wilksPointsLb(320, 175), closeTo(119.45633051406521, 1e-9));
     });
 
     test('agrees with the coefficient identity (lb → kg round trip)', () {

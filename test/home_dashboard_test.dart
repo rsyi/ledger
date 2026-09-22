@@ -96,7 +96,7 @@ void main() {
 
   testWidgets('STRENGTH renders recent-e1RM vs all-time-top columns with '
       'wilks points and age tags; working max is gone', (tester) async {
-    HomeDashboardState.clearBestE1rmCache();
+    HomeDashboardState.clearBestWeightCache();
     final strengthRepo = _FakeStatusRepo([
       {
         'date': DateTime(2026, 9, 21),
@@ -108,7 +108,7 @@ void main() {
         'date': DateTime(2025, 1, 6),
         'exercise': 'Barbell Squat',
         'weight': 320,
-        'reps': 1, // e1rm ~330.7 — all-time top, long outside the window
+        'reps': 1, // actual 320 — the all-time top, long outside the window
       },
     ]);
     // Current bw: 7-day mean 165 (Sep 17–23). Contemporaneous bw for
@@ -132,23 +132,28 @@ void main() {
     expect(find.text('recent e1RM'), findsOneWidget);
     expect(find.text('all-time top'), findsOneWidget);
     expect(find.text('working max'), findsNothing);
-    expect(find.text('e1RM basis'), findsOneWidget);
+    // Basis tag: compact on the card (the recent header already says
+    // e1RM); the sheet's basis entry carries the full two-basis note.
+    expect(find.text('top: actual'), findsOneWidget);
     // Cells: lb · wilks (current bw 165 / contemporaneous bw 175) · age.
-    // wilksPointsLb(310, 165) = 120.04…; wilksPointsLb(330.67, 175) =
-    // 123.44… (independently computed in wilks_test.dart).
+    // Recent = e1RM (310 = 300×(1+1/30)); the all-time top = ACTUAL
+    // weight lifted (320, NOT its ~330.7 e1RM — 2026-09-22, "the
+    // all-time top should be based on my actual 1RM not my e1RM").
+    // wilksPointsLb(310, 165) = 120.04…; wilksPointsLb(320, 175) =
+    // 119.45… (both independently computed in wilks_test.dart).
     expect(
       find.textContaining('310 · 120.0w · 2d', findRichText: true),
       findsOneWidget,
     );
     expect(
-      find.textContaining('331 · 123.4w · 21mo', findRichText: true),
+      find.textContaining('320 · 119.5w · 21mo', findRichText: true),
       findsOneWidget,
     );
   });
 
   testWidgets('tapping a card opens its detail sheet; Open action present',
       (tester) async {
-    HomeDashboardState.clearBestE1rmCache();
+    HomeDashboardState.clearBestWeightCache();
     final repo = _FakeStatusRepo([
       {
         'week_monday': DateTime(2026, 9, 21),
@@ -184,7 +189,7 @@ void main() {
 
   testWidgets('STRENGTH detail sheet explains the two columns, both wilks '
       'bases, and where the working max went', (tester) async {
-    HomeDashboardState.clearBestE1rmCache();
+    HomeDashboardState.clearBestWeightCache();
     await tester.pumpWidget(_wrap(HomeDashboard(
       strengthView: _strengthView,
       strengthRepo: _FakeStatusRepo([
@@ -213,9 +218,17 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('contemporaneous'), findsOneWidget);
+    // The all-time top is ACTUAL weight (405×2 → 405 convention); the
+    // basis entry names both bases — recent e1RM = Epley estimate, top
+    // = actual, sharing the Wilks trend chart's actual-max basis.
+    expect(find.textContaining('ACTUALLY lifted'), findsOneWidget);
+    expect(find.textContaining('405×2 counts as 405'), findsOneWidget);
     expect(find.textContaining('reps capped at'), findsOneWidget);
-    // Both wilks bases are called out (chart = actual-max, card = e1RM).
-    expect(find.textContaining('ACTUAL-MAX basis'), findsOneWidget);
+    expect(find.textContaining('actual-max basis'), findsOneWidget);
+    // The compact tag stays on the card; the sheet's basis entry
+    // carries the full two-basis note.
+    expect(find.text('top: actual'), findsOneWidget);
+    expect(find.text('recent: e1RM · top: actual'), findsOneWidget);
     // Working max: no column, just the pointer to its new home.
     expect(find.text('working max'), findsOneWidget); // sheet entry only
     expect(find.text('Program › Configuration'), findsOneWidget);
@@ -302,7 +315,7 @@ phases:
   testWidgets('PHASE hero renders from phases config; grid condenses to '
       'STRENGTH + THIS WEEK', (tester) async {
     ProgramProvider.clearCache();
-    HomeDashboardState.clearBestE1rmCache();
+    HomeDashboardState.clearBestWeightCache();
     // Weigh-ins declining ~0.75 lb/wk into Sep 23 — cut on pace.
     final weightRepo = _FakeStatusRepo([
       for (var i = 0; i < 28; i++)
@@ -352,7 +365,7 @@ phases:
   testWidgets('hero weight row taps through to the Program screen',
       (tester) async {
     ProgramProvider.clearCache();
-    HomeDashboardState.clearBestE1rmCache();
+    HomeDashboardState.clearBestWeightCache();
     var openedProgram = false;
     await tester.pumpWidget(_wrap(HomeDashboard(
       provider: ProgramProvider(fetcher),
@@ -368,7 +381,7 @@ phases:
   testWidgets('no phases section → legacy four-card grid unchanged',
       (tester) async {
     ProgramProvider.clearCache();
-    HomeDashboardState.clearBestE1rmCache();
+    HomeDashboardState.clearBestWeightCache();
     Future<String?> noPhases(String path) async => switch (path) {
           'coach/phase.yaml' => phaseYaml,
           'coach/program.yaml' => programYaml,

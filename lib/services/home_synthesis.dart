@@ -203,28 +203,6 @@ String fmtAge(DateTime date, DateTime today) {
   return best == null ? null : (value: best.e1rm, date: best.date);
 }
 
-/// All-time best e1RM per lift WITH the date it was set — same
-/// qualification as [allTimeBestE1rms] (Epley capped at 12, full
-/// history); ties keep the more recent date (the age tag should say
-/// "you matched this 3d ago", not point at 2024).
-Map<String, ({double value, DateTime date})> allTimeBestE1rmsWithDates(
-  List<StrengthRow> rows,
-) {
-  final out = <String, ({double value, DateTime date})>{};
-  for (final r in rows) {
-    final lift = mainLiftByExercise[r.exercise];
-    if (lift == null || r.weight <= 0 || r.reps <= 0) continue;
-    final e = epleyE1rm(r.weight, r.reps);
-    final cur = out[lift];
-    if (cur == null ||
-        e > cur.value ||
-        (e == cur.value && r.date.isAfter(cur.date))) {
-      out[lift] = (value: e, date: DateTime(r.date.year, r.date.month, r.date.day));
-    }
-  }
-  return out;
-}
-
 // ---------------------------------------------------------------------------
 // Execution: LIVE current-week counts (2026-09-22 — the THIS WEEK strip
 // computes the running week from local rows at render; the nightly

@@ -43,10 +43,12 @@ void main() {
   });
 
   group('allTimeBestWeights', () {
-    test('max actual weight per main lift; non-mains dropped', () {
+    test('max actual weight per main lift WITH its date; non-mains '
+        'dropped; ties keep the more recent date', () {
       final best = allTimeBestWeights([
         row('Barbell Squat', 315, 3, '2025-01-10'),
         row('Barbell Squat', 335, 1, '2025-06-01'),
+        row('Barbell Squat', 335, 5, '2025-08-15'), // tie, newer — wins
         row('Barbell Squat', 225, 8, '2026-01-01'),
         row('Flat Barbell Bench Press', 245, 2, '2026-02-01'),
         row('Overhead Press', 135, 5, '2026-03-01'),
@@ -54,9 +56,10 @@ void main() {
         row('Lat Pulldown', 999, 1, '2026-04-01'), // not a main lift
       ], today);
       expect(best, {
-        'squat': 335,
-        'bench': 245,
-        'press': 145, // both press names fold into one lift
+        'squat': (value: 335.0, date: DateTime(2025, 8, 15)),
+        'bench': (value: 245.0, date: DateTime(2026, 2, 1)),
+        // Both press names fold into one lift.
+        'press': (value: 145.0, date: DateTime(2026, 4, 1)),
       });
     });
 
@@ -67,7 +70,7 @@ void main() {
         row('Barbell Squat', 315, 0, '2026-01-01'), // no reps
         row('Barbell Squat', 300, 5, '2026-01-01'),
       ], today);
-      expect(best, {'squat': 300});
+      expect(best, {'squat': (value: 300.0, date: DateTime(2026, 1, 1))});
     });
   });
 

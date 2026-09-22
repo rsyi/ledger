@@ -115,8 +115,10 @@ class MetricUnavailable extends MetricData {
 // ---------------------------------------------------------------------------
 
 /// Powerlifting-style total: sum of the four main lifts' all-time best
-/// capped e1RMs (Epley, reps capped at 12 — same expression as the home
-/// dashboard's "best" column). Returns the sum over the lifts that HAVE
+/// capped e1RMs (Epley, reps capped at 12 — home_synthesis
+/// [allTimeBestE1rms]; the home card's all-time top column is ACTUAL
+/// weight since 2026-09-22 and no longer shares this expression).
+/// Returns the sum over the lifts that HAVE
 /// history plus the list of missing lifts, so the UI can label an
 /// incomplete total honestly. Null total when no lift has history.
 ({double total, List<String> missing})? plTotal(
@@ -135,21 +137,32 @@ class MetricUnavailable extends MetricData {
 }
 
 /// All-time best ACTUAL weight lifted per main lift (max `weight` over
-/// logged sets with weight > 0 and reps > 0), dates after [asOf]
-/// excluded so future-dated rows can't inflate a "best". Distinct from
-/// the best e1RM — this is a bar-loaded number, not an estimate.
-Map<String, double> allTimeBestWeights(
+/// logged sets with weight > 0 and reps > 0 — any reps ≥ 1, so a
+/// 405×2 counts as 405), WITH the day it was set (→ age tags); dates
+/// after [asOf] excluded so future-dated rows can't inflate a "best".
+/// Ties keep the more recent date (an age tag should say "you matched
+/// this 3d ago", not point at 2024). Distinct from the best e1RM —
+/// this is a bar-loaded number, not an estimate. Consumers: the
+/// strength Trends `all_time_best_weight` metric AND the home STRENGTH
+/// card's all-time top column (2026-09-22 — user: "the all-time top
+/// should be based on my actual 1RM not my e1RM").
+Map<String, ({double value, DateTime date})> allTimeBestWeights(
   List<StrengthRow> rows,
   DateTime asOf,
 ) {
   final day = DateTime(asOf.year, asOf.month, asOf.day);
-  final out = <String, double>{};
+  final out = <String, ({double value, DateTime date})>{};
   for (final r in rows) {
     final lift = mainLiftByExercise[r.exercise];
     if (lift == null || r.weight <= 0 || r.reps <= 0) continue;
     final d = DateTime(r.date.year, r.date.month, r.date.day);
     if (d.isAfter(day)) continue;
-    if ((out[lift] ?? 0) < r.weight) out[lift] = r.weight;
+    final cur = out[lift];
+    if (cur == null ||
+        r.weight > cur.value ||
+        (r.weight == cur.value && d.isAfter(cur.date))) {
+      out[lift] = (value: r.weight, date: d);
+    }
   }
   return out;
 }
@@ -390,7 +403,11 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
         return const MetricUnavailable('no strength history');
       }
       final best = allTimeBestWeights(inputs.strengthRows, inputs.today);
-      return _perLiftStats(best, lifts, withUnit);
+      return _perLiftStats(
+        {for (final e in best.entries) e.key: e.value.value},
+        lifts,
+        withUnit,
+      );
 
     case 'wilks':
       // WILKS-2020 SBD score (squat+bench+deadlift only — NOT the

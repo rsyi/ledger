@@ -31,19 +31,26 @@
 ///             — light weeks + sub-0.75-effort sets excluded, window
 ///             widens until it finds something and the age tag tells
 ///             the story; DISPLAY-ONLY — the §2.5 42-day reference is
-///             unchanged internally) vs the all-time best e1RM from
-///             full strength history (cached per session). Each value
-///             carries its per-lift Wilks points (wilksPointsLb):
-///             recent priced at CURRENT bodyweight (7-day avg), the
-///             all-time top at the CONTEMPORANEOUS bodyweight — the
-///             monthly mean as of the PR's month — which is what makes
-///             an old fat-bulk PR comparable. Every number carries a
-///             "3d"/"2w"/"5mo" age tag. The WORKING MAX column moved
-///             OFF this card (it lives on the Program tab's
-///             Configuration card; the detail sheet says so). The card
-///             is tagged "e1RM basis" so it can't be confused with the
-///             Wilks trend chart, which is ACTUAL-MAX basis. Pain caps
-///             show as a labeled chip.
+///             unchanged internally) vs the all-time top — the
+///             heaviest weight ACTUALLY lifted over full strength
+///             history (any reps ≥ 1, a 405×2 counts as 405; user
+///             2026-09-22: "the all-time top should be based on my
+///             actual 1RM not my e1RM" — domain_metrics
+///             allTimeBestWeights, cached per session; same convention
+///             as the Wilks chart benchmark). Each value carries its
+///             per-lift Wilks points (wilksPointsLb): recent priced at
+///             CURRENT bodyweight (7-day avg), the all-time top at the
+///             CONTEMPORANEOUS bodyweight — the monthly mean as of the
+///             PR's month — which is what makes an old fat-bulk PR
+///             comparable. Every number carries a "3d"/"2w"/"5mo" age
+///             tag. The WORKING MAX column moved OFF this card (it
+///             lives on the Program tab's Configuration card; the
+///             detail sheet says so). The card is tagged "top: actual"
+///             (the recent column header already says e1RM; the
+///             sheet's basis entry spells out "recent: e1RM · top:
+///             actual") — two bases on one card, and only the top
+///             shares the Wilks trend chart's actual-max basis. Pain
+///             caps show as a labeled chip.
 ///   EXECUTION this week's working / near-max / bench counts vs the
 ///             program targets, + fired-flag count. Data: the current
 ///             program_status row (read-only sheet path).
@@ -57,7 +64,7 @@
 ///
 /// REFRESH: the home screen's pull-to-refresh calls [HomeDashboardState.
 /// reload], which busts the wm_store / program-doc / weight-mirror /
-/// best-e1RM caches and refires every card future.
+/// best-weight caches and refires every card future.
 ///
 /// Every card loads independently and degrades to a placeholder when its
 /// source is missing/offline — the dashboard NEVER blocks the HOME tab
@@ -72,6 +79,7 @@ import 'package:intl/intl.dart';
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
 import '../services/domain_config.dart' show DomainConfigProvider;
+import '../services/domain_metrics.dart' show allTimeBestWeights;
 import '../services/home_synthesis.dart';
 import '../services/phase_eigenvectors.dart';
 import '../services/program_current.dart';
@@ -218,9 +226,10 @@ class _StrengthData {
   /// found). Wilks priced at CURRENT bodyweight ([currentBwLbs]).
   final Map<String, _LiftValue> recent;
 
-  /// All-time best e1RM per lift (full history, session-cached).
-  /// Wilks priced at the CONTEMPORANEOUS bodyweight — the monthly mean
-  /// as of the month the PR was set.
+  /// All-time top per lift: the heaviest weight ACTUALLY lifted (any
+  /// reps ≥ 1 — a 405×2 counts as 405; NOT an e1RM) over full history,
+  /// session-cached. Wilks priced at the CONTEMPORANEOUS bodyweight —
+  /// the monthly mean as of the month the PR was set.
   final Map<String, _LiftValue> best;
 
   /// The bodyweight (lb) the recent column's Wilks is priced at:
@@ -241,14 +250,14 @@ class _StrengthData {
 class HomeDashboardState extends State<HomeDashboard> {
   late final DateTime _today;
 
-  /// All-time best e1RMs (+ the dates they were set) are computed from
-  /// FULL strength history — once per app session (process-wide),
-  /// busted by [reload].
-  static Map<String, ({double value, DateTime date})>? _bestE1rmCache;
+  /// All-time top ACTUAL weights (+ the dates they were set —
+  /// domain_metrics allTimeBestWeights) are computed from FULL strength
+  /// history — once per app session (process-wide), busted by [reload].
+  static Map<String, ({double value, DateTime date})>? _bestWeightCache;
 
   /// Test hook.
   @visibleForTesting
-  static void clearBestE1rmCache() => _bestE1rmCache = null;
+  static void clearBestWeightCache() => _bestWeightCache = null;
 
   // Base futures — each swallows its own errors into null so one dead
   // source never poisons another card. Reassigned by [reload].
@@ -285,13 +294,13 @@ class HomeDashboardState extends State<HomeDashboard> {
 
   /// (Re)fires every future. force=true busts the caches first:
   /// wm_store's 3-min snapshot, ProgramProvider's 1-h doc cache, the
-  /// session-wide best-e1RM cache; the weight path re-syncs its local
+  /// session-wide best-weight cache; the weight path re-syncs its local
   /// mirror from the sheet on every call already, and program_status is
   /// an uncached direct sheet read.
   void _startLoad({required bool force}) {
     if (force) {
       ProgramProvider.clearCache();
-      _bestE1rmCache = null;
+      _bestWeightCache = null;
     }
     _wm = _guard(() async => widget.wmStore?.snapshot(force: force));
     _docs = _guard(() async => widget.provider?.load());
@@ -513,9 +522,13 @@ class HomeDashboardState extends State<HomeDashboard> {
         );
       }
     }
+    // All-time top = heaviest weight ACTUALLY lifted (2026-09-22 —
+    // user: "the all-time top should be based on my actual 1RM not my
+    // e1RM"): domain_metrics allTimeBestWeights, any reps ≥ 1, same
+    // convention as the Wilks chart benchmark (405×2 → 405).
     final bestRaw = rows.isEmpty
         ? const <String, ({double value, DateTime date})>{}
-        : (_bestE1rmCache ??= allTimeBestE1rmsWithDates(rows));
+        : (_bestWeightCache ??= allTimeBestWeights(rows, _today));
     final best = <String, _LiftValue>{
       for (final e in bestRaw.entries)
         e.key: (
@@ -793,24 +806,27 @@ class HomeDashboardState extends State<HomeDashboard> {
           label: 'all-time top',
           value: liftLines(d?.best ?? const {}),
           explain:
-              'Your best-ever estimated 1RM (Epley, reps capped at '
-              '12) over the full strength history — the ceiling the '
-              'recent column sits under. Its Wilks points use the '
-              'bodyweight you carried THE MONTH the PR was set '
+              'The heaviest weight you\'ve ACTUALLY lifted (any reps '
+              '≥ 1 — a 405×2 counts as 405; no Epley, no estimates) '
+              'over the full strength history — your actual 1RM '
+              'ceiling, on the same actual-max convention as the '
+              'Wilks trend chart\'s benchmark. Its Wilks points use '
+              'the bodyweight you carried THE MONTH the top was set '
               '(contemporaneous, from the monthly weigh-in means) — '
-              'that\'s what makes an old bulk-weight PR comparable to '
-              'today\'s cut numbers. No weigh-in history covering that '
-              'month → the wilks tag is omitted.',
+              'that\'s what makes an old bulk-weight top comparable '
+              'to today\'s cut numbers. No weigh-in history covering '
+              'that month → the wilks tag is omitted.',
         ),
         _DetailEntry(
           label: 'basis',
-          value: 'e1RM',
+          value: 'recent: e1RM · top: actual',
           explain:
-              'This card is e1RM-basis: estimated 1RMs, per your ask '
-              'for recent e1RM vs all-time tops. The Wilks trend chart '
-              'and its best-ever benchmark are ACTUAL-MAX basis — '
-              'heaviest weights actually lifted, no estimates. Same '
-              '"wilks" name, two bases; don\'t cross-compare them.',
+              'Two bases on one card: the recent column is an '
+              'ESTIMATED 1RM (Epley, reps capped at 12) — what you\'ve '
+              'shown lately; the all-time top is ACTUAL weight lifted '
+              '— the same actual-max basis as the Wilks trend chart '
+              'and its best-ever benchmark. A recent e1RM can sit '
+              'above an actual top without you ever having lifted it.',
         ),
         _DetailEntry(
           label: 'working max',
@@ -981,12 +997,15 @@ class HomeDashboardState extends State<HomeDashboard> {
     return _SynthCard(
       label: 'Strength',
       onTap: _openStrengthSheet,
-      // Subtle basis tag: THIS card is e1RM-basis (the user asked for
-      // recent e1RM vs all-time tops here); the Wilks trend chart and
-      // its best-ever benchmark are ACTUAL-MAX basis. The tag keeps
-      // the two surfaces from being read as the same number.
+      // Subtle basis tag (2026-09-22: two bases since the all-time
+      // column moved to actual weight): the "recent e1RM" column
+      // header already names its basis, so the tag carries the other
+      // half — the top is the heaviest weight ACTUALLY lifted, the
+      // Wilks trend chart's actual-max basis. Kept short: the full
+      // 'recent: e1RM · top: actual' overflows the half-width card
+      // (the sheet's basis entry spells it out).
       trailingBuilder: (context) => Text(
-        'e1RM basis',
+        'top: actual',
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),

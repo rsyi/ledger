@@ -503,16 +503,4 @@ void main() {
       expect(mon.weekMonday, DateTime.utc(2026, 9, 12));
     });
   });
-
-  group('allTimeBestE1rmsWithDates', () {
-    test('carries the date of the best set; ties keep the newest', () {
-      final best = allTimeBestE1rmsWithDates([
-        strengthRow('2023-05-01', 'Barbell Squat', 350, 1),
-        strengthRow('2024-01-05', 'Barbell Squat', 350, 1), // tie, newer
-        strengthRow('2026-09-19', 'Barbell Squat', 300, 3), // lighter
-      ]);
-      expect(best['squat']!.value, closeTo(350 * (1 + 1 / 30), 1e-9));
-      expect(best['squat']!.date, DateTime(2024, 1, 5));
-    });
-  });
 }

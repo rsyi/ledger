@@ -20,6 +20,7 @@
 library;
 
 import 'package:fl_chart/fl_chart.dart';
+import 'widgets/chart_bottom_axis.dart';
 import 'widgets/pinned_tooltip_line_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -188,8 +189,8 @@ class _ProgramView extends StatelessWidget {
 
     final stats = observedWeightStats(data.daily, today);
     final phase = phaseVersion?['value']?.toString();
-    final targetRate =
-        (phaseVersion?['target_rate_lb_per_week'] as num?)?.toDouble();
+    final targetRate = (phaseVersion?['target_rate_lb_per_week'] as num?)
+        ?.toDouble();
     final verdict = phase == null
         ? null
         : phaseVerdict(
@@ -257,9 +258,9 @@ class _SectionLabel extends StatelessWidget {
       child: Text(
         text.toUpperCase(),
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              letterSpacing: 1.2,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+          letterSpacing: 1.2,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -295,10 +296,9 @@ class _DeclaredCard extends StatelessWidget {
     final reason = p['reason']?.toString();
     final exit = p['exit_criteria']?.toString();
 
-    final small = Theme.of(context)
-        .textTheme
-        .bodySmall
-        ?.copyWith(color: scheme.onSurfaceVariant);
+    final small = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
 
     return Card(
       elevation: 0,
@@ -311,8 +311,10 @@ class _DeclaredCard extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: scheme.primary,
                     borderRadius: BorderRadius.circular(6),
@@ -320,9 +322,9 @@ class _DeclaredCard extends StatelessWidget {
                   child: Text(
                     value.toUpperCase(),
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          color: scheme.onPrimary,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      color: scheme.onPrimary,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -336,15 +338,13 @@ class _DeclaredCard extends StatelessWidget {
                 if (targetWt != null) 'Target $targetWt lb',
                 if (targetRate != null) '${_fmtSigned(targetRate!)} lb/wk',
               ].join(' · '),
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
             if (reason != null) ...[
               const SizedBox(height: 6),
-              Text(reason,
-                  style: small?.copyWith(fontStyle: FontStyle.italic)),
+              Text(reason, style: small?.copyWith(fontStyle: FontStyle.italic)),
             ],
             if (exit != null) ...[
               const SizedBox(height: 6),
@@ -409,12 +409,11 @@ class _BlockTimeline extends StatelessWidget {
     final emphasis = b['emphasis']?.toString() ?? '';
     final dates = b['dates'] as List?;
     final weights = b['weight'] as List?;
-    final start =
-        dates != null ? DateTime.tryParse(dates[0].toString()) : null;
+    final start = dates != null ? DateTime.tryParse(dates[0].toString()) : null;
     final end = dates != null ? DateTime.tryParse(dates[1].toString()) : null;
     final dateStr = start != null && end != null
         ? '${DateFormat('MMM d yy').format(start)} – '
-            '${DateFormat('MMM d yy').format(end)}'
+              '${DateFormat('MMM d yy').format(end)}'
         : '';
     final wtStr = weights != null && weights.length == 2
         ? '${weights[0]}→${weights[1]} lb'
@@ -425,9 +424,12 @@ class _BlockTimeline extends StatelessWidget {
     double? progress;
     if (isCurrent && start != null && end != null) {
       final total = end.difference(start).inDays + 1;
-      final done = DateTime(today.year, today.month, today.day)
-              .difference(DateTime(start.year, start.month, start.day))
-              .inDays +
+      final done =
+          DateTime(
+            today.year,
+            today.month,
+            today.day,
+          ).difference(DateTime(start.year, start.month, start.day)).inDays +
           1;
       if (total > 0) progress = (done / total).clamp(0.0, 1.0);
     }
@@ -450,9 +452,9 @@ class _BlockTimeline extends StatelessWidget {
                   'B$n',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: isCurrent ? scheme.surface : color,
-                      ),
+                    fontWeight: FontWeight.w700,
+                    color: isCurrent ? scheme.surface : color,
+                  ),
                 ),
               ),
               const SizedBox(width: 10),
@@ -461,25 +463,24 @@ class _BlockTimeline extends StatelessWidget {
                 child: Text(
                   emphasis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        fontWeight:
-                            isCurrent ? FontWeight.w700 : FontWeight.w500,
-                      ),
+                    fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+                  ),
                 ),
               ),
               Expanded(
                 child: Text(
                   dateStr,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ),
               Text(
                 wtStr,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                      color: scheme.onSurfaceVariant,
-                    ),
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),
@@ -509,9 +510,9 @@ class _BlockTimeline extends StatelessWidget {
                   'You are here — week ${slice?.weekInBlock} of block $n'
                   '${slice?.weekType != 'normal' ? ' (${slice?.weekType} week)' : ''}',
                   style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: color,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    color: color,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ],
             ),
@@ -580,7 +581,8 @@ class _ObservedCard extends StatelessWidget {
       );
     }
 
-    final targetToday = blockStart != null &&
+    final targetToday =
+        blockStart != null &&
             blockEnd != null &&
             targetFrom != null &&
             targetTo != null
@@ -640,9 +642,9 @@ class _ObservedCard extends StatelessWidget {
                 if (stats.lastWeighIn != null)
                   'last weigh-in ${DateFormat('MMM d').format(stats.lastWeighIn!)}',
               ].join(' · '),
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -666,16 +668,15 @@ class _Stat extends StatelessWidget {
           Text(
             value,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
+              fontWeight: FontWeight.w700,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
           ),
           Text(
             label,
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(
+              context,
+            ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ],
       ),
@@ -737,7 +738,8 @@ class _WeightChart extends StatelessWidget {
       for (final w in visibleDaily) FlSpot(_x(w.date), w.weightLbs),
     ];
     final avgSpots = [for (final w in avg) FlSpot(_x(w.date), w.weightLbs)];
-    final targetSpots = blockStart != null &&
+    final targetSpots =
+        blockStart != null &&
             blockEnd != null &&
             targetFrom != null &&
             targetTo != null
@@ -762,109 +764,103 @@ class _WeightChart extends StatelessWidget {
     final yMin = ys.reduce((a, b) => a < b ? a : b);
     final yMax = ys.reduce((a, b) => a > b ? a : b);
     final yPad = ((yMax - yMin).abs() * 0.1).clamp(0.5, 5.0);
-    final rangeDays = xMax - xMin;
 
     return SizedBox(
       height: 240,
-      child: PinnedTooltipLineChart(
-        data: LineChartData(
-          minX: xMin,
-          maxX: xMax,
-          minY: yMin - yPad,
-          maxY: yMax + yPad,
-          clipData: const FlClipData.all(),
-          gridData: const FlGridData(show: true, drawVerticalLine: false),
-          borderData: FlBorderData(show: false),
-          titlesData: FlTitlesData(
-            rightTitles: const AxisTitles(),
-            topTitles: const AxisTitles(),
-            leftTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 40,
-                getTitlesWidget: (value, meta) => Text(
-                  value.toStringAsFixed(0),
-                  style: const TextStyle(fontSize: 10),
-                ),
-              ),
-            ),
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 28,
-                interval: rangeDays <= 45 ? 7 : 30,
-                getTitlesWidget: (value, meta) {
-                  final dt = DateTime.fromMillisecondsSinceEpoch(
-                    (value * 86400000).toInt(),
-                    isUtc: true,
-                  );
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      DateFormat('MMM d').format(dt),
-                      style: const TextStyle(fontSize: 9),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-          lineBarsData: [
-            // Daily weigh-ins: faint dots, hairline connection.
-            if (dailySpots.isNotEmpty)
-              LineChartBarData(
-                spots: dailySpots,
-                isCurved: false,
-                barWidth: 1,
-                color: scheme.primary.withValues(alpha: 0.25),
-                dotData: FlDotData(
-                  show: true,
-                  getDotPainter: (spot, pct, bar, i) => FlDotCirclePainter(
-                    radius: 2,
-                    color: scheme.primary.withValues(alpha: 0.35),
-                    strokeWidth: 0,
+      // LayoutBuilder: the bottom-axis tick keeper needs the plot's
+      // pixel width to estimate label overlap (chart_bottom_axis).
+      child: LayoutBuilder(
+        builder: (context, constraints) => PinnedTooltipLineChart(
+          data: LineChartData(
+            minX: xMin,
+            maxX: xMax,
+            minY: yMin - yPad,
+            maxY: yMax + yPad,
+            clipData: const FlClipData.all(),
+            gridData: const FlGridData(show: true, drawVerticalLine: false),
+            borderData: FlBorderData(show: false),
+            titlesData: FlTitlesData(
+              rightTitles: const AxisTitles(),
+              topTitles: const AxisTitles(),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 40,
+                  getTitlesWidget: (value, meta) => Text(
+                    value.toStringAsFixed(0),
+                    style: const TextStyle(fontSize: 10),
                   ),
                 ),
               ),
-            // 7-day average: the real signal.
-            if (avgSpots.isNotEmpty)
-              LineChartBarData(
-                spots: avgSpots,
-                isCurved: false,
-                barWidth: 2.5,
-                color: scheme.primary,
-                dotData: const FlDotData(show: false),
+              // Explicit non-overlapping date ticks (endpoints + month
+              // starts) — see chart_bottom_axis.dart.
+              bottomTitles: AxisTitles(
+                sideTitles: dateBottomTitles(
+                  minX: xMin,
+                  maxX: xMax,
+                  plotWidth: (constraints.maxWidth - 40).clamp(1, 10000),
+                  style: const TextStyle(fontSize: 9),
+                  reservedSize: 28,
+                ),
               ),
-            // Block target line: dashed from→to across the block dates.
-            if (targetSpots.isNotEmpty)
-              LineChartBarData(
-                spots: targetSpots,
-                isCurved: false,
-                barWidth: 1.5,
-                color: scheme.tertiary,
-                dashArray: [6, 4],
-                dotData: const FlDotData(show: false),
-              ),
-          ],
-          lineTouchData: LineTouchData(
-            enabled: true,
-            touchTooltipData: LineTouchTooltipData(
-              getTooltipColor: (_) => Colors.black.withValues(alpha: 0.55),
-              fitInsideHorizontally: true,
-              fitInsideVertically: true,
-              getTooltipItems: (spots) => [
-                for (final s in spots)
-                  LineTooltipItem(
-                    '${DateFormat('MMM d').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
-                    '${s.y.toStringAsFixed(1)}',
-                    const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      height: 1.3,
-                      fontFeatures: [FontFeature.tabularFigures()],
+            ),
+            lineBarsData: [
+              // Daily weigh-ins: faint dots, hairline connection.
+              if (dailySpots.isNotEmpty)
+                LineChartBarData(
+                  spots: dailySpots,
+                  isCurved: false,
+                  barWidth: 1,
+                  color: scheme.primary.withValues(alpha: 0.25),
+                  dotData: FlDotData(
+                    show: true,
+                    getDotPainter: (spot, pct, bar, i) => FlDotCirclePainter(
+                      radius: 2,
+                      color: scheme.primary.withValues(alpha: 0.35),
+                      strokeWidth: 0,
                     ),
                   ),
-              ],
+                ),
+              // 7-day average: the real signal.
+              if (avgSpots.isNotEmpty)
+                LineChartBarData(
+                  spots: avgSpots,
+                  isCurved: false,
+                  barWidth: 2.5,
+                  color: scheme.primary,
+                  dotData: const FlDotData(show: false),
+                ),
+              // Block target line: dashed from→to across the block dates.
+              if (targetSpots.isNotEmpty)
+                LineChartBarData(
+                  spots: targetSpots,
+                  isCurved: false,
+                  barWidth: 1.5,
+                  color: scheme.tertiary,
+                  dashArray: [6, 4],
+                  dotData: const FlDotData(show: false),
+                ),
+            ],
+            lineTouchData: LineTouchData(
+              enabled: true,
+              touchTooltipData: LineTouchTooltipData(
+                getTooltipColor: (_) => Colors.black.withValues(alpha: 0.55),
+                fitInsideHorizontally: true,
+                fitInsideVertically: true,
+                getTooltipItems: (spots) => [
+                  for (final s in spots)
+                    LineTooltipItem(
+                      '${DateFormat('MMM d').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
+                      '${s.y.toStringAsFixed(1)}',
+                      const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        height: 1.3,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -907,28 +903,29 @@ class _VerdictCard extends StatelessWidget {
 
     final (bg, fg, icon) = switch (v.state) {
       VerdictState.agree => (
-          Colors.green.withValues(alpha: 0.15),
-          Colors.green.shade800,
-          Icons.check_circle_outline,
-        ),
+        Colors.green.withValues(alpha: 0.15),
+        Colors.green.shade800,
+        Icons.check_circle_outline,
+      ),
       VerdictState.drift => (
-          Colors.amber.withValues(alpha: 0.2),
-          Colors.orange.shade900,
-          Icons.warning_amber_outlined,
-        ),
+        Colors.amber.withValues(alpha: 0.2),
+        Colors.orange.shade900,
+        Icons.warning_amber_outlined,
+      ),
       VerdictState.mismatch => (
-          scheme.errorContainer,
-          scheme.onErrorContainer,
-          Icons.error_outline,
-        ),
+        scheme.errorContainer,
+        scheme.onErrorContainer,
+        Icons.error_outline,
+      ),
       VerdictState.unknown => (
-          scheme.surfaceContainerHighest,
-          scheme.onSurfaceVariant,
-          Icons.help_outline,
-        ),
+        scheme.surfaceContainerHighest,
+        scheme.onSurfaceVariant,
+        Icons.help_outline,
+      ),
     };
 
-    final declared = 'Declared $phase'
+    final declared =
+        'Declared $phase'
         '${targetRate != null ? ' (target ${_fmtSigned(targetRate!)} lb/wk)' : ''}';
     final observed = v.observedRateLbWk == null
         ? 'no observed rate yet'
@@ -951,17 +948,16 @@ class _VerdictCard extends StatelessWidget {
                   Text(
                     v.label,
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: fg,
-                          fontWeight: FontWeight.w700,
-                        ),
+                      color: fg,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     '$declared · $observed',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: fg),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: fg),
                   ),
                 ],
               ),
@@ -977,8 +973,7 @@ class _VerdictCard extends StatelessWidget {
 // Formatting
 // ---------------------------------------------------------------------------
 
-String _fmtSigned(double v) =>
-    '${v > 0 ? '+' : ''}${v.toStringAsFixed(2)}';
+String _fmtSigned(double v) => '${v > 0 ? '+' : ''}${v.toStringAsFixed(2)}';
 
 String _fmtIso(String iso) {
   final d = DateTime.tryParse(iso);

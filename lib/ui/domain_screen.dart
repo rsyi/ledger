@@ -36,6 +36,7 @@ import '../services/qbo_service.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
 import 'timeline_screen.dart';
+import 'widgets/chart_bottom_axis.dart';
 import 'widgets/pinned_tooltip_line_chart.dart';
 
 /// Metric ids that need mapped strength rows.
@@ -377,9 +378,9 @@ class _StatChip extends StatelessWidget {
           ),
           Text(
             stat.label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ],
       ),
@@ -408,10 +409,7 @@ class _BarList extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 1.5),
             child: Row(
               children: [
-                SizedBox(
-                  width: 44,
-                  child: Text(b.label, style: labelStyle),
-                ),
+                SizedBox(width: 44, child: Text(b.label, style: labelStyle)),
                 Expanded(
                   child: Align(
                     alignment: Alignment.centerLeft,
@@ -432,9 +430,7 @@ class _BarList extends StatelessWidget {
                   child: Text(
                     '${b.count}',
                     textAlign: TextAlign.right,
-                    style: labelStyle?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    style: labelStyle?.copyWith(color: scheme.onSurfaceVariant),
                   ),
                 ),
               ],
@@ -515,7 +511,6 @@ class _MetricChart extends StatelessWidget {
     final yMin = ys.reduce((a, b) => a < b ? a : b);
     final yMax = ys.reduce((a, b) => a > b ? a : b);
     final yPad = ((yMax - yMin).abs() * 0.1).clamp(0.5, 5.0);
-    final rangeDays = xMax - xMin;
 
     // Goal band (protein): two flat bounds shaded between via
     // fl_chart's betweenBarsData — a range target, not a line. Indices
@@ -542,131 +537,122 @@ class _MetricChart extends StatelessWidget {
       children: [
         SizedBox(
           height: 130,
-          child: PinnedTooltipLineChart(
-            data: LineChartData(
-              minX: xMin,
-              maxX: xMax,
-              minY: yMin - yPad,
-              maxY: yMax + yPad,
-              clipData: const FlClipData.all(),
-              gridData: const FlGridData(show: true, drawVerticalLine: false),
-              borderData: FlBorderData(show: false),
-              titlesData: FlTitlesData(
-                rightTitles: const AxisTitles(),
-                topTitles: const AxisTitles(),
-                leftTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 34,
-                    getTitlesWidget: (value, meta) => Text(
-                      value.toStringAsFixed(0),
-                      style: const TextStyle(fontSize: 9),
+          // LayoutBuilder: the bottom-axis tick keeper needs the plot's
+          // pixel width to estimate label overlap (chart_bottom_axis).
+          child: LayoutBuilder(
+            builder: (context, constraints) => PinnedTooltipLineChart(
+              data: LineChartData(
+                minX: xMin,
+                maxX: xMax,
+                minY: yMin - yPad,
+                maxY: yMax + yPad,
+                clipData: const FlClipData.all(),
+                gridData: const FlGridData(show: true, drawVerticalLine: false),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  rightTitles: const AxisTitles(),
+                  topTitles: const AxisTitles(),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 34,
+                      getTitlesWidget: (value, meta) => Text(
+                        value.toStringAsFixed(0),
+                        style: const TextStyle(fontSize: 9),
+                      ),
+                    ),
+                  ),
+                  // Explicit non-overlapping date ticks (endpoints +
+                  // month starts) — see chart_bottom_axis.dart.
+                  bottomTitles: AxisTitles(
+                    sideTitles: dateBottomTitles(
+                      minX: xMin,
+                      maxX: xMax,
+                      plotWidth: (constraints.maxWidth - 34).clamp(1, 10000),
+                      style: const TextStyle(fontSize: 8),
+                      reservedSize: 22,
+                      space: 3,
                     ),
                   ),
                 ),
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 22,
-                    // ~monthly labels, thinning out on long (full-
-                    // history) windows so they stay legible.
-                    interval: rangeDays <= 45
-                        ? 14
-                        : rangeDays <= 200
-                            ? 30
-                            : (rangeDays / 6).ceilToDouble(),
-                    getTitlesWidget: (value, meta) {
-                      final dt = DateTime.fromMillisecondsSinceEpoch(
-                        (value * 86400000).toInt(),
-                        isUtc: true,
-                      );
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: Text(
-                          DateFormat('MMM d').format(dt),
-                          style: const TextStyle(fontSize: 8),
+                betweenBarsData: [
+                  if (hasBand)
+                    BetweenBarsData(
+                      fromIndex: 0,
+                      toIndex: 1,
+                      color: scheme.tertiary.withValues(alpha: 0.12),
+                    ),
+                ],
+                lineBarsData: [
+                  ...bars,
+                  LineChartBarData(
+                    spots: rawSpots,
+                    isCurved: false,
+                    barWidth: 1,
+                    color: scheme.primary.withValues(
+                      alpha: avgSpots.isEmpty ? 0.9 : 0.25,
+                    ),
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, pct, bar, i) => FlDotCirclePainter(
+                        radius: 1.8,
+                        color: scheme.primary.withValues(
+                          alpha: avgSpots.isEmpty ? 0.9 : 0.35,
                         ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-              betweenBarsData: [
-                if (hasBand)
-                  BetweenBarsData(
-                    fromIndex: 0,
-                    toIndex: 1,
-                    color: scheme.tertiary.withValues(alpha: 0.12),
-                  ),
-              ],
-              lineBarsData: [
-                ...bars,
-                LineChartBarData(
-                  spots: rawSpots,
-                  isCurved: false,
-                  barWidth: 1,
-                  color: scheme.primary.withValues(
-                    alpha: avgSpots.isEmpty ? 0.9 : 0.25,
-                  ),
-                  dotData: FlDotData(
-                    show: true,
-                    getDotPainter: (spot, pct, bar, i) => FlDotCirclePainter(
-                      radius: 1.8,
-                      color: scheme.primary.withValues(
-                        alpha: avgSpots.isEmpty ? 0.9 : 0.35,
+                        strokeWidth: 0,
                       ),
-                      strokeWidth: 0,
                     ),
                   ),
-                ),
-                if (avgSpots.isNotEmpty)
-                  LineChartBarData(
-                    spots: avgSpots,
-                    isCurved: false,
-                    barWidth: 2.2,
-                    color: scheme.primary,
-                    dotData: const FlDotData(show: false),
-                  ),
-                if (goal != null)
-                  LineChartBarData(
-                    spots: [FlSpot(xMin, goal), FlSpot(xMax, goal)],
-                    isCurved: false,
-                    barWidth: 1.5,
-                    color: scheme.tertiary,
-                    dashArray: [6, 4],
-                    dotData: const FlDotData(show: false),
-                  ),
-                // Acceptable-drop floor: dotted, error-toned — visually
-                // subordinate to the goal line it hangs under.
-                if (floor != null)
-                  LineChartBarData(
-                    spots: [FlSpot(xMin, floor), FlSpot(xMax, floor)],
-                    isCurved: false,
-                    barWidth: 1.2,
-                    color: scheme.error.withValues(alpha: 0.7),
-                    dashArray: [2, 4],
-                    dotData: const FlDotData(show: false),
-                  ),
-              ],
-              lineTouchData: LineTouchData(
-                enabled: true,
-                touchTooltipData: LineTouchTooltipData(
-                  getTooltipColor: (_) => Colors.black.withValues(alpha: 0.55),
-                  fitInsideHorizontally: true,
-                  fitInsideVertically: true,
-                  getTooltipItems: (spots) => [
-                    for (final s in spots)
-                      LineTooltipItem(
-                        '${DateFormat('MMM d').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
-                        '${s.y.toStringAsFixed(1)}',
-                        const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          height: 1.3,
-                          fontFeatures: [FontFeature.tabularFigures()],
+                  if (avgSpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: avgSpots,
+                      isCurved: false,
+                      barWidth: 2.2,
+                      color: scheme.primary,
+                      dotData: const FlDotData(show: false),
+                    ),
+                  if (goal != null)
+                    LineChartBarData(
+                      spots: [FlSpot(xMin, goal), FlSpot(xMax, goal)],
+                      isCurved: false,
+                      barWidth: 1.5,
+                      color: scheme.tertiary,
+                      dashArray: [6, 4],
+                      dotData: const FlDotData(show: false),
+                    ),
+                  // Acceptable-drop floor: dotted, error-toned — visually
+                  // subordinate to the goal line it hangs under.
+                  if (floor != null)
+                    LineChartBarData(
+                      spots: [FlSpot(xMin, floor), FlSpot(xMax, floor)],
+                      isCurved: false,
+                      barWidth: 1.2,
+                      color: scheme.error.withValues(alpha: 0.7),
+                      dashArray: [2, 4],
+                      dotData: const FlDotData(show: false),
+                    ),
+                ],
+                lineTouchData: LineTouchData(
+                  enabled: true,
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) =>
+                        Colors.black.withValues(alpha: 0.55),
+                    fitInsideHorizontally: true,
+                    fitInsideVertically: true,
+                    getTooltipItems: (spots) => [
+                      for (final s in spots)
+                        LineTooltipItem(
+                          '${DateFormat('MMM d').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
+                          '${s.y.toStringAsFixed(1)}',
+                          const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            height: 1.3,
+                            fontFeatures: [FontFeature.tabularFigures()],
+                          ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -821,10 +807,15 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
                 final idx = i - extra;
                 if (idx == items.length) return trailing;
                 return switch (items[idx]) {
-                  _DayRow(day: final day, count: final count) =>
-                    _dayHeading(context, day, count),
-                  _RecordRow(record: final record) =>
-                    _recordLine(context, record),
+                  _DayRow(day: final day, count: final count) => _dayHeading(
+                    context,
+                    day,
+                    count,
+                  ),
+                  _RecordRow(record: final record) => _recordLine(
+                    context,
+                    record,
+                  ),
                 };
               },
             );

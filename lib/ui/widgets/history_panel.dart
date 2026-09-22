@@ -7,6 +7,7 @@ import '../../models/view_schema.dart';
 import '../../services/list_display_render.dart';
 import '../../services/sheets_repository.dart';
 import '../../services/warehouse_connector.dart';
+import 'chart_bottom_axis.dart';
 import 'pinned_tooltip_line_chart.dart';
 
 /// Opens a modal bottom sheet listing past records that share [dim]'s
@@ -30,12 +31,8 @@ Future<void> showHistorySheet({
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (ctx) => _HistorySheet(
-      view: view,
-      dim: dim,
-      value: v,
-      repository: repository,
-    ),
+    builder: (ctx) =>
+        _HistorySheet(view: view, dim: dim, value: v, repository: repository),
   );
 }
 
@@ -68,8 +65,7 @@ class _HistorySheetState extends State<_HistorySheet> {
   Future<List<Record>> _load() async {
     final rows = await widget.repository.list(widget.view);
     final filtered = rows
-        .where((r) =>
-            r[widget.dim.name]?.toString() == widget.value)
+        .where((r) => r[widget.dim.name]?.toString() == widget.value)
         .toList();
     final dateField = widget.view.dateField;
     if (dateField != null) {
@@ -119,9 +115,8 @@ class _HistorySheetState extends State<_HistorySheet> {
                           ),
                           Text(
                             'History · ${widget.dim.name}',
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
                           ),
                         ],
                       ),
@@ -287,7 +282,9 @@ class _HistoryTile extends StatelessWidget {
           color: isDayMax ? scheme.onPrimaryContainer : null,
         ),
       ),
-      subtitle: subtitle == null ? null : _OtherFields(view: view, record: record),
+      subtitle: subtitle == null
+          ? null
+          : _OtherFields(view: view, record: record),
     );
   }
 
@@ -303,12 +300,14 @@ class _HistoryTile extends StatelessWidget {
 
 /// Jinja env for evaluating a measure's `expr` against a row. Mirrors
 /// the filter set used in [TemplateInterpolator] (custom `round`).
-final _jinjaEnv = Environment(filters: {
-  'round': (Object? value) {
-    final n = value is num ? value : num.tryParse(value.toString());
-    return n?.round() ?? value;
+final _jinjaEnv = Environment(
+  filters: {
+    'round': (Object? value) {
+      final n = value is num ? value : num.tryParse(value.toString());
+      return n?.round() ?? value;
+    },
   },
-});
+);
 
 /// Identifiers Jinja accepts as variable names (no spaces, no operators).
 /// Used to decide whether a dim's sheet header (`expr`) can safely be
@@ -453,7 +452,6 @@ class _TrendChart extends StatelessWidget {
     final yMin = yValues.reduce((a, b) => a < b ? a : b);
     final yMax = yValues.reduce((a, b) => a > b ? a : b);
     final yPad = (yMax - yMin).abs() * 0.1 + 0.5;
-    final rangeDays = (xMax - xMin).abs();
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -462,104 +460,99 @@ class _TrendChart extends StatelessWidget {
         children: [
           Text(
             'Daily max · $metricName',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: PinnedTooltipLineChart(
-              data: LineChartData(
-                minX: xMin,
-                maxX: xMax,
-                minY: yMin - yPad,
-                maxY: yMax + yPad,
-                gridData: const FlGridData(show: true, drawVerticalLine: false),
-                borderData: FlBorderData(
-                  show: true,
-                  border: Border(
-                    left: BorderSide(color: scheme.outlineVariant),
-                    bottom: BorderSide(color: scheme.outlineVariant),
+            // LayoutBuilder: the bottom-axis tick keeper needs the
+            // plot's pixel width to estimate label overlap.
+            child: LayoutBuilder(
+              builder: (context, constraints) => PinnedTooltipLineChart(
+                data: LineChartData(
+                  minX: xMin,
+                  maxX: xMax,
+                  minY: yMin - yPad,
+                  maxY: yMax + yPad,
+                  gridData: const FlGridData(
+                    show: true,
+                    drawVerticalLine: false,
                   ),
-                ),
-                titlesData: FlTitlesData(
-                  rightTitles: const AxisTitles(),
-                  topTitles: const AxisTitles(),
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 44,
-                      getTitlesWidget: (value, meta) => Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: Text(
-                          value.toStringAsFixed(0),
-                          style: const TextStyle(fontSize: 10),
+                  borderData: FlBorderData(
+                    show: true,
+                    border: Border(
+                      left: BorderSide(color: scheme.outlineVariant),
+                      bottom: BorderSide(color: scheme.outlineVariant),
+                    ),
+                  ),
+                  titlesData: FlTitlesData(
+                    rightTitles: const AxisTitles(),
+                    topTitles: const AxisTitles(),
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 44,
+                        getTitlesWidget: (value, meta) => Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Text(
+                            value.toStringAsFixed(0),
+                            style: const TextStyle(fontSize: 10),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 32,
-                      interval: _xInterval(rangeDays),
-                      getTitlesWidget: (value, meta) {
-                        final dt = DateTime.fromMillisecondsSinceEpoch(
-                          (value * 86400000).toInt(),
-                          isUtc: true,
-                        );
-                        final fmt = rangeDays > 365
-                            ? DateFormat('MMM yy')
-                            : DateFormat('MMM d');
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            fmt.format(dt),
-                            style: const TextStyle(fontSize: 10),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: spots,
-                    isCurved: false,
-                    barWidth: 2,
-                    color: scheme.primary,
-                    dotData: FlDotData(
-                      show: spots.length < 80,
-                      getDotPainter: (spot, _, __, ___) => FlDotCirclePainter(
-                        radius: 3,
-                        color: scheme.primary,
-                        strokeWidth: 0,
+                    // Explicit non-overlapping date ticks (endpoints +
+                    // month starts) — see chart_bottom_axis.dart.
+                    bottomTitles: AxisTitles(
+                      sideTitles: dateBottomTitles(
+                        minX: xMin,
+                        maxX: xMax,
+                        plotWidth: (constraints.maxWidth - 44).clamp(1, 10000),
+                        style: const TextStyle(fontSize: 10),
+                        reservedSize: 32,
                       ),
                     ),
                   ),
-                ],
-                lineTouchData: LineTouchData(
-                  enabled: true,
-                  touchTooltipData: LineTouchTooltipData(
-                    getTooltipColor: (_) =>
-                        Colors.black.withValues(alpha: 0.7),
-                    getTooltipItems: (touched) {
-                      return touched.map((s) {
-                        final dt = DateTime.fromMillisecondsSinceEpoch(
-                          (s.x * 86400000).toInt(),
-                          isUtc: true,
-                        );
-                        return LineTooltipItem(
-                          '${DateFormat('yyyy-MM-dd').format(dt)}\n'
-                          '${s.y.toStringAsFixed(1)}',
-                          const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            height: 1.3,
-                          ),
-                        );
-                      }).toList();
-                    },
+                  lineBarsData: [
+                    LineChartBarData(
+                      spots: spots,
+                      isCurved: false,
+                      barWidth: 2,
+                      color: scheme.primary,
+                      dotData: FlDotData(
+                        show: spots.length < 80,
+                        getDotPainter: (spot, _, __, ___) => FlDotCirclePainter(
+                          radius: 3,
+                          color: scheme.primary,
+                          strokeWidth: 0,
+                        ),
+                      ),
+                    ),
+                  ],
+                  lineTouchData: LineTouchData(
+                    enabled: true,
+                    touchTooltipData: LineTouchTooltipData(
+                      getTooltipColor: (_) =>
+                          Colors.black.withValues(alpha: 0.7),
+                      getTooltipItems: (touched) {
+                        return touched.map((s) {
+                          final dt = DateTime.fromMillisecondsSinceEpoch(
+                            (s.x * 86400000).toInt(),
+                            isUtc: true,
+                          );
+                          return LineTooltipItem(
+                            '${DateFormat('yyyy-MM-dd').format(dt)}\n'
+                            '${s.y.toStringAsFixed(1)}',
+                            const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              height: 1.3,
+                            ),
+                          );
+                        }).toList();
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -576,17 +569,6 @@ class _TrendChart extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  /// Picks a tick interval (in days) so we get ~4–6 x-axis labels regardless
-  /// of the range.
-  double _xInterval(double rangeDays) {
-    if (rangeDays <= 0) return 1;
-    final target = rangeDays / 5;
-    for (final candidate in const [1, 2, 7, 14, 30, 60, 90, 180, 365]) {
-      if (target <= candidate) return candidate.toDouble();
-    }
-    return (target / 365).ceil() * 365.0;
   }
 }
 

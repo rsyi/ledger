@@ -1633,7 +1633,9 @@ class _EigenRowTile extends StatelessWidget {
                     row.detail,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    // labelSmall so the full "x lb · rate · target" line
+                    // fits beside the sparkline on a 360dp screen.
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
                       fontWeight: FontWeight.w700,
                       fontFeatures: const [FontFeature.tabularFigures()],
                     ),
@@ -1642,7 +1644,7 @@ class _EigenRowTile extends StatelessWidget {
               ),
             ),
             if (row.spark.length >= 2) ...[
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               _Sparkline(
                 points: row.spark,
                 reference: row.sparkReference,
@@ -1705,7 +1707,7 @@ class _Sparkline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      size: const Size(64, 26),
+      size: const Size(54, 24),
       painter: _SparklinePainter(
         points: points,
         reference: reference,

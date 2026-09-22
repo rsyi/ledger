@@ -371,11 +371,33 @@ phases:
       final wilks = hero.rows[1];
       expect(wilks.label, 'strength');
       expect(wilks.verdict, EigenVerdict.agree);
-      expect(wilks.detail, 'Wilks 327.5 · floor 319.3 · 0 wk below');
+      expect(wilks.detail, 'Wilks 327.5 · floor 319.3');
       expect(wilks.sparkReference, 327.5);
       expect(wilks.sparkFloor, closeTo(319.3125, 1e-9));
       expect(wilks.nav, EigenNav.strength);
       expect(hero.overall, EigenVerdict.drifting);
+    });
+
+    test('breached floor: detail switches to the streak count', () {
+      final hero = buildPhaseHero(
+        phases: phases,
+        phaseValue: 'cut',
+        targetRateLbWk: -0.75,
+        slice: slice,
+        stats: stats,
+        weightDaily: const [],
+        wilksWeeks: [
+          _wk(DateTime(2026, 9, 21), 327.5),
+          _wk(DateTime(2026, 9, 28), 318.0), // under floor 319.3125
+          _wk(DateTime(2026, 10, 5), 317.0),
+        ],
+        statusWeek: null,
+        targets: slice.targetsInForce,
+        today: DateTime(2026, 10, 7),
+      )!;
+      final wilks = hero.rows[1];
+      expect(wilks.verdict, EigenVerdict.drifting);
+      expect(wilks.detail, 'Wilks 317.0 · 2 wk below floor');
     });
 
     test('cut on pace → weight row agrees', () {

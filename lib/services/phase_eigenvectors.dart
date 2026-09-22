@@ -534,8 +534,12 @@ EigenRowData _buildRow(
           parts.add('start ${s.reference!.toStringAsFixed(1)}');
           parts.add(_fmtSigned(s.current! - s.reference!, digits: 1));
         } else if (s.floor != null) {
-          parts.add('floor ${s.floor!.toStringAsFixed(1)}');
-          parts.add('${s.weeksBelowFloor} wk below');
+          // Holding: show where the floor sits. Breached: the streak
+          // count is the number that matters (3+ = act) — the floor
+          // itself stays visible as the sparkline's dashed guide.
+          parts.add(s.weeksBelowFloor == 0
+              ? 'floor ${s.floor!.toStringAsFixed(1)}'
+              : '${s.weeksBelowFloor} wk below floor');
         }
         detail = parts.join(' · ');
       }

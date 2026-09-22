@@ -508,8 +508,10 @@ class HomeDashboardState extends State<HomeDashboard> {
                 'until two clean sessions.',
           ),
       ],
-      actionLabel: widget.onOpenWeekPlan == null ? null : 'Open week plan',
-      onAction: widget.onOpenWeekPlan,
+      // Program screen: its CONFIGURATION section is where WMs are
+      // confirmed/overridden (moved out of Integrations 2026-09-21).
+      actionLabel: widget.onOpenProgram == null ? null : 'Open Program',
+      onAction: widget.onOpenProgram,
     );
   }
 

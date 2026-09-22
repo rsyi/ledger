@@ -1,20 +1,22 @@
 /// Program screen — "what did I declare, what is actually happening,
 /// and do they agree?"
 ///
-/// Three sections, deliberately separate:
+/// Four sections, deliberately separate:
 ///  1. DECLARED — the intent layer verbatim: phase.yaml (value,
 ///     effective_from, reason, target, exit criteria) + program.yaml's
 ///     block timeline with a you-are-here marker.
-///  2. OBSERVED — reality from the ledger: daily weigh-ins queried
+///  2. CONFIGURATION — the working-max controller (append-only
+///     `working_max` tab via WmStore): per-lift value/variant/source,
+///     Confirm on pending seeds, manual "Set working max…". The one
+///     part of this screen that writes (appends) anywhere.
+///  3. OBSERVED — reality from the ledger: daily weigh-ins queried
 ///     through airlayer (the `weight` view's declared `avg_weight_lbs`
 ///     measure grouped by date — one averaged point per day), then the
 ///     §2.5 windowed formulas from program_metrics/program_observed
 ///     (7-day avg, weekly rate, 3-week change) computed in pure Dart.
-///  3. VERDICT — PHASE_MISMATCH semantics: green (agree), amber
+///  4. VERDICT — PHASE_MISMATCH semantics: green (agree), amber
 ///     (drifting), red (three consecutive mismatch weeks — the flag
 ///     would fire).
-///
-/// Read-only: this screen never writes a row anywhere.
 library;
 
 import 'package:fl_chart/fl_chart.dart';
@@ -29,6 +31,8 @@ import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
+import '../services/wm_store.dart';
+import 'widgets/working_max_card.dart';
 
 class ProgramScreen extends StatefulWidget {
   final ProgramProvider provider;
@@ -41,6 +45,10 @@ class ProgramScreen extends StatefulWidget {
   final WarehouseConnector? weightRepo;
   final ViewSchema? weightView;
 
+  /// Working-max controller tabs — the CONFIGURATION section's card.
+  /// Null → the section is omitted.
+  final WmStore? wmStore;
+
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -50,6 +58,7 @@ class ProgramScreen extends StatefulWidget {
     this.analytics,
     this.weightRepo,
     this.weightView,
+    this.wmStore,
     this.today,
   });
 
@@ -126,7 +135,11 @@ class _ProgramScreenState extends State<ProgramScreen> {
               ),
             );
           }
-          return _ProgramView(data: data, today: _today);
+          return _ProgramView(
+            data: data,
+            today: _today,
+            wmStore: widget.wmStore,
+          );
         },
       ),
     );
@@ -140,8 +153,13 @@ class _ProgramScreenState extends State<ProgramScreen> {
 class _ProgramView extends StatelessWidget {
   final _ProgramData data;
   final DateTime today;
+  final WmStore? wmStore;
 
-  const _ProgramView({required this.data, required this.today});
+  const _ProgramView({
+    required this.data,
+    required this.today,
+    required this.wmStore,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -191,6 +209,16 @@ class _ProgramView extends StatelessWidget {
           slice: slice,
           today: today,
         ),
+        if (wmStore != null) ...[
+          const SizedBox(height: 16),
+          _SectionLabel('Configuration'),
+          Card(
+            elevation: 0,
+            margin: EdgeInsets.zero,
+            color: Theme.of(context).colorScheme.surfaceContainerLow,
+            child: WorkingMaxCard(store: wmStore!),
+          ),
+        ],
         const SizedBox(height: 16),
         _SectionLabel('Observed'),
         _ObservedCard(

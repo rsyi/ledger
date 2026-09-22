@@ -132,7 +132,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final keyJson = await rootBundle.loadString('assets/service-account.json');
     // Working-max controller tabs (WM-2). Cheap to construct — auth is
     // lazy (first snapshot()/append). Feeds the planner's v3 weights, the
-    // Week Plan prescription blocks, and the Integrations card.
+    // Week Plan prescription blocks, and the Program screen's
+    // CONFIGURATION card.
     final wmStore = WmStore(
       spreadsheetId: assetConfig.spreadsheetId,
       serviceAccountKeyJson: keyJson,
@@ -525,6 +526,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       weightRepo: weightView == null
                           ? null
                           : data.registry.forView(weightView),
+                      wmStore: data.wmStore,
                     ),
                   ),
                 );
@@ -824,8 +826,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
-                                builder: (_) =>
-                                    IntegrationsScreen(wmStore: data.wmStore),
+                                builder: (_) => const IntegrationsScreen(),
                               ),
                             ),
                           ),
@@ -885,7 +886,7 @@ class _Bootstrap {
   final WarehouseConnector? readOnlyRepo;
 
   /// Working-max controller tab store (WM-2): Week Plan prescription
-  /// blocks + the Integrations "Working maxes" card.
+  /// blocks + the Program screen's CONFIGURATION "Working maxes" card.
   final WmStore? wmStore;
 
   _Bootstrap({

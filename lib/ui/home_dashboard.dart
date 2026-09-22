@@ -96,6 +96,12 @@ class HomeDashboard extends StatefulWidget {
   final ViewSchema? strengthView;
   final WarehouseConnector? strengthRepo;
 
+  /// climbing view (kaya_ascents) + its connector — feeds the LIVE
+  /// this-week climb-session count (2026-09-22). Null → the strip's
+  /// climb count falls back to the nightly status row.
+  final ViewSchema? climbingView;
+  final WarehouseConnector? climbingRepo;
+
   /// dashboards.yaml provider (shared 1 h cache) — feeds the hero's
   /// `phases:` eigenvector config. Null → no hero, legacy grid.
   final DomainConfigProvider? dashboards;
@@ -122,6 +128,8 @@ class HomeDashboard extends StatefulWidget {
     this.statusRepo,
     this.strengthView,
     this.strengthRepo,
+    this.climbingView,
+    this.climbingRepo,
     this.dashboards,
     this.onOpenProgram,
     this.onOpenWeekPlan,
@@ -152,7 +160,13 @@ class _BodyData {
 class _ExecData {
   final StatusWeek? week;
   final Map<String, Object?> targets;
-  const _ExecData({required this.week, required this.targets});
+
+  /// LIVE current-week counts from local rows (2026-09-22) — beats the
+  /// nightly status row for the running week's quotas; null when no
+  /// strength plumbing exists (quotas fall back to the row).
+  final LiveWeekCounts? live;
+
+  const _ExecData({required this.week, required this.targets, this.live});
 }
 
 class _EngineData {
@@ -211,6 +225,14 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// hero's Wilks eigenvectors (one ledger read per load).
   late Future<List<StrengthRow>> _strengthRows;
 
+  /// Climbing (kaya_ascents) ascent dates — LIVE this-week sessions.
+  late Future<List<DateTime>> _climbDates;
+
+  /// LIVE current-week quota counts (2026-09-22): computed from local
+  /// rows at render so the strip updates after logging + pull-to-
+  /// refresh; the nightly status tab keeps owning completed weeks.
+  late Future<LiveWeekCounts?> _live;
+
   // Derived per-card futures.
   late Future<PhaseHeroData?> _hero;
   late Future<_BodyData?> _body;
@@ -254,6 +276,8 @@ class HomeDashboardState extends State<HomeDashboard> {
           : widget.statusRepo!.list(widget.statusView!),
     );
     _strengthRows = _loadStrengthRows();
+    _climbDates = _loadClimbDates();
+    _live = _computeLive();
     _hero = _computeHero();
     _body = _computeBody();
     _strength = _computeStrength();
@@ -267,7 +291,7 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// reality).
   Future<void> reload() async {
     setState(() => _startLoad(force: true));
-    await Future.wait([_hero, _body, _strength, _exec, _engine]);
+    await Future.wait([_hero, _body, _strength, _exec, _engine, _live]);
   }
 
   static Future<T?> _guard<T>(Future<T?> Function() fn) async {
@@ -321,6 +345,50 @@ class HomeDashboardState extends State<HomeDashboard> {
     }
   }
 
+  /// Climbing ledger → ascent dates. Errors / missing plumbing degrade
+  /// to an empty list (the strip's climb count falls back to the row).
+  Future<List<DateTime>> _loadClimbDates() async {
+    if (widget.climbingRepo == null || widget.climbingView == null) {
+      return const [];
+    }
+    try {
+      final recs = await widget.climbingRepo!.list(widget.climbingView!);
+      final out = <DateTime>[];
+      for (final r in recs) {
+        final raw = r['date'];
+        final d = raw is DateTime
+            ? raw
+            : DateTime.tryParse(raw?.toString() ?? '');
+        if (d != null) out.add(d);
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Accounting-week start day (program.yaml v7 `week_start` —
+  /// saturday since 2026-09-22). Monday when docs are missing.
+  Future<int> _weekStartDay() async =>
+      weekStartDayOf(currentVersion((await _docs)?.program));
+
+  /// LIVE current-week counts (sets / near-max / bench days / climb
+  /// sessions) from local rows — §2.5 semantics over full history so
+  /// the strip agrees with the nightly tab the morning after.
+  Future<LiveWeekCounts?> _computeLive() async {
+    if (widget.strengthRepo == null && widget.climbingRepo == null) {
+      return null;
+    }
+    final rows = await _strengthRows;
+    final climbs = await _climbDates;
+    return liveWeekCounts(
+      strengthRows: rows,
+      climbingDates: climbs,
+      today: _today,
+      weekStartDay: await _weekStartDay(),
+    );
+  }
+
   /// PHASE hero: dashboards.yaml `phases:` config + declared phase +
   /// the shared observed inputs → verdict rows. Null (no config / no
   /// phase / fetch failure) keeps the legacy grid.
@@ -334,9 +402,10 @@ class HomeDashboardState extends State<HomeDashboard> {
     if (phase == null) return null;
     final daily = (await _weights)?.daily ?? const <WeightRow>[];
     final rows = await _strengthRows;
+    final wsDay = await _weekStartDay();
     final wilksWeeks = rows.isEmpty || daily.isEmpty
         ? const <WilksWeek>[]
-        : weeklyWilksSeries(rows, daily, through: _today);
+        : weeklyWilksSeries(rows, daily, through: _today, weekStartDay: wsDay);
     final status = await _status;
     final slice = _slice(docs);
     return buildPhaseHero(
@@ -348,9 +417,14 @@ class HomeDashboardState extends State<HomeDashboard> {
       stats: observedWeightStats(daily, _today),
       weightDaily: daily,
       wilksWeeks: wilksWeeks,
-      statusWeek: latestStatusWeek(status ?? const [], _today),
+      statusWeek: latestStatusWeek(
+        status ?? const [],
+        _today,
+        weekStartDay: wsDay,
+      ),
       targets: slice?.targetsInForce ?? const {},
       today: _today,
+      live: await _live,
     );
   }
 
@@ -374,10 +448,16 @@ class HomeDashboardState extends State<HomeDashboard> {
   Future<_ExecData?> _computeExec() async {
     final docs = await _docs;
     final status = await _status;
-    if (!_hasDocs(docs) && status == null) return null;
+    final live = await _live;
+    if (!_hasDocs(docs) && status == null && live == null) return null;
     return _ExecData(
-      week: latestStatusWeek(status ?? const [], _today),
+      week: latestStatusWeek(
+        status ?? const [],
+        _today,
+        weekStartDay: await _weekStartDay(),
+      ),
       targets: _slice(docs)?.targetsInForce ?? const {},
+      live: live,
     );
   }
 
@@ -386,10 +466,12 @@ class HomeDashboardState extends State<HomeDashboard> {
     final status = await _status;
     if (!_hasDocs(docs) && status == null) return null;
     final slice = _slice(docs);
+    final wsDay = await _weekStartDay();
     return _EngineData(
-      week: latestStatusWeek(status ?? const [], _today),
+      week: latestStatusWeek(status ?? const [], _today, weekStartDay: wsDay),
       climbTarget: slice?.targetsInForce['climbing_sessions'],
-      lastFourByFour: lastBike4x4(status ?? const [], _today),
+      lastFourByFour: lastBike4x4(status ?? const [], _today,
+          weekStartDay: wsDay),
       templateLine: templateOneLiner(slice),
     );
   }
@@ -843,28 +925,33 @@ class HomeDashboardState extends State<HomeDashboard> {
           }
           final d = snap.data;
           final week = d?.week;
-          if (d == null || week == null) {
+          final live = d?.live;
+          if (d == null || (week == null && live == null)) {
             return const _Dim('no status data');
           }
-          final row = week.row;
+          // LIVE current-week counts beat the (stale-all-day) nightly
+          // row; the row remains the fallback + the flags source.
+          final row = week?.row;
           final t = d.targets;
+          double? fromRow(String key) => row == null ? null : asNum(row[key]);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (!week.isCurrentWeek) _WeekOfNote(week: week),
+              if (live == null && week != null && !week.isCurrentWeek)
+                _WeekOfNote(week: week),
               _TargetRow(
                 label: 'sets',
-                done: asNum(row['working_sets']),
+                done: live?.workingSets.toDouble() ?? fromRow('working_sets'),
                 target: t['working_sets'],
               ),
               _TargetRow(
                 label: 'near-max',
-                done: asNum(row['near_max_sets']),
+                done: live?.nearMaxSets.toDouble() ?? fromRow('near_max_sets'),
                 target: t['near_max_sets'],
               ),
               _TargetRow(
                 label: 'bench days',
-                done: asNum(row['bench_days']),
+                done: live?.benchDays.toDouble() ?? fromRow('bench_days'),
                 target: t['bench_days'],
               ),
             ],
@@ -941,11 +1028,19 @@ class HomeDashboardState extends State<HomeDashboard> {
     final d = await _exec;
     final e = await _engine;
     final row = d?.week?.row;
+    final live = d?.live;
     final t = d?.targets ?? const <String, Object?>{};
-    String done(String key, Object? target) {
-      final v = row == null ? null : asNum(row[key]);
-      return '${v == null ? '—' : fmtLb(v)}/${targetText(target)}';
-    }
+    String fmt(num? v, Object? target) =>
+        '${v == null ? '—' : fmtLb(v.toDouble())}/${targetText(target)}';
+    String done(String key, Object? target) =>
+        fmt(row == null ? null : asNum(row[key]), target);
+    final liveClimb =
+        widget.climbingRepo == null ? null : live?.climbingSessions;
+    // Live counts (current accounting week, computed from local rows
+    // at open) with the nightly row as fallback — matches the strip.
+    const liveSource =
+        'Counted LIVE from your logged rows for the current week '
+        '(updates the moment you log; the nightly tab keeps history).';
 
     final flags = row?['flags']?.toString() ?? '';
     final ff = e?.lastFourByFour;
@@ -954,33 +1049,40 @@ class HomeDashboardState extends State<HomeDashboard> {
       entries: [
         _DetailEntry(
           label: 'Sets',
-          value: done('working_sets', t['working_sets']),
+          value: live != null
+              ? fmt(live.workingSets, t['working_sets'])
+              : done('working_sets', t['working_sets']),
           explain:
               'Working sets this week — sets at ≥ 80% of your '
-              'reference e1RM. Source: the nightly program_status row; '
-              'the target is the program\'s targets-in-force (a cut has '
-              'no volume floor).',
+              'reference e1RM. $liveSource The target is the program\'s '
+              'targets-in-force (a cut has no volume floor).',
         ),
         _DetailEntry(
           label: 'Near-max',
-          value: done('near_max_sets', t['near_max_sets']),
+          value: live != null
+              ? fmt(live.nearMaxSets, t['near_max_sets'])
+              : done('near_max_sets', t['near_max_sets']),
           explain:
               'Sets at ≥ 95% effort with reps ≤ 8 — the '
               'heavy quota (on the cut: one top single per lift).',
         ),
         _DetailEntry(
           label: 'Bench days',
-          value: done('bench_days', t['bench_days']),
+          value: live != null
+              ? fmt(live.benchDays, t['bench_days'])
+              : done('bench_days', t['bench_days']),
           explain:
               'Distinct days with bench sets this week. Twice is '
               'the rule in every phase.',
         ),
         _DetailEntry(
           label: 'Climb',
-          value: done('climbing_sessions', e?.climbTarget),
+          value: liveClimb != null
+              ? fmt(liveClimb, e?.climbTarget)
+              : done('climbing_sessions', e?.climbTarget),
           explain:
               'Climbing sessions this week vs the block\'s allowance '
-              'from the program (kaya_ascents dates, nightly rollup).',
+              'from the program (kaya_ascents dates).',
         ),
         _DetailEntry(
           label: '4x4 max HR',
@@ -1036,30 +1138,60 @@ class HomeDashboardState extends State<HomeDashboard> {
           final d = snap.data?[0] as _ExecData?;
           final e = snap.data?[1] as _EngineData?;
           final week = d?.week ?? e?.week;
-          if (week == null) return const _Dim('no status data');
-          final row = week.row;
+          final live = d?.live;
+          if (week == null && live == null) {
+            return const _Dim('no status data');
+          }
+          // LIVE current-week counts (2026-09-22): the four quotas come
+          // from local rows at render — they move the moment a set is
+          // logged (reload/pull-to-refresh refires _live). The nightly
+          // status row keeps owning completed weeks + the flags chip.
+          final row = week?.row;
           final t = d?.targets ?? const <String, Object?>{};
-          Widget quota(String label, String key, Object? target) => Expanded(
+          // Live climb count only when the climbing view is actually
+          // plumbed — an unplumbed 0 would lie; fall back to the row.
+          final liveClimb = widget.climbingRepo == null
+              ? null
+              : live?.climbingSessions;
+          double? fromRow(String key) => row == null ? null : asNum(row[key]);
+          Widget quota(String label, num? done, Object? target) => Expanded(
             child: _TargetRow(
               label: label,
-              done: asNum(row[key]),
+              done: done?.toDouble(),
               target: target,
             ),
           );
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (!week.isCurrentWeek) _WeekOfNote(week: week),
+              if (live == null && week != null && !week.isCurrentWeek)
+                _WeekOfNote(week: week),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  quota('sets', 'working_sets', t['working_sets']),
+                  quota(
+                    'sets',
+                    live?.workingSets ?? fromRow('working_sets'),
+                    t['working_sets'],
+                  ),
                   const SizedBox(width: 10),
-                  quota('near-max', 'near_max_sets', t['near_max_sets']),
+                  quota(
+                    'near-max',
+                    live?.nearMaxSets ?? fromRow('near_max_sets'),
+                    t['near_max_sets'],
+                  ),
                   const SizedBox(width: 10),
-                  quota('bench', 'bench_days', t['bench_days']),
+                  quota(
+                    'bench',
+                    live?.benchDays ?? fromRow('bench_days'),
+                    t['bench_days'],
+                  ),
                   const SizedBox(width: 10),
-                  quota('climb', 'climbing_sessions', e?.climbTarget),
+                  quota(
+                    'climb',
+                    liveClimb ?? fromRow('climbing_sessions'),
+                    e?.climbTarget,
+                  ),
                 ],
               ),
               if (e?.templateLine != null) ...[

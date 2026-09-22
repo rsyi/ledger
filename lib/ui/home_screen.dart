@@ -540,10 +540,13 @@ class _HomeScreenState extends State<HomeScreen> {
               ViewSchema? weightView;
               ViewSchema? statusView;
               ViewSchema? dashStrengthView;
+              ViewSchema? dashClimbingView;
               for (final v in data.views) {
                 if (v.name == 'weight') weightView = v;
                 if (v.name == 'program_status') statusView = v;
                 if (v.name == 'strength') dashStrengthView = v;
+                // kaya_ascents — the LIVE this-week climb count.
+                if (v.name == 'climbing') dashClimbingView = v;
               }
               final programProvider = github == null
                   ? null
@@ -623,6 +626,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       weightRepository: weightView == null
                           ? null
                           : data.registry.forView(weightView),
+                      // Accounting-week keying for the weekly Wilks
+                      // stat (program.yaml v7 week_start).
+                      programProvider: programProvider,
                     ),
                   ),
                 );
@@ -744,6 +750,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         strengthRepo: dashStrengthView == null
                             ? null
                             : data.registry.forView(dashStrengthView),
+                        climbingView: dashClimbingView,
+                        climbingRepo: dashClimbingView == null
+                            ? null
+                            : data.registry.forView(dashClimbingView),
                         dashboards: domainProvider,
                         onOpenProgram: programProvider == null
                             ? null

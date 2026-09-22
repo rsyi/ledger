@@ -27,9 +27,10 @@ library;
 
 import 'package:yaml/yaml.dart';
 
-import 'home_synthesis.dart' show StatusWeek, asNum, targetNumber, targetText;
+import 'home_synthesis.dart'
+    show LiveWeekCounts, StatusWeek, asNum, targetNumber, targetText;
 import 'program_current.dart' show ProgramSlice;
-import 'program_metrics.dart' show WeightRow, mondayOf;
+import 'program_metrics.dart' show WeightRow, weekStartOf;
 import 'program_observed.dart' show ObservedWeightStats, sevenDayAvgSeries;
 import 'wilks.dart' show WilksWeek;
 
@@ -208,7 +209,13 @@ WilksStability wilksStability({
   double? reference;
   DateTime? anchorMonday;
   if (from != null && weeks.isNotEmpty) {
-    anchorMonday = mondayOf(DateTime(from.year, from.month, from.day));
+    // Anchor keying is inherited from the series' own week keys (the
+    // configured accounting week start), so the comparison below can
+    // never straddle two calendars.
+    anchorMonday = weekStartOf(
+      DateTime(from.year, from.month, from.day),
+      weeks.first.weekStart.weekday,
+    );
     for (final w in weeks) {
       if (!w.weekStart.isAfter(anchorMonday)) reference = w.wilks;
     }
@@ -383,6 +390,7 @@ PhaseHeroData? buildPhaseHero({
   required StatusWeek? statusWeek,
   required Map<String, Object?> targets,
   required DateTime today,
+  LiveWeekCounts? live,
 }) {
   if (phases == null || phaseValue == null) return null;
   final configs = phases[phaseValue];
@@ -428,6 +436,7 @@ PhaseHeroData? buildPhaseHero({
         statusWeek: statusWeek,
         targets: targets,
         today: today,
+        live: live,
       ),
   ];
 
@@ -452,6 +461,7 @@ EigenRowData _buildRow(
   required StatusWeek? statusWeek,
   required Map<String, Object?> targets,
   required DateTime today,
+  LiveWeekCounts? live,
 }) {
   switch (c.id) {
     case 'weight_loss':
@@ -561,7 +571,7 @@ EigenRowData _buildRow(
 
     case 'inputs_delivered':
       final row = statusWeek?.row;
-      if (row == null) {
+      if (row == null && live == null) {
         return EigenRowData(
           id: c.id,
           label: c.label ?? 'inputs',
@@ -570,9 +580,21 @@ EigenRowData _buildRow(
           nav: EigenNav.status,
         );
       }
-      final fraction = statusWeek!.isCurrentWeek ? today.weekday / 7 : 1.0;
-      final nearMax = asNum(row['near_max_sets']);
-      final working = asNum(row['working_sets']);
+      // LIVE current-week counts (2026-09-22) beat the nightly status
+      // row — the tab is stale all day. The row remains the fallback
+      // (and the only source for completed weeks). Pro-rate the running
+      // week by days elapsed IN THE ACCOUNTING WEEK (weekday/7 assumed
+      // Monday starts; wrong under v7's saturday weeks).
+      final weekAnchor = live?.weekStart ?? statusWeek!.weekMonday;
+      final fraction = live != null || statusWeek!.isCurrentWeek
+          ? (_daysBetween(weekAnchor, today) + 1).clamp(1, 7) / 7
+          : 1.0;
+      final nearMax = live != null
+          ? live.nearMaxSets.toDouble()
+          : asNum(row!['near_max_sets']);
+      final working = live != null
+          ? live.workingSets.toDouble()
+          : asNum(row!['working_sets']);
       final verdict = worstVerdict([
         quotaVerdict(nearMax, targets['near_max_sets'],
             weekElapsedFraction: fraction),

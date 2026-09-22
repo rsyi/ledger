@@ -1,7 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/services/home_synthesis.dart';
 import 'package:airledger/services/program_current.dart';
-import 'package:airledger/services/program_metrics.dart' show StrengthRow;
+import 'package:airledger/services/program_metrics.dart'
+    show StrengthRow, gradeSets;
 import 'package:airledger/services/wm_tabs.dart';
 
 WorkingMaxRow wm(
@@ -18,6 +19,14 @@ WorkingMaxRow wm(
       effectiveFrom: DateTime.parse(from),
       source: source,
       reason: reason,
+    );
+
+StrengthRow strengthRow(String date, String ex, double w, int reps) =>
+    StrengthRow(
+      date: DateTime.parse(date),
+      exercise: ex,
+      weight: w,
+      reps: reps,
     );
 
 void main() {
@@ -348,6 +357,162 @@ void main() {
       ]);
       expect(best['deadlift'], closeTo(420, 0.01));
       expect(best.length, 1);
+    });
+  });
+
+  group('fmtAge', () {
+    final now = DateTime(2026, 9, 22);
+    test('days under two weeks', () {
+      expect(fmtAge(DateTime(2026, 9, 22), now), '0d');
+      expect(fmtAge(DateTime(2026, 9, 19), now), '3d');
+      expect(fmtAge(DateTime(2026, 9, 9), now), '13d');
+    });
+    test('weeks from 14 days', () {
+      expect(fmtAge(DateTime(2026, 9, 8), now), '2w');
+      expect(fmtAge(DateTime(2026, 8, 4), now), '7w');
+    });
+    test('months and years', () {
+      expect(fmtAge(DateTime(2026, 4, 22), now), '5mo');
+      expect(fmtAge(DateTime(2024, 9, 20), now), '2y');
+    });
+    test('future dates clamp to 0d', () {
+      expect(fmtAge(DateTime(2026, 9, 25), now), '0d');
+    });
+  });
+
+  group('recentBestE1rm', () {
+    // gradeSets needs history: seed a reference, then recent work.
+    List<StrengthRow> rows() => [
+          strengthRow('2026-08-01', 'Barbell Squat', 315, 3), // ref seed
+          strengthRow('2026-09-10', 'Barbell Squat', 310, 3),
+          strengthRow('2026-09-19', 'Barbell Squat', 300, 3),
+          strengthRow('2026-09-19', 'Barbell Squat', 135, 5), // warm-up
+        ];
+    final today = DateTime(2026, 9, 22);
+
+    test('best capped e1RM in the trailing 14 days, warm-ups excluded',
+        () {
+      final graded = gradeSets(rows());
+      final r = recentBestE1rm(graded, 'squat', today)!;
+      // Sep 10 (12d ago) and Sep 19 both inside; Sep 10's 310x3 wins.
+      expect(r.value, closeTo(310 * (1 + 3 / 30), 1e-9));
+      expect(r.date, DateTime(2026, 9, 10));
+      // The 135x5 warm-up (effort « 0.75) never sets the number.
+    });
+
+    test('light accounting weeks are excluded', () {
+      final graded = gradeSets(rows());
+      final r = recentBestE1rm(
+        graded,
+        'squat',
+        today,
+        weekTypeOf: (ws) =>
+            ws == DateTime(2026, 9, 7) ? 'light' : 'normal',
+      )!;
+      // Sep 10 falls in the light week (Mon Sep 7) → Sep 19's set wins.
+      expect(r.value, closeTo(300 * (1 + 3 / 30), 1e-9));
+      expect(r.date, DateTime(2026, 9, 19));
+    });
+
+    test('widens when the last 14 days are empty — the age tag tells '
+        'the story', () {
+      final graded = gradeSets([
+        strengthRow('2026-06-01', 'Barbell Squat', 315, 3),
+        strengthRow('2026-06-20', 'Barbell Squat', 305, 3),
+      ]);
+      final r = recentBestE1rm(graded, 'squat', today)!;
+      // Nothing in the 14 days ending today → window ends at the newest
+      // qualifying set (Jun 20); Jun 1's heavier set is OUTSIDE that
+      // 14-day window, so Jun 20 wins despite being lighter.
+      expect(r.date, DateTime(2026, 6, 20));
+      expect(r.value, closeTo(305 * (1 + 3 / 30), 1e-9));
+    });
+
+    test('null when the lift has no qualifying history', () {
+      expect(recentBestE1rm(const [], 'squat', today), isNull);
+    });
+  });
+
+  group('liveWeekCounts', () {
+    final rows = [
+      // Reference history so this week's sets grade as working/near-max.
+      strengthRow('2026-08-20', 'Flat Barbell Bench Press', 225, 3),
+      strengthRow('2026-08-20', 'Barbell Squat', 315, 3),
+      // Friday Sep 18 — OLD saturday-week.
+      strengthRow('2026-09-18', 'Barbell Squat', 315, 1),
+      // Monday Sep 21 — current saturday-week (started Sat Sep 19).
+      strengthRow('2026-09-21', 'Flat Barbell Bench Press', 240, 1),
+      strengthRow('2026-09-21', 'Flat Barbell Bench Press', 200, 3),
+    ];
+    final today = DateTime(2026, 9, 22); // Tuesday
+
+    test('saturday-start: Monday bench counts; Friday squat does not',
+        () {
+      final live = liveWeekCounts(
+        strengthRows: rows,
+        climbingDates: [
+          DateTime(2026, 9, 18), // Friday — old week
+          DateTime(2026, 9, 20), // Sunday — current week
+          DateTime(2026, 9, 20), // same day, one session
+        ],
+        today: today,
+        weekStartDay: DateTime.saturday,
+      );
+      expect(live.weekStart, DateTime(2026, 9, 19));
+      expect(live.benchDays, 1);
+      expect(live.nearMaxSets, 1); // the 240x1 single
+      expect(live.workingSets, greaterThanOrEqualTo(1));
+      expect(live.climbingSessions, 1);
+    });
+
+    test('monday-start keeps the Friday set in the prior week too', () {
+      final live = liveWeekCounts(
+        strengthRows: rows,
+        today: today,
+      );
+      expect(live.weekStart, DateTime(2026, 9, 21));
+      expect(live.benchDays, 1);
+    });
+
+    test('future-dated rows never count', () {
+      final live = liveWeekCounts(
+        strengthRows: [
+          ...rows,
+          strengthRow('2026-09-24', 'Flat Barbell Bench Press', 225, 1),
+        ],
+        today: today,
+        weekStartDay: DateTime.saturday,
+      );
+      expect(live.benchDays, 1);
+    });
+  });
+
+  group('latestStatusWeek — saturday keying', () {
+    test('a saturday-keyed current row is current on the weekend', () {
+      final rows = [
+        {'week_monday': '2026-09-19', 'working_sets': 10},
+        {'week_monday': '2026-09-12', 'working_sets': 20},
+      ];
+      final sat = latestStatusWeek(rows, DateTime(2026, 9, 19),
+          weekStartDay: DateTime.saturday)!;
+      expect(sat.weekMonday, DateTime.utc(2026, 9, 19));
+      expect(sat.isCurrentWeek, isTrue);
+      // Under Monday keying the same Saturday sits in the Sep 14 week —
+      // the Sep 19 row would read as FUTURE and be skipped.
+      final mon = latestStatusWeek(rows, DateTime(2026, 9, 19))!;
+      expect(mon.weekMonday, DateTime.utc(2026, 9, 12));
+    });
+  });
+
+  group('allTimeBestE1rmsWithDates', () {
+    test('carries the date of the best set; ties keep the newest', () {
+      final best = allTimeBestE1rmsWithDates([
+        strengthRow('2023-05-01', 'Barbell Squat', 350, 1),
+        strengthRow('2024-01-05', 'Barbell Squat', 350, 1), // tie, newer
+        strengthRow('2026-09-19', 'Barbell Squat', 300, 3), // lighter
+      ]);
+      expect(best['squat']!.value, closeTo(350 * (1 + 1 / 30), 1e-9));
+      expect(best['squat']!.date, DateTime(2024, 1, 5));
     });
   });
 }

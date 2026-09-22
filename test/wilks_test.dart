@@ -252,4 +252,39 @@ void main() {
       expect(monthlyWilksSeries([], weights), isEmpty);
     });
   });
+
+  group('weeklyWilksSeries — saturday-start weeks (v7 week_start)', () {
+    test('weeks key by Saturday and a Saturday PR counts toward the '
+        'current week', () {
+      StrengthRow s(String date, String ex, double w, int reps) =>
+          StrengthRow(
+              date: DateTime.parse(date), exercise: ex, weight: w, reps: reps);
+      final rows = [
+        s('2026-09-14', 'Barbell Squat', 300, 1),
+        s('2026-09-14', 'Flat Barbell Bench Press', 200, 1),
+        s('2026-09-14', 'Barbell Deadlift', 350, 1),
+        // Saturday Sep 19: squat PR — must move the Sep 19 week's point.
+        s('2026-09-19', 'Barbell Squat', 320, 1),
+      ];
+      final w = [
+        WeightRow(date: DateTime.parse('2026-09-14'), weightLbs: 160),
+      ];
+      final weeks = weeklyWilksSeries(
+        rows,
+        w,
+        through: DateTime(2026, 9, 22),
+        weekStartDay: DateTime.saturday,
+      );
+      for (final wk in weeks) {
+        expect(wk.weekStart.weekday, DateTime.saturday);
+      }
+      final byStart = {for (final wk in weeks) wk.weekStart: wk};
+      final prior = byStart[DateTime(2026, 9, 12)]!; // Sep 12–18
+      final current = byStart[DateTime(2026, 9, 19)]!; // Sep 19–25
+      // Epley singles: 300→310, 200→206.67, 350→361.67, 320→330.67.
+      expect(prior.totalLbs, closeTo(878.3333333, 1e-6));
+      expect(current.totalLbs, closeTo(899.0, 1e-6)); // Saturday PR in
+      expect(current.carried, ['bench', 'deadlift']);
+    });
+  });
 }

@@ -115,6 +115,28 @@ void main() {
       }
     });
 
+    test('v7 week_start saturday: the generation window runs Sat–Fri, '
+        'so Monday + the FOLLOWING Friday plan as one week', () {
+      // Passing the anchor Monday normalises to the Saturday before it
+      // (Sep 19) — the accounting week containing that Monday.
+      final entries = buildWeekPlannedEntries(program, anchorMonday);
+      final dates = entries.map((e) => e['date'] as DateTime).toSet();
+      final windowStart = DateTime.utc(2026, 9, 19); // Saturday
+      for (final d in dates) {
+        expect(d.isBefore(windowStart), isFalse);
+        expect(d.isAfter(windowStart.add(const Duration(days: 6))), isFalse);
+      }
+      // Template lookup keys by ACTUAL weekday: Monday squats + the
+      // Friday (Sep 25) deadlift both land inside this window, with the
+      // same 'a' parity (alternation anchored to the contained Monday).
+      final mon = onDay(entries, anchorMonday);
+      expect(mon.map((e) => e['exercise']), everyElement('Barbell Squat'));
+      final fri = onDay(entries, DateTime.utc(2026, 9, 25));
+      expect(fri.map((e) => e['exercise']),
+          everyElement('Barbell Deadlift'));
+      expect(fri.map((e) => e['reps']).toList(), [3]); // a-week: light
+    });
+
     test('without references: no weight keys, no warmup rows anywhere', () {
       for (final monday in [anchorMonday, bMonday]) {
         final entries = buildWeekPlannedEntries(program, monday);

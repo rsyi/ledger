@@ -40,7 +40,9 @@ import '../services/github_client.dart';
 import '../services/home_synthesis.dart' show strengthRowFromRecord;
 import '../services/llm_client.dart';
 import '../services/llm_response_cache.dart';
+import '../services/program_current.dart' show currentVersion, weekStartDayOf;
 import '../services/program_metrics.dart' show StrengthRow, WeightRow;
+import '../services/program_provider.dart';
 import '../services/qbo_service.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
@@ -97,6 +99,11 @@ class DomainScreen extends StatefulWidget {
   final ViewSchema? weightView;
   final WarehouseConnector? weightRepository;
 
+  /// Program docs (1 h cached) — resolves the accounting week's start
+  /// day (program.yaml v7 `week_start`) for the weekly Wilks stat.
+  /// Null → ISO Monday weeks, the pre-v7 behavior.
+  final ProgramProvider? programProvider;
+
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -114,6 +121,7 @@ class DomainScreen extends StatefulWidget {
     this.qboService,
     this.weightView,
     this.weightRepository,
+    this.programProvider,
     this.today,
   });
 
@@ -184,11 +192,24 @@ class _DomainScreenState extends State<DomainScreen> {
       } catch (_) {}
     }
 
+    // Accounting-week keying for the weekly Wilks stat (program.yaml
+    // v7 `week_start: saturday`, amendment 2026-09-22). Cheap: the doc
+    // cache is 1 h; failures fall back to ISO Monday weeks.
+    var weekStartDay = DateTime.monday;
+    if (widget.programProvider != null &&
+        ids.any(_bodyweightRefMetricIds.contains)) {
+      try {
+        final docs = await widget.programProvider!.load();
+        weekStartDay = weekStartDayOf(currentVersion(docs.program));
+      } catch (_) {}
+    }
+
     return DomainMetricInputs(
       strengthRows: strengthRows,
       weightDaily: weightDaily,
       records: records,
       today: _today,
+      weekStartDay: weekStartDay,
     );
   }
 

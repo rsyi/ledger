@@ -27,21 +27,24 @@ class DayPlan {
   }
 }
 
-/// Returns the Monday of the ISO week to show on first open.
+/// Returns the start of the accounting week to show/plan on first open.
 ///
-/// - Normally: the Monday of the week containing [today].
-/// - If [today] is a Sunday (weekday == 7): the Monday of the NEXT week,
-///   because on Sundays the user checks their upcoming week.
+/// - Normally: the start of the week containing [today] (Monday for the
+///   default ISO weeks; the configured day when [weekStartDay] is set —
+///   program.yaml v7 `week_start: saturday` keys weeks Sat–Fri).
+/// - If [today] is the LAST day of the week (Sunday for Monday-start
+///   weeks, Friday for Saturday-start ones): the start of the NEXT
+///   week, because on the closing day the user checks the upcoming week.
 ///
 /// [today] should be the current date (local calendar).
-DateTime defaultWeekStart(DateTime today) {
+DateTime defaultWeekStart(DateTime today, {int weekStartDay = DateTime.monday}) {
   final day = DateTime.utc(today.year, today.month, today.day);
-  if (day.weekday == DateTime.sunday) {
-    // Jump to next Monday (7 days ahead, then back to Monday = 1 day).
-    return day.add(const Duration(days: 1));
-  }
-  // Monday of this week (weekday: Mon=1 … Sat=6).
-  return day.subtract(Duration(days: day.weekday - 1));
+  // UTC-midnight arithmetic (weekStartOf returns local midnights; this
+  // function's contract — and its callers' date keys — are UTC days).
+  final start = day.subtract(Duration(days: (day.weekday - weekStartDay) % 7));
+  final lastDay = start.add(const Duration(days: 6));
+  if (day == lastDay) return start.add(const Duration(days: 7));
+  return start;
 }
 
 /// Builds the full 7-day plan for the ISO week containing [anyDayInWeek]

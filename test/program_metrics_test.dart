@@ -667,4 +667,104 @@ void main() {
       expect(hit.evidence['bw_7d_avg'], 180);
     });
   });
+
+  group('weekStartOf / anchorMondayOf (v7 week_start amendment)', () {
+    // 2026-09-19 is a Saturday; 2026-09-21 a Monday; 2026-09-25 a Friday.
+    test('monday default matches mondayOf', () {
+      expect(weekStartOf(d('2026-09-22')), mondayOf(d('2026-09-22')));
+      expect(weekStartOf(d('2026-09-22')), d('2026-09-21'));
+    });
+
+    test('saturday start: a Saturday lands in the NEW week', () {
+      expect(
+        weekStartOf(d('2026-09-19'), DateTime.saturday),
+        d('2026-09-19'),
+      );
+    });
+
+    test('saturday start: a Friday closes the OLD week', () {
+      expect(
+        weekStartOf(d('2026-09-25'), DateTime.saturday),
+        d('2026-09-19'),
+      );
+    });
+
+    test('saturday start: Mon–Thu belong to the week begun the prior '
+        'Saturday', () {
+      for (final day in ['2026-09-21', '2026-09-22', '2026-09-24']) {
+        expect(weekStartOf(d(day), DateTime.saturday), d('2026-09-19'));
+      }
+    });
+
+    test('anchorMondayOf: identity for Monday starts; the contained '
+        'Monday for Saturday starts', () {
+      expect(anchorMondayOf(d('2026-09-21')), d('2026-09-21'));
+      expect(anchorMondayOf(d('2026-09-19')), d('2026-09-21'));
+    });
+  });
+
+  group('weeklyRollup — saturday-start accounting weeks', () {
+    test('a Saturday set keys the new week; the prior Friday stays in '
+        'the old one', () {
+      final sets = gradeSets([
+        row('2026-09-01', 'Barbell Squat', 300, 3), // reference seeding
+        row('2026-09-18', 'Barbell Squat', 300, 3), // Friday → old week
+        row('2026-09-19', 'Barbell Squat', 300, 3), // Saturday → new week
+      ]);
+      final weeks = weeklyRollup(sets, weekStartDay: DateTime.saturday);
+      final byStart = {for (final w in weeks) w.weekStart: w};
+      // Friday Sep 18's week started Sat Sep 12; Sep 19 starts its own.
+      expect(byStart[d('2026-09-12')]!.setsTotal, 1);
+      expect(byStart[d('2026-09-19')]!.setsTotal, 1);
+      // Under the default Monday keying both land in DIFFERENT weeks too,
+      // but keyed by Mondays — assert keys are Saturdays here.
+      for (final w in weeks) {
+        expect(w.weekStart.weekday, DateTime.saturday);
+      }
+    });
+
+    test('bw windows anchor to the accounting week: weekSunday is the '
+        'Friday for saturday-start weeks', () {
+      final weeks = weeklyRollup(
+        const [],
+        weights: [
+          WeightRow(date: d('2026-09-19'), weightLbs: 160),
+          WeightRow(date: d('2026-09-25'), weightLbs: 162),
+        ],
+        weekStartDay: DateTime.saturday,
+      );
+      expect(weeks.single.weekStart, d('2026-09-19'));
+      expect(weeks.single.weekSunday, d('2026-09-25')); // the Friday
+      expect(weeks.single.bw7dAvg, closeTo(161, 1e-9));
+    });
+
+    test('evaluateFlags inherits the keying (TOP_SET_HEAVY lands in a '
+        'saturday-keyed week)', () {
+      GradedSet top(String date, double rpe) => GradedSet(
+            date: d(date),
+            lift: 'squat',
+            weight: 300,
+            reps: 1,
+            e1rm: 310,
+            reference: 310,
+            effort: 1.0,
+            pctMax: 0.97,
+            tier: SetTier.hard,
+            working: true,
+            nearMax: true,
+            longFailureSet: false,
+            rpe: rpe,
+          );
+      // Two consecutive RPE-9.5 top sets; the second on a Saturday must
+      // flag the SATURDAY-keyed week containing it.
+      final weeks = weeklyRollup(
+        [top('2026-09-14', 9.5), top('2026-09-19', 9.5)],
+        weekStartDay: DateTime.saturday,
+      );
+      final flags = evaluateFlags(weeks);
+      final hit = flags[d('2026-09-19')];
+      expect(hit, isNotNull);
+      expect(hit!.map((h) => h.id), contains('TOP_SET_HEAVY'));
+    });
+  });
 }

@@ -211,4 +211,37 @@ void main() {
           contains('one hard single at RPE 8'));
     });
   });
+
+  group('defaultWeekStart — saturday-start accounting weeks (v7)', () {
+    test('a Saturday starts its own week', () {
+      expect(
+        defaultWeekStart(DateTime(2026, 9, 19),
+            weekStartDay: DateTime.saturday),
+        DateTime.utc(2026, 9, 19),
+      );
+    });
+
+    test('Sunday through Thursday stay in the week begun the prior '
+        'Saturday', () {
+      for (final day in [
+        DateTime(2026, 9, 20), // Sunday
+        DateTime(2026, 9, 22), // Tuesday
+        DateTime(2026, 9, 24), // Thursday
+      ]) {
+        expect(
+          defaultWeekStart(day, weekStartDay: DateTime.saturday),
+          DateTime.utc(2026, 9, 19),
+        );
+      }
+    });
+
+    test('the closing Friday plans the UPCOMING week (the Sunday '
+        'convention, shifted)', () {
+      expect(
+        defaultWeekStart(DateTime(2026, 9, 25),
+            weekStartDay: DateTime.saturday),
+        DateTime.utc(2026, 9, 26),
+      );
+    });
+  });
 }

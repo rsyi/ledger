@@ -159,6 +159,12 @@ Future<void> main() async {
     weights: weightRows,
     fourByFours: fourByFours,
     climbingDates: climbingDates,
+    // PINNED to Monday-keyed ISO weeks, deliberately ignoring the
+    // program's v7 `week_start: saturday` (amendment 2026-09-22): the
+    // §6 acceptance numbers were validated against Monday weeks and
+    // this backtest is historical — rekeying would invalidate the
+    // validated flag counts without telling us anything new.
+    weekStartDay: DateTime.monday,
   );
   final flags = evaluateFlags(weeks);
   final byMonday = {for (final w in weeks) w.weekStart: w};

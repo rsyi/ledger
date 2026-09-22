@@ -45,7 +45,7 @@
 library;
 
 import 'program_metrics.dart'
-    show StrengthRow, WeightRow, epleyE1rm, mainLiftByExercise, mondayOf;
+    show StrengthRow, WeightRow, epleyE1rm, mainLiftByExercise, weekStartOf;
 
 /// Exact lb → kg factor (international avoirdupois pound).
 const double kgPerLb = 0.45359237;
@@ -69,7 +69,8 @@ double wilks2020MaleCoeff(double bodyweightKg) {
 
 /// One weekly Wilks point.
 class WilksWeek {
-  /// The ISO week's Monday.
+  /// The week's start day (ISO Monday by default; the configured
+  /// accounting week start when the series was keyed differently).
   final DateTime weekStart;
   final double wilks;
 
@@ -99,32 +100,37 @@ class WilksWeek {
 /// [through]'s week when that is later (so the current, not-yet-trained
 /// week still gets a carried point). Empty when the inputs never cover
 /// all three lifts plus a weigh-in.
+///
+/// [weekStartDay] keys the weeks (program.yaml v7 `week_start` —
+/// saturday makes a Saturday PR count toward the CURRENT week's stat).
+/// The monthly trend series below is untouched by the key.
 List<WilksWeek> weeklyWilksSeries(
   List<StrengthRow> strengthRows,
   List<WeightRow> weighIns, {
   DateTime? through,
+  int weekStartDay = DateTime.monday,
 }) {
   DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
+  DateTime wk(DateTime d) => weekStartOf(d, weekStartDay);
 
-  // Best qualifying e1RM per (week Monday, lift).
+  // Best qualifying e1RM per (week start, lift).
   final bestByWeek = <DateTime, Map<String, double>>{};
   for (final r in strengthRows) {
     final lift = mainLiftByExercise[r.exercise];
     if (lift == null || !wilksLifts.contains(lift)) continue;
     if (r.reps <= 0 || r.reps > 5 || r.weight <= 0) continue;
-    final wk = mondayOf(r.date);
     final e = epleyE1rm(r.weight, r.reps);
-    final m = bestByWeek[wk] ??= {};
+    final m = bestByWeek[wk(r.date)] ??= {};
     if ((m[lift] ?? 0) < e) m[lift] = e;
   }
 
-  // Weekly bodyweight: mean of the daily series Mon..Sun.
+  // Weekly bodyweight: mean of the daily series over the week.
   final bwSum = <DateTime, double>{};
   final bwN = <DateTime, int>{};
   for (final w in weighIns) {
-    final wk = mondayOf(w.date);
-    bwSum[wk] = (bwSum[wk] ?? 0) + w.weightLbs;
-    bwN[wk] = (bwN[wk] ?? 0) + 1;
+    final k = wk(w.date);
+    bwSum[k] = (bwSum[k] ?? 0) + w.weightLbs;
+    bwN[k] = (bwN[k] ?? 0) + 1;
   }
 
   final mondays = <DateTime>{...bestByWeek.keys, ...bwSum.keys};
@@ -133,7 +139,7 @@ List<WilksWeek> weeklyWilksSeries(
   final first = sorted.first;
   var last = sorted.last;
   if (through != null) {
-    final t = mondayOf(day(through));
+    final t = wk(day(through));
     if (t.isAfter(last)) last = t;
   }
 

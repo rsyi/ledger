@@ -285,7 +285,9 @@ Map<String, double> liftReferencesAsOf(List<StrengthRow> rows, DateTime asOf) {
 }
 
 // ---------------------------------------------------------------------------
-// Weekly rollup (§2.5 per ISO week, Mon–Sun keyed by Monday)
+// Weekly rollup (§2.5 per accounting week — ISO Mon–Sun keyed by Monday
+// by default; program.yaml v7 `week_start` may shift the boundary, see
+// weekStartOf. Spec amendment 2026-09-22.)
 // ---------------------------------------------------------------------------
 
 class LiftWeek {
@@ -323,7 +325,9 @@ class TopSetInfo {
 }
 
 class WeeklyMetrics {
-  /// The ISO week's Monday.
+  /// The week's start day — the ISO week's Monday by default; the
+  /// configured accounting week start (program.yaml `week_start`, e.g.
+  /// Saturday) when [weeklyRollup] was keyed differently.
   final DateTime weekStart;
   final int sessions;
   final int setsTotal;
@@ -375,6 +379,9 @@ class WeeklyMetrics {
     required this.painNotes,
   });
 
+  /// Last day of the accounting week (Sunday for Monday-start weeks;
+  /// Friday for Saturday-start ones — the name predates configurable
+  /// week starts and is kept to avoid churn at ~20 call sites).
   DateTime get weekSunday => _addDays(weekStart, 6);
   int get bike4x4Count => bike4x4Sessions.length;
   double? get bike4x4MaxHr => _maxOf([
@@ -390,27 +397,58 @@ class WeeklyMetrics {
 double? _maxOf(List<double> xs) =>
     xs.isEmpty ? null : xs.reduce((a, b) => a > b ? a : b);
 
+/// Start of the ACCOUNTING week containing [d] for weeks that begin on
+/// [weekStartDay] (a `DateTime.monday..sunday` constant): the most
+/// recent such weekday at or before [d].
+///
+/// program.yaml v7 (`week_start: saturday`, user amendment 2026-09-22)
+/// made the accounting week start configurable — a Saturday session
+/// counts toward the NEW week ("getting ahead"), a Friday one closes
+/// the old week. Only ACCOUNTING call sites use this (weekly rollups,
+/// flag weeks, the live this-week strip, the planner window, the weekly
+/// Wilks stat); program STRUCTURE (block boundaries, week_in_block,
+/// week_type) stays Monday-anchored — see [anchorMondayOf].
+DateTime weekStartOf(DateTime d, [int weekStartDay = DateTime.monday]) =>
+    _addDays(_day(d), -((d.weekday - weekStartDay) % 7));
+
 /// Monday of the ISO week containing [d].
-DateTime mondayOf(DateTime d) =>
-    _addDays(_day(d), -(d.weekday - DateTime.monday));
+DateTime mondayOf(DateTime d) => weekStartOf(d);
+
+/// The Monday that anchors an accounting week to the Monday-anchored
+/// program structure: the first Monday ON or AFTER [weekStart]. For a
+/// Monday-start week this is the week start itself; for a
+/// Saturday-start week it is two days in — the Monday that owns the
+/// week's Mon–Fri (5 of 7 days), so week_type / targets resolve to the
+/// structural week the accounting week substantially covers.
+DateTime anchorMondayOf(DateTime weekStart) =>
+    _addDays(_day(weekStart), (DateTime.monday - weekStart.weekday) % 7);
 
 /// Rolls graded sets + weigh-ins + 4x4 rows + climbing dates + notes into
-/// per-ISO-week metrics. Emits a contiguous run of weeks from the first to
+/// per-week metrics. Emits a contiguous run of weeks from the first to
 /// the last week containing any input row.
+///
+/// Weeks are ACCOUNTING weeks keyed by their start day: ISO Mon–Sun by
+/// default; [weekStartDay] (program.yaml v7 `week_start`) shifts the
+/// boundary — e.g. `DateTime.saturday` keys weeks Sat–Fri, so a Saturday
+/// set lands in the NEW week. [weekTypeOf] receives each week's START
+/// date (callers resolving Monday-anchored program structure should go
+/// through [anchorMondayOf]).
 List<WeeklyMetrics> weeklyRollup(
   List<GradedSet> sets, {
   List<WeightRow> weights = const [],
   List<FourByFourRow> fourByFours = const [],
   List<DateTime> climbingDates = const [],
   List<DailyNoteRow> notes = const [],
-  String? Function(DateTime weekMonday)? weekTypeOf,
+  String? Function(DateTime weekStartDate)? weekTypeOf,
+  int weekStartDay = DateTime.monday,
 }) {
+  DateTime wk(DateTime d) => weekStartOf(d, weekStartDay);
   final mondays = <DateTime>{
-    for (final s in sets) mondayOf(s.date),
-    for (final w in weights) mondayOf(w.date),
-    for (final c in fourByFours) mondayOf(c.date),
-    for (final c in climbingDates) mondayOf(c),
-    for (final n in notes) mondayOf(n.date),
+    for (final s in sets) wk(s.date),
+    for (final w in weights) wk(w.date),
+    for (final c in fourByFours) wk(c.date),
+    for (final c in climbingDates) wk(c),
+    for (final n in notes) wk(n.date),
   };
   if (mondays.isEmpty) return const [];
   final sorted = mondays.toList()..sort();
@@ -422,20 +460,20 @@ List<WeeklyMetrics> weeklyRollup(
 
   final setsByWeek = <DateTime, List<GradedSet>>{};
   for (final s in sets) {
-    (setsByWeek[mondayOf(s.date)] ??= []).add(s);
+    (setsByWeek[wk(s.date)] ??= []).add(s);
   }
   final climbsByWeek = <DateTime, Set<DateTime>>{};
   for (final c in climbingDates) {
-    (climbsByWeek[mondayOf(c)] ??= {}).add(_day(c));
+    (climbsByWeek[wk(c)] ??= {}).add(_day(c));
   }
   final ffByWeek = <DateTime, List<FourByFourRow>>{};
   for (final c in fourByFours) {
-    (ffByWeek[mondayOf(c.date)] ??= []).add(c);
+    (ffByWeek[wk(c.date)] ??= []).add(c);
   }
   final painByWeek = <DateTime, int>{};
   for (final n in notes) {
     if (n.cause == 'pain') {
-      final k = mondayOf(n.date);
+      final k = wk(n.date);
       painByWeek[k] = (painByWeek[k] ?? 0) + 1;
     }
   }
@@ -559,7 +597,8 @@ List<WeeklyMetrics> weeklyRollup(
 class FlagHit {
   final String id;
 
-  /// The Sunday of the week the flag belongs to.
+  /// The last day of the accounting week the flag belongs to (Sunday
+  /// for Monday-start weeks, Friday for Saturday-start ones).
   final DateTime firedOn;
   final Map<String, Object?> evidence;
   final String action;
@@ -599,6 +638,10 @@ Map<DateTime, List<FlagHit>> evaluateFlags(
   Map<String, Object?>? Function(DateTime weekMonday)? targetsOf,
 }) {
   final out = <DateTime, List<FlagHit>>{};
+  // Week keying is inherited from the rollup output (the weeks' start
+  // weekday), so flags can never disagree with the rollup on boundaries.
+  final weekStartDay =
+      weeks.isEmpty ? DateTime.monday : weeks.first.weekStart.weekday;
   bool normalScope(WeeklyMetrics w) =>
       w.weekType == null || w.weekType == 'normal';
 
@@ -835,7 +878,7 @@ Map<DateTime, List<FlagHit>> evaluateFlags(
     for (final e in heavyTopDates.entries) {
       final inWeek = [
         for (final d in e.value)
-          if (mondayOf(d) == w.weekStart) d,
+          if (weekStartOf(d, weekStartDay) == w.weekStart) d,
       ];
       if (inWeek.isNotEmpty) {
         fire(

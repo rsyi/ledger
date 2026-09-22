@@ -323,6 +323,9 @@ class _ProgramView extends StatelessWidget {
             daily: data.daily,
             today: today,
             blockStart: blockStart,
+            // Accounting-week keying for the weekly-current stat
+            // (program.yaml v7 week_start — saturday since 2026-09-22).
+            weekStartDay: weekStartDayOf(programVersion),
           ),
         ],
         const SizedBox(height: 16),
@@ -978,12 +981,16 @@ class _WilksCard extends StatelessWidget {
   /// default the hero's Wilks eigenvectors use.
   final DateTime? blockStart;
 
+  /// Accounting-week start for the weekly-current stat (v7 week_start).
+  final int weekStartDay;
+
   const _WilksCard({
     required this.config,
     required this.strengthRows,
     required this.daily,
     required this.today,
     required this.blockStart,
+    this.weekStartDay = DateTime.monday,
   });
 
   @override
@@ -995,6 +1002,7 @@ class _WilksCard extends StatelessWidget {
         strengthRows: strengthRows,
         weightDaily: daily,
         today: today,
+        weekStartDay: weekStartDay,
       ),
     );
 
@@ -1002,7 +1010,12 @@ class _WilksCard extends StatelessWidget {
     // where the cut stands right now).
     final weeks = strengthRows.isEmpty || daily.isEmpty
         ? const <WilksWeek>[]
-        : weeklyWilksSeries(strengthRows, daily, through: today);
+        : weeklyWilksSeries(
+            strengthRows,
+            daily,
+            through: today,
+            weekStartDay: weekStartDay,
+          );
     final s = wilksStability(
       weeks: weeks,
       from: config.from ?? blockStart,

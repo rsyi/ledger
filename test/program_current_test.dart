@@ -56,7 +56,7 @@ void main() {
     final v = currentVersion(program);
     expect(v, isNotNull);
     expect(v!['id'], 'bulk-2026-27');
-    expect(v['version'], 6);
+    expect(v['version'], 7);
     // A trailing pending entry must be skipped.
     final withPending = {
       'versions': [
@@ -64,7 +64,7 @@ void main() {
         {'version': 99, 'pending': true, 'id': 'draft'},
       ],
     };
-    expect(currentVersion(withPending)!['version'], 6);
+    expect(currentVersion(withPending)!['version'], 7);
   });
 
   for (final c in cases) {
@@ -135,5 +135,21 @@ void main() {
         programCurrent(program, phase, DateTime.parse('2026-09-21'))!;
     expect(slice.todayTemplate['morning'], contains('one hard single at RPE 8'));
     expect(slice.todayTemplate['block_note'], contains('Maintenance'));
+  });
+
+  group('weekStartDayOf (v7 week_start)', () {
+    test('parses saturday; defaults to monday when absent/garbage/null', () {
+      expect(weekStartDayOf({'week_start': 'saturday'}), DateTime.saturday);
+      expect(weekStartDayOf({'week_start': 'Saturday '}), DateTime.saturday);
+      expect(weekStartDayOf({'week_start': 'sunday'}), DateTime.sunday);
+      expect(weekStartDayOf({}), DateTime.monday);
+      expect(weekStartDayOf({'week_start': 'caturday'}), DateTime.monday);
+      expect(weekStartDayOf(null), DateTime.monday);
+    });
+
+    test('the LIVE program.yaml v7 declares saturday (user amendment '
+        '2026-09-22)', () {
+      expect(weekStartDayOf(currentVersion(program)), DateTime.saturday);
+    });
   });
 }

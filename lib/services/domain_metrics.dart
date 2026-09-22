@@ -27,7 +27,7 @@ import 'home_synthesis.dart'
     show allTimeBestE1rms, fmtLb, synthesisLifts;
 import 'program_metrics.dart'
     show StrengthRow, WeightRow, liftReferencesAsOf, mainLiftByExercise,
-        mondayOf;
+        weekStartOf;
 import 'program_observed.dart' show sevenDayAvgSeries;
 import 'wilks.dart';
 
@@ -335,11 +335,18 @@ class DomainMetricInputs {
 
   final DateTime today;
 
+  /// Accounting-week start (program.yaml v7 `week_start`; DateTime
+  /// weekday constant). Keys the WEEKLY Wilks stat + the wilks_series
+  /// reference anchor; the monthly trend is untouched. Default Monday
+  /// (ISO) so callers without program access change nothing.
+  final int weekStartDay;
+
   const DomainMetricInputs({
     this.strengthRows = const [],
     this.weightDaily = const [],
     this.records = const [],
     required this.today,
+    this.weekStartDay = DateTime.monday,
   });
 }
 
@@ -394,6 +401,7 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
         inputs.strengthRows,
         inputs.weightDaily,
         through: inputs.today,
+        weekStartDay: inputs.weekStartDay,
       );
       if (weeks.isEmpty) {
         return const MetricUnavailable(
@@ -455,9 +463,10 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
           inputs.strengthRows,
           inputs.weightDaily,
           through: inputs.today,
+          weekStartDay: inputs.weekStartDay,
         );
         if (weeks.isNotEmpty) {
-          final fromMonday = mondayOf(from);
+          final fromMonday = weekStartOf(from, inputs.weekStartDay);
           var ref = weeks.first;
           for (final w in weeks) {
             if (!w.weekStart.isAfter(fromMonday)) ref = w;

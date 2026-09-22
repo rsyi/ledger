@@ -82,6 +82,32 @@ DateTime _parseDay(Object? s) {
   return DateTime.utc(d.year, d.month, d.day);
 }
 
+const Map<String, int> _weekdayByName = {
+  'monday': DateTime.monday,
+  'tuesday': DateTime.tuesday,
+  'wednesday': DateTime.wednesday,
+  'thursday': DateTime.thursday,
+  'friday': DateTime.friday,
+  'saturday': DateTime.saturday,
+  'sunday': DateTime.sunday,
+};
+
+/// The ACCOUNTING week's start day for a program [version] — its
+/// `week_start:` key (program.yaml v7, user amendment 2026-09-22:
+/// `saturday`, so weekend sessions read as getting ahead of the coming
+/// week rather than catching up the old one) as a `DateTime.monday..
+/// sunday` constant. Absent / unrecognized / null version → Monday
+/// (ISO weeks, the pre-v7 behavior).
+///
+/// Scope: weekly ROLLUP keying only (metrics, flags, live this-week,
+/// planner window, weekly Wilks stat). Program STRUCTURE — block
+/// boundaries, week_in_block, week_type — remains Monday-anchored and
+/// is deliberately not affected by this key (accounting weeks map onto
+/// it through anchorMondayOf in program_metrics.dart).
+int weekStartDayOf(Map<Object?, Object?>? version) =>
+    _weekdayByName[version?['week_start']?.toString().trim().toLowerCase()] ??
+    DateTime.monday;
+
 /// Resolve the program slice for [date]. Returns null when [date] falls
 /// outside every block of the current program version (e.g. pre-program)
 /// or when no non-pending version exists.

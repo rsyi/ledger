@@ -25,7 +25,8 @@ import 'package:intl/intl.dart';
 import '../models/planned_entry.dart';
 import '../models/view_schema.dart';
 import 'plan_store.dart';
-import 'program_current.dart' show currentVersion, programCurrent;
+import 'program_current.dart'
+    show currentVersion, programCurrent, weekStartDayOf;
 import 'program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
 import 'program_provider.dart';
@@ -127,15 +128,25 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
   final version = currentVersion(program);
   if (version == null) return const [];
 
+  // Accounting week window (v7 week_start — saturday runs Sat–Fri so
+  // the planner window matches the rollup/strip weeks). Normalised to
+  // the week's start day.
+  final wsDay = weekStartDayOf(version);
   final day0 = DateTime.utc(weekMonday.year, weekMonday.month, weekMonday.day);
-  final monday = day0.subtract(Duration(days: day0.weekday - 1));
+  final weekStart =
+      day0.subtract(Duration(days: (day0.weekday - wsDay) % 7));
+  // Program STRUCTURE stays Monday-anchored: parity/alternation is
+  // resolved at the Monday contained in the window (the one owning its
+  // Mon–Fri) — identical to the week start for Monday-start weeks.
+  final anchorMonday =
+      weekStart.add(Duration(days: (DateTime.monday - weekStart.weekday) % 7));
 
   // a/b parity for this week. Defaults to 'a' when no anchor is declared.
   var parity = 'a';
   final alternation = version['planned_alternation'];
   if (alternation is Map && alternation['anchor_monday'] != null) {
     final anchor = _parseDay(alternation['anchor_monday']);
-    final weeks = monday.difference(anchor).inDays ~/ 7;
+    final weeks = anchorMonday.difference(anchor).inDays ~/ 7;
     parity = weeks.isEven ? 'a' : 'b';
   }
 
@@ -195,7 +206,7 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
 
   final entries = <Map<String, Object?>>[];
   for (var i = 0; i < 7; i++) {
-    final day = monday.add(Duration(days: i));
+    final day = weekStart.add(Duration(days: i));
     final block = _blockFor(version, day);
     if (block == null) continue; // outside every block: nothing to plan
     final blockN = block['n'];
@@ -204,7 +215,9 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
         ? block0Template
         : version['weekly_template'];
     if (template is! Map) continue;
-    final dayMap = template[_weekdayKeys[i]];
+    // Template lookup by the day's ACTUAL weekday (the window may not
+    // start on Monday, but the template is keyed mon..sun).
+    final dayMap = template[_weekdayKeys[day.weekday - 1]];
     if (dayMap is! Map) continue;
     Object? planned = dayMap['planned'];
     if (planned is Map) planned = planned[parity]; // alternation day
@@ -390,14 +403,19 @@ class WeekPlanner {
   }) async {
     try {
       final today = now();
-      final targetMonday = defaultWeekStart(today);
-      final mondayStr = DateFormat('yyyy-MM-dd').format(targetMonday);
-      final stamp = '$mondayStr|$planVersion';
-      if (await repo.metaGet(metaGeneratedKey) == stamp) return;
-
+      // Program first: the target week's START depends on the program's
+      // week_start (v7 — saturday windows run Sat–Fri). The 1 h doc
+      // cache makes the always-load cheap.
       final docs = await provider.load();
       final program = docs.program;
       if (program == null) return; // no/bad program.yaml: retry next launch
+      final targetMonday = defaultWeekStart(
+        today,
+        weekStartDay: weekStartDayOf(currentVersion(program)),
+      );
+      final mondayStr = DateFormat('yyyy-MM-dd').format(targetMonday);
+      final stamp = '$mondayStr|$planVersion';
+      if (await repo.metaGet(metaGeneratedKey) == stamp) return;
 
       final rows = await connector.list(strengthView);
       final references = liftReferencesAsOf(

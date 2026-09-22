@@ -210,23 +210,32 @@ Future<void> main(List<String> args) async {
     }
   }
 
+  // Accounting-week start (program.yaml v7 `week_start` — saturday since
+  // the 2026-09-22 amendment). Keys the rollup + flag weeks; program
+  // STRUCTURE (week_type, targets) stays Monday-anchored and accounting
+  // weeks resolve onto it via anchorMondayOf (the contained Monday).
+  final wsDay = weekStartDayOf(
+      programYaml == null ? null : currentVersion(programYaml));
+
   String? Function(DateTime) weekTypeResolver = (m) => null;
   Map<String, Object?>? Function(DateTime) targetsResolver = (m) => null;
   if (programYaml != null && programEffectiveDate != null) {
     final py = programYaml; // non-null: inside `programYaml != null` guard
     final effDate = programEffectiveDate;
-    weekTypeResolver = (DateTime monday) {
+    weekTypeResolver = (DateTime weekStartDate) {
       // effDate is captured from programEffectiveDate which is non-null here.
-      if (monday.isBefore(effDate)) return null;
-      final slice = programCurrent(py, phaseYaml, monday);
+      final anchor = anchorMondayOf(weekStartDate);
+      if (anchor.isBefore(effDate)) return null;
+      final slice = programCurrent(py, phaseYaml, anchor);
       return slice?.weekType;
     };
     // Phase-aware flag thresholds: hand evaluateFlags the week's
     // targets_in_force (block-0 cut targets via v6 targets_block_0).
     // Pre-program weeks stay null → legacy backtest thresholds.
-    targetsResolver = (DateTime monday) {
-      if (monday.isBefore(effDate)) return null;
-      return programCurrent(py, phaseYaml, monday)?.targetsInForce;
+    targetsResolver = (DateTime weekStartDate) {
+      final anchor = anchorMondayOf(weekStartDate);
+      if (anchor.isBefore(effDate)) return null;
+      return programCurrent(py, phaseYaml, anchor)?.targetsInForce;
     };
   }
 
@@ -250,6 +259,7 @@ Future<void> main(List<String> args) async {
     climbingDates: climbingDates,
     notes: noteRows,
     weekTypeOf: weekTypeResolver,
+    weekStartDay: wsDay,
   );
   final flagsByWeek =
       evaluateFlags(weeks, phaseOf: phaseResolver, targetsOf: targetsResolver);
@@ -267,7 +277,7 @@ Future<void> main(List<String> args) async {
   // --brief mode: print top-3 rows + open flags as markdown, then exit
   // -------------------------------------------------------------------------
   if (brief) {
-    _printBrief(filteredWeeks, flagsByWeek);
+    _printBrief(filteredWeeks, flagsByWeek, wsDay);
     return;
   }
 
@@ -453,7 +463,8 @@ Future<void> main(List<String> args) async {
   const cfHeaders = ['id', 'fired_on', 'evidence', 'action', 'acknowledged'];
 
   final now = DateTime.now();
-  final eightWeeksAgo = mondayOf(DateTime(now.year, now.month, now.day - 56));
+  final eightWeeksAgo =
+      weekStartOf(DateTime(now.year, now.month, now.day - 56), wsDay);
   final cfRows = <List<Object?>>[];
   for (final w in filteredWeeks.reversed) {
     if (w.weekStart.isBefore(eightWeeksAgo)) continue;
@@ -551,6 +562,7 @@ Future<void> main(List<String> args) async {
 void _printBrief(
   List<WeeklyMetrics> filteredWeeks,
   Map<DateTime, List<FlagHit>> flagsByWeek,
+  int wsDay,
 ) {
   print('## Program status (recent weeks)\n');
   print('| week_monday | week_type | sessions | working_sets | near_max_sets | bw_7d_avg | bw_rate_lb_wk | flags |');
@@ -569,7 +581,8 @@ void _printBrief(
 
   // Open flags from last 8 weeks
   final now = DateTime.now();
-  final eightWeeksAgo = mondayOf(DateTime(now.year, now.month, now.day - 56));
+  final eightWeeksAgo =
+      weekStartOf(DateTime(now.year, now.month, now.day - 56), wsDay);
   final openFlags = <FlagHit>[];
   for (final w in filteredWeeks.reversed) {
     if (w.weekStart.isBefore(eightWeeksAgo)) break;

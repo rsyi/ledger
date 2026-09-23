@@ -32,6 +32,7 @@ import 'package:googleapis/sheets/v4.dart' as sheets;
 import 'package:googleapis_auth/auth_io.dart';
 
 import '../app_config.dart' show KayaGmailConfig;
+import '../transient_retry.dart';
 import '../kaya_csv.dart';
 import 'gmail_gateway.dart';
 import 'integration.dart';
@@ -326,11 +327,13 @@ class KayaGmailIntegration implements GuidedSyncIntegration {
         // launching Kaya. 7-day window, no strictly-newer floor —
         // replace-all is idempotent, so re-importing is harmless.
         'Import latest export': (context) async {
-          final result = await kayaImportFromGmail(
-            gmail: gateway,
-            store: store,
-            newerThanDays: 7,
-          );
+          // One-shot path: ride out radio-handoff socket aborts the
+          // same way the sheets client does.
+          final result = await retryTransient(() => kayaImportFromGmail(
+                gmail: gateway,
+                store: store,
+                newerThanDays: 7,
+              ));
           if (result == null) {
             throw StateError(
                 'No Kaya export email in the last 7 days — in Kaya, tap '
@@ -396,11 +399,23 @@ class KayaGmailIntegration implements GuidedSyncIntegration {
       for (var attempt = 1; attempt <= maxPolls; attempt++) {
         _progress.value =
             'Waiting for Kaya export email… ($attempt/$maxPolls)';
-        final result = await kayaImportFromGmail(
-          gmail: gateway,
-          store: store,
-          newerThan: syncStart,
-        );
+        final KayaGmailImport? result;
+        try {
+          result = await kayaImportFromGmail(
+            gmail: gateway,
+            store: store,
+            newerThan: syncStart,
+          );
+        } catch (e) {
+          // Radio handoffs (wifi↔5G) abort sockets mid-poll ("software
+          // caused connection abort"); a transient blip is just "not
+          // yet" — keep polling instead of killing the guided sync.
+          if (isTransientNetworkError(e) && attempt < maxPolls) {
+            await Future<void>.delayed(pollInterval);
+            continue;
+          }
+          rethrow;
+        }
         if (result != null) {
           await _recordImport(result);
           if (context.mounted) {
@@ -438,16 +453,16 @@ class KayaGmailIntegration implements GuidedSyncIntegration {
       }
       await repo.metaSet(_kLastCheck, DateTime.now().toIso8601String());
       final lastMs = int.tryParse(await repo.metaGet(_kMsgMs) ?? '');
-      final result = await kayaImportFromGmail(
-        gmail: gateway,
-        store: store,
-        // Strictly newer than the last imported export email; when
-        // nothing was ever imported, any recent export qualifies.
-        newerThan: lastMs == null
-            ? null
-            : DateTime.fromMillisecondsSinceEpoch(lastMs),
-        newerThanDays: fullReconcile ? 7 : 1,
-      );
+      final result = await retryTransient(() => kayaImportFromGmail(
+            gmail: gateway,
+            store: store,
+            // Strictly newer than the last imported export email; when
+            // nothing was ever imported, any recent export qualifies.
+            newerThan: lastMs == null
+                ? null
+                : DateTime.fromMillisecondsSinceEpoch(lastMs),
+            newerThanDays: fullReconcile ? 7 : 1,
+          ));
       if (result != null) await _recordImport(result);
       await repo.metaSet(_kError, '');
     } catch (e) {

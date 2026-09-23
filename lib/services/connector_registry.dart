@@ -7,6 +7,23 @@ import 'postgres_connector.dart';
 import 'sqlite_ledger_connector.dart';
 import 'warehouse_connector.dart';
 
+/// Repo selection for dashboard plumbing. Read-only views (climbing /
+/// program_status) are backed by a DIRECT sheet read and are never
+/// synced into the local engine ledger — resolving them through the
+/// registry returns the ledger connector, whose `list()` is empty for
+/// tabs the app doesn't own. That exact wiring bug made the home
+/// strip's live climb count read an empty ledger table instead of the
+/// kaya_ascents tab (2026-09-22). Entry views keep their registry
+/// connector; null view → null.
+WarehouseConnector? dashboardRepoFor(
+  ViewSchema? view, {
+  required WarehouseConnector? readOnlyRepo,
+  required WarehouseConnector Function(ViewSchema) forView,
+}) {
+  if (view == null) return null;
+  return view.readOnly ? readOnlyRepo : forView(view);
+}
+
 /// Routes a `.view.yml`'s `datasource:` to a concrete [WarehouseConnector].
 ///
 /// Built once at app startup from the parsed `databases:` array of the

@@ -751,9 +751,15 @@ class _HomeScreenState extends State<HomeScreen> {
                             ? null
                             : data.registry.forView(dashStrengthView),
                         climbingView: dashClimbingView,
-                        climbingRepo: dashClimbingView == null
-                            ? null
-                            : data.registry.forView(dashClimbingView),
+                        // climbing is read_only (kaya_ascents direct
+                        // read) — dashboardRepoFor routes it to the
+                        // readOnlyRepo; the registry's ledger connector
+                        // has no climbing rows (fix 2026-09-22).
+                        climbingRepo: dashboardRepoFor(
+                          dashClimbingView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
                         dashboards: domainProvider,
                         onOpenProgram: programProvider == null
                             ? null

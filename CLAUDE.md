@@ -12,6 +12,25 @@ owned by a Rust engine and sync bidirectionally to Google Sheets
 `com.robertyi.fitness` (NEVER change the package id — it orphans
 on-device data). Device: Pixel 11 Pro, serial `66260DLKX00010`.
 
+## Design principle: output metrics >> input metrics (2026-09-22)
+
+User-declared, governs all future surface design. What matters is
+OUTCOMES (bodyweight trajectory vs target, Wilks preserved through a
+cut, e1RM trend), not activity (workouts done, sets logged, streaks).
+The homepage exists to answer "is it working?", never "did I do
+stuff?". Raw input tallies are vanity metrics; do not promote them.
+
+Input metrics earn a surface ONLY when they are the ROTATED,
+eigenvector inputs — the few causal drivers that actually produce the
+outcome — and each must be tied to the outcome it drives. Examples:
+"each muscle group hit 2x/week" is a legitimate eigenvector input
+(it drives steady progress); "sets_total this week" is not. The
+current per-lift day targets (bench_days 2, squat_days 2...) are
+frequency eigenvectors for the big lifts; a generalized muscle-group
+coverage metric would be the same idea extended. When adding any new
+metric, ask: is this an output, or a causal input with a named
+outcome? If neither, it doesn't ship.
+
 ## Repo map
 
 ```

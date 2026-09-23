@@ -541,12 +541,17 @@ class _HomeScreenState extends State<HomeScreen> {
               ViewSchema? statusView;
               ViewSchema? dashStrengthView;
               ViewSchema? dashClimbingView;
+              ViewSchema? dashMealsView;
+              ViewSchema? dashCardioView;
               for (final v in data.views) {
                 if (v.name == 'weight') weightView = v;
                 if (v.name == 'program_status') statusView = v;
                 if (v.name == 'strength') dashStrengthView = v;
                 // kaya_ascents — the LIVE this-week climb count.
                 if (v.name == 'climbing') dashClimbingView = v;
+                // Driver checklist sources: protein floor + 4x4.
+                if (v.name == 'meals') dashMealsView = v;
+                if (v.name == 'cardio') dashCardioView = v;
               }
               final programProvider = github == null
                   ? null
@@ -757,6 +762,18 @@ class _HomeScreenState extends State<HomeScreen> {
                         // has no climbing rows (fix 2026-09-22).
                         climbingRepo: dashboardRepoFor(
                           dashClimbingView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
+                        mealsView: dashMealsView,
+                        mealsRepo: dashboardRepoFor(
+                          dashMealsView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
+                        cardioView: dashCardioView,
+                        cardioRepo: dashboardRepoFor(
+                          dashCardioView,
                           readOnlyRepo: data.readOnlyRepo,
                           forView: data.registry.forView,
                         ),

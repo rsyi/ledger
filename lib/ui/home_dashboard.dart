@@ -12,7 +12,17 @@
 ///
 /// CONDENSED GRID (below the hero — layout decision 2026-09-21): the
 /// old 2x2 four-axis grid folds to STRENGTH + a full-width THIS WEEK
-/// strip (EXECUTION and ENGINE merged; one merged detail sheet). The
+/// strip (EXECUTION and ENGINE merged; one merged detail sheet).
+///
+/// THIS WEEK (redesign 2026-09-22, output>>input principle): when
+/// dashboards.yaml declares `weekly_drivers:` for the current phase,
+/// the strip renders the DRIVER CHECKLIST (services/week_drivers.dart)
+/// — the phase's causal inputs, each tied to a named outcome — instead
+/// of activity tallies; `sets`/`near-max` quotas are gone from the
+/// surface (working_sets stays a program_status/flags concern). The
+/// climb driver carries the kaya-snapshot honesty tag ("as of …")
+/// when the import predates the accounting week. No weekly_drivers →
+/// the pre-redesign quota strip renders unchanged. The
 /// BODY card is dropped in hero mode — the hero's weight row carries
 /// its 7d avg + rate + target + verdict and taps through to the same
 /// Program screen. BACK-COMPAT: no `phases:` section (or no declared
@@ -95,6 +105,7 @@ import '../services/program_metrics.dart'
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/warehouse_connector.dart';
+import '../services/week_drivers.dart';
 import '../services/weight_series.dart';
 import '../services/wilks.dart'
     show
@@ -136,6 +147,16 @@ class HomeDashboard extends StatefulWidget {
   final ViewSchema? climbingView;
   final WarehouseConnector? climbingRepo;
 
+  /// meals view + ledger connector — feeds the driver checklist's
+  /// protein floor (daily-avg g/lb). Null → that driver stays pending.
+  final ViewSchema? mealsView;
+  final WarehouseConnector? mealsRepo;
+
+  /// cardio view + ledger connector — feeds the driver checklist's
+  /// 4x4 cadence. Null → that driver stays pending.
+  final ViewSchema? cardioView;
+  final WarehouseConnector? cardioRepo;
+
   /// dashboards.yaml provider (shared 1 h cache) — feeds the hero's
   /// `phases:` eigenvector config. Null → no hero, legacy grid.
   final DomainConfigProvider? dashboards;
@@ -164,6 +185,10 @@ class HomeDashboard extends StatefulWidget {
     this.strengthRepo,
     this.climbingView,
     this.climbingRepo,
+    this.mealsView,
+    this.mealsRepo,
+    this.cardioView,
+    this.cardioRepo,
     this.dashboards,
     this.onOpenProgram,
     this.onOpenWeekPlan,
@@ -300,6 +325,12 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// refresh; the nightly status tab keeps owning completed weeks.
   late Future<LiveWeekCounts?> _live;
 
+  /// Per-phase driver checklist (output>>input redesign 2026-09-22):
+  /// dashboards.yaml `weekly_drivers:` evaluated against local rows.
+  /// Null → no drivers declared for the phase; the old quota strip
+  /// renders unchanged.
+  late Future<List<DriverEval>?> _drivers;
+
   // Derived per-card futures.
   late Future<PhaseHeroData?> _hero;
   late Future<_BodyData?> _body;
@@ -345,6 +376,7 @@ class HomeDashboardState extends State<HomeDashboard> {
     _strengthRows = _loadStrengthRows();
     _climbDates = _loadClimbDates();
     _live = _computeLive();
+    _drivers = _computeDrivers();
     _hero = _computeHero();
     _body = _computeBody();
     _strength = _computeStrength();
@@ -358,7 +390,9 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// reality).
   Future<void> reload() async {
     setState(() => _startLoad(force: true));
-    await Future.wait([_hero, _body, _strength, _exec, _engine, _live]);
+    await Future.wait([
+      _hero, _body, _strength, _exec, _engine, _live, _drivers, //
+    ]);
   }
 
   static Future<T?> _guard<T>(Future<T?> Function() fn) async {
@@ -451,6 +485,92 @@ class HomeDashboardState extends State<HomeDashboard> {
     return liveWeekCounts(
       strengthRows: rows,
       climbingDates: climbs,
+      today: _today,
+      weekStartDay: await _weekStartDay(),
+    );
+  }
+
+  /// 4x4 cardio session dates. Mirrors the nightly rollup's type
+  /// filter (tool/program_status_update.dart): treadmill / bike /
+  /// stairmaster (or untyped legacy rows) count; other modalities
+  /// (outdoor running) don't. Errors degrade to empty → pending.
+  Future<List<DateTime>> _loadCardioDates() async {
+    if (widget.cardioRepo == null || widget.cardioView == null) {
+      return const [];
+    }
+    const fourByFourTypes = {'treadmill', 'bike', 'stairmaster'};
+    try {
+      final recs = await widget.cardioRepo!.list(widget.cardioView!);
+      final out = <DateTime>[];
+      for (final r in recs) {
+        final type = r['type']?.toString().trim().toLowerCase() ?? '';
+        if (type.isNotEmpty && !fourByFourTypes.contains(type)) continue;
+        final raw = r['date'];
+        final d = raw is DateTime
+            ? raw
+            : DateTime.tryParse(raw?.toString() ?? '');
+        if (d != null) out.add(d);
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Meals → calendar day → total protein grams. Errors degrade to
+  /// empty → the protein driver stays pending, never lies.
+  Future<Map<DateTime, double>> _loadProteinByDay() async {
+    if (widget.mealsRepo == null || widget.mealsView == null) {
+      return const {};
+    }
+    try {
+      final recs = await widget.mealsRepo!.list(widget.mealsView!);
+      final out = <DateTime, double>{};
+      for (final r in recs) {
+        final raw = r['eaten_at'];
+        final s = raw?.toString() ?? '';
+        final d = raw is DateTime
+            ? raw
+            : DateTime.tryParse(s) ??
+                  DateTime.tryParse(s.split(' ').first);
+        final g = asNum(r['protein_g']);
+        if (d == null || g == null) continue;
+        final day = DateTime(d.year, d.month, d.day);
+        out[day] = (out[day] ?? 0) + g;
+      }
+      return out;
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// Driver checklist (output>>input principle): dashboards.yaml
+  /// `weekly_drivers:` for the declared phase, evaluated live against
+  /// strength (top singles, frequency), meals (protein), the kaya
+  /// snapshot (climb, with staleness honesty) and cardio (4x4) over
+  /// the current accounting week. Null → old quota strip.
+  Future<List<DriverEval>?> _computeDrivers() async {
+    final raw = await _guard(() async => widget.dashboards?.loadRaw());
+    final byPhase = parseWeeklyDrivers(raw);
+    if (byPhase == null) return null;
+    final docs = await _docs;
+    final phase = currentVersion(docs?.phase)?['value']?.toString();
+    final configs = phase == null ? null : byPhase[phase];
+    if (configs == null || configs.isEmpty) return null;
+    final rows = await _strengthRows;
+    final daily = (await _weights)?.daily ?? const <WeightRow>[];
+    final bw =
+        observedWeightStats(daily, _today).bw7dAvg ??
+        contemporaneousBodyweightLbs(daily, _today);
+    return evaluateWeekDrivers(
+      configs: configs,
+      inputs: WeekDriverInputs(
+        graded: rows.isEmpty ? const [] : gradeSets(rows),
+        climbingDates: await _climbDates,
+        cardioDates: await _loadCardioDates(),
+        proteinByDay: await _loadProteinByDay(),
+        bodyweightLb: bw,
+      ),
       today: _today,
       weekStartDay: await _weekStartDay(),
     );
@@ -1251,6 +1371,7 @@ class HomeDashboardState extends State<HomeDashboard> {
   Future<void> _openWeekSheet() async {
     final d = await _exec;
     final e = await _engine;
+    final drivers = await _drivers;
     final row = d?.week?.row;
     final live = d?.live;
     final t = d?.targets ?? const <String, Object?>{};
@@ -1269,46 +1390,55 @@ class HomeDashboardState extends State<HomeDashboard> {
 
     final flags = row?['flags']?.toString() ?? '';
     final ff = e?.lastFourByFour;
+    // Driver mode (output>>input redesign): one entry per driver with
+    // its causal story. The old quota entries only render when no
+    // weekly_drivers are declared (back-compat).
+    final quotaEntries = drivers != null && drivers.isNotEmpty
+        ? [for (final dr in drivers) _driverEntry(dr)]
+        : [
+            _DetailEntry(
+              label: 'Sets',
+              value: live != null
+                  ? fmt(live.workingSets, t['working_sets'])
+                  : done('working_sets', t['working_sets']),
+              explain:
+                  'Working sets this week — sets at ≥ 80% of your '
+                  'reference e1RM. $liveSource The target is the '
+                  'program\'s targets-in-force (a cut has no volume '
+                  'floor).',
+            ),
+            _DetailEntry(
+              label: 'Near-max',
+              value: live != null
+                  ? fmt(live.nearMaxSets, t['near_max_sets'])
+                  : done('near_max_sets', t['near_max_sets']),
+              explain:
+                  'Sets at ≥ 95% effort with reps ≤ 8 — the '
+                  'heavy quota (on the cut: one top single per lift).',
+            ),
+            _DetailEntry(
+              label: 'Bench days',
+              value: live != null
+                  ? fmt(live.benchDays, t['bench_days'])
+                  : done('bench_days', t['bench_days']),
+              explain:
+                  'Distinct days with bench sets this week. Twice is '
+                  'the rule in every phase.',
+            ),
+            _DetailEntry(
+              label: 'Climb',
+              value: liveClimb != null
+                  ? fmt(liveClimb, e?.climbTarget)
+                  : done('climbing_sessions', e?.climbTarget),
+              explain:
+                  'Climbing sessions this week vs the block\'s '
+                  'allowance from the program (kaya_ascents dates).',
+            ),
+          ];
     await _showDetailSheet(
       title: 'This week',
       entries: [
-        _DetailEntry(
-          label: 'Sets',
-          value: live != null
-              ? fmt(live.workingSets, t['working_sets'])
-              : done('working_sets', t['working_sets']),
-          explain:
-              'Working sets this week — sets at ≥ 80% of your '
-              'reference e1RM. $liveSource The target is the program\'s '
-              'targets-in-force (a cut has no volume floor).',
-        ),
-        _DetailEntry(
-          label: 'Near-max',
-          value: live != null
-              ? fmt(live.nearMaxSets, t['near_max_sets'])
-              : done('near_max_sets', t['near_max_sets']),
-          explain:
-              'Sets at ≥ 95% effort with reps ≤ 8 — the '
-              'heavy quota (on the cut: one top single per lift).',
-        ),
-        _DetailEntry(
-          label: 'Bench days',
-          value: live != null
-              ? fmt(live.benchDays, t['bench_days'])
-              : done('bench_days', t['bench_days']),
-          explain:
-              'Distinct days with bench sets this week. Twice is '
-              'the rule in every phase.',
-        ),
-        _DetailEntry(
-          label: 'Climb',
-          value: liveClimb != null
-              ? fmt(liveClimb, e?.climbTarget)
-              : done('climbing_sessions', e?.climbTarget),
-          explain:
-              'Climbing sessions this week vs the block\'s allowance '
-              'from the program (kaya_ascents dates).',
-        ),
+        ...quotaEntries,
         _DetailEntry(
           label: '4x4 max HR',
           value: ff == null
@@ -1338,6 +1468,36 @@ class HomeDashboardState extends State<HomeDashboard> {
     );
   }
 
+  /// One driver's detail-sheet entry: value (+ per-lift ticks, + the
+  /// staleness tag) and the one-line causal story.
+  _DetailEntry _driverEntry(DriverEval d) {
+    final ticks = d.ticks.isEmpty
+        ? ''
+        : ' · ${d.ticks.map(_tickText).join(' ')}';
+    final stale = d.staleAsOf == null
+        ? ''
+        : ' · as of ${DateFormat('MMM d').format(d.staleAsOf!)}';
+    final staleExplain = d.staleAsOf == null
+        ? ''
+        : ' The Kaya snapshot\'s newest ascent predates this week — '
+              'this count can\'t see newer climbs until you re-export '
+              '(Integrations → Kaya → Sync).';
+    return _DetailEntry(
+      label: d.label,
+      value: '${d.value}$ticks$stale',
+      explain:
+          'Why this matters: ${d.config.why ?? '—'} '
+          'Drives: ${d.config.outcome ?? '—'}.$staleExplain',
+    );
+  }
+
+  static String _tickText(DriverTick t) {
+    final letter = t.lift.isEmpty ? '?' : t.lift[0].toUpperCase();
+    return t.target > 1
+        ? '$letter ${t.count}/${t.target}'
+        : '$letter${t.done ? '✓' : '·'}';
+  }
+
   /// Full-width compact strip: the week's four quotas side by side +
   /// today's template line. Replaces the EXECUTION and ENGINE cards in
   /// the hero layout; their explainer entries merge into one sheet.
@@ -1355,13 +1515,21 @@ class HomeDashboardState extends State<HomeDashboard> {
         },
       ),
       child: FutureBuilder<List<Object?>>(
-        future: Future.wait<Object?>([_exec, _engine]),
+        future: Future.wait<Object?>([_exec, _engine, _drivers]),
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
             return const _Dim('…');
           }
           final d = snap.data?[0] as _ExecData?;
           final e = snap.data?[1] as _EngineData?;
+          // DRIVER CHECKLIST (output>>input redesign 2026-09-22): when
+          // the phase declares weekly_drivers, the strip renders the
+          // causal inputs — activity tallies (sets / near-max) are
+          // gone; working_sets stays a program_status/flags concern.
+          final drivers = snap.data?[2] as List<DriverEval>?;
+          if (drivers != null && drivers.isNotEmpty) {
+            return _driverChecklist(context, drivers, e?.templateLine);
+          }
           final week = d?.week ?? e?.week;
           final live = d?.live;
           if (week == null && live == null) {
@@ -1435,6 +1603,38 @@ class HomeDashboardState extends State<HomeDashboard> {
           );
         },
       ),
+    );
+  }
+
+  /// The driver checklist: one pill per driver (label + tick/progress,
+  /// tinted met/pending/violated), today's template line kept below.
+  Widget _driverChecklist(
+    BuildContext context,
+    List<DriverEval> drivers,
+    String? templateLine,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [for (final d in drivers) _DriverPill(eval: d)],
+        ),
+        if (templateLine != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Today: $templateLine',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -2189,6 +2389,64 @@ class _SparklinePainter extends CustomPainter {
 
 /// "wk of Sep 14" note shown when the nightly hasn't written the current
 /// week's status row yet and the card falls back to the newest one.
+/// One driver pill: label + tick/progress, tinted by status — green
+/// met, neutral pending, error-tinted violated (a breached cap/floor).
+/// Per-lift drivers render tick letters (S✓ B✓ D· P✓ / S 1/2 …); the
+/// stale climb count wears its "as of `last import`" tag.
+class _DriverPill extends StatelessWidget {
+  final DriverEval eval;
+  const _DriverPill({required this.eval});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (bg, fg) = switch (eval.status) {
+      DriverStatus.met => (
+        Colors.green.withValues(alpha: 0.18),
+        Colors.green.shade800,
+      ),
+      DriverStatus.pending => (
+        scheme.surfaceContainerHighest,
+        scheme.onSurfaceVariant,
+      ),
+      DriverStatus.violated => (
+        scheme.errorContainer,
+        scheme.onErrorContainer,
+      ),
+    };
+    final detail = eval.ticks.isNotEmpty
+        ? eval.ticks.map(HomeDashboardState._tickText).join(' ')
+        : eval.staleAsOf != null
+        ? '${eval.value} · as of '
+              '${DateFormat('MMM d').format(eval.staleAsOf!)}'
+        : eval.value;
+    final style = Theme.of(context).textTheme.labelSmall;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text.rich(
+        TextSpan(
+          text: '${eval.label} ',
+          style: style?.copyWith(color: scheme.onSurfaceVariant),
+          children: [
+            TextSpan(
+              text: detail,
+              style: style?.copyWith(
+                color: fg,
+                fontWeight: FontWeight.w700,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _WeekOfNote extends StatelessWidget {
   final StatusWeek week;
   const _WeekOfNote({required this.week});

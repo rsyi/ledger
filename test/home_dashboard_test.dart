@@ -466,6 +466,91 @@ phases:
     expect(openedProgram, isTrue);
   });
 
+  testWidgets('weekly_drivers → THIS WEEK renders the driver checklist '
+      'and the activity tallies are gone', (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestWeightCache();
+    const dashYamlWithDrivers = '''
+$dashYamlWithPhases
+    weekly_drivers:
+      - id: top_single_per_lift
+        label: singles
+        lifts: [squat, bench, deadlift, press]
+        outcome: "Wilks preserved"
+        why: "One heavy single per lift holds neural strength."
+      - id: bench_frequency
+        label: bench 2x
+        target: 2
+        outcome: "bench holds"
+        why: "Bench detrains fastest."
+      - id: climbing_cap
+        label: climb
+        cap: 2
+        outcome: "recovery budget"
+        why: "A third session taxes lift recovery."
+''';
+    Future<String?> driverFetcher(String path) async => switch (path) {
+          'coach/phase.yaml' => phaseYaml,
+          'coach/program.yaml' => programYaml,
+          'app/dashboards.yaml' => dashYamlWithDrivers,
+          _ => null,
+        };
+    // One bench single this week (its own §2.5 reference → near-max);
+    // two climb session days — at the cap, which is fine.
+    final strengthRepo = _FakeStatusRepo([
+      {
+        'date': DateTime(2026, 9, 21),
+        'exercise': 'Flat Barbell Bench Press',
+        'weight': 225,
+        'reps': 1,
+        'rpe': 8,
+      },
+    ]);
+    final climbingRepo = _FakeStatusRepo([
+      {'date': DateTime(2026, 9, 21)},
+      {'date': DateTime(2026, 9, 22)},
+      {'date': DateTime(2026, 9, 22)},
+    ]);
+    final climbingView = ViewSchema(
+      name: 'climbing',
+      datasource: 'gsheets',
+      table: 'kaya_ascents',
+      entities: const [],
+      measures: const [],
+      dimensions: [
+        Dimension(name: 'date', type: DimensionType.date, expr: 'date'),
+      ],
+      readOnly: true,
+    );
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(driverFetcher),
+      dashboards: DomainConfigProvider(driverFetcher),
+      strengthView: _strengthView,
+      strengthRepo: strengthRepo,
+      climbingView: climbingView,
+      climbingRepo: climbingRepo,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+
+    expect(find.text('THIS WEEK'), findsOneWidget);
+    // Driver pills: per-lift ticks (bench done, others open), the
+    // bench-frequency count, and the climb CAP at 2/≤2 (fine).
+    expect(
+      find.textContaining('singles', findRichText: true),
+      findsOneWidget,
+    );
+    expect(find.textContaining('B✓', findRichText: true), findsOneWidget);
+    expect(find.textContaining('S·', findRichText: true), findsOneWidget);
+    expect(
+      find.textContaining('2/≤2', findRichText: true),
+      findsOneWidget,
+    );
+    // Output>>input: the activity tallies are not on the strip.
+    expect(find.text('sets'), findsNothing);
+    expect(find.text('near-max'), findsNothing);
+  });
+
   testWidgets('no phases section → legacy four-card grid unchanged',
       (tester) async {
     ProgramProvider.clearCache();

@@ -436,6 +436,107 @@ void main() {
     });
   });
 
+  group('wilksWeekDecomposition (hero sheet, 2026-09-25)', () {
+    // Week of Mon 2026-09-14: deadlift trained; week of Mon 2026-09-21:
+    // squat + bench trained, deadlift CARRIED from the 14th's week.
+    final rows = [
+      _set('2026-09-14', 'Barbell Deadlift', 315, 1),
+      _set('2026-09-15', 'Barbell Squat', 285, 3),
+      _set('2026-09-15', 'Flat Barbell Bench Press', 215, 2),
+      _set('2026-09-21', 'Barbell Squat', 295, 1),
+      _set('2026-09-22', 'Flat Barbell Bench Press', 225, 1),
+    ];
+    final weighIns = [
+      _bw('2026-09-14', 160),
+      _bw('2026-09-21', 159),
+    ];
+
+    test('weeks expose per-lift lbs and the week each value was trained',
+        () {
+      final weeks = weeklyWilksSeries(rows, weighIns);
+      expect(weeks, hasLength(2));
+      final w2 = weeks.last;
+      expect(
+        w2.liftLbs,
+        {'squat': 295.0, 'bench': 225.0, 'deadlift': 315.0},
+      );
+      // Trained-this-week lifts point at this week; the carry points at
+      // the week its weight was actually lifted.
+      expect(w2.liftTrainedWeek['squat'], DateTime(2026, 9, 21));
+      expect(w2.liftTrainedWeek['bench'], DateTime(2026, 9, 21));
+      expect(w2.liftTrainedWeek['deadlift'], DateTime(2026, 9, 14));
+      expect(w2.carried, ['deadlift']);
+    });
+
+    test('parts are exact kg×coeff shares that sum to the stat', () {
+      final w2 = weeklyWilksSeries(rows, weighIns).last;
+      final parts = wilksWeekDecomposition(w2);
+      expect([for (final p in parts) p.lift], wilksLifts);
+      final coeff = wilks2020MaleCoeff(159 * kgPerLb);
+      expect(parts[0].points, closeTo(295 * kgPerLb * coeff, 1e-9));
+      expect(parts[1].points, closeTo(225 * kgPerLb * coeff, 1e-9));
+      expect(parts[2].points, closeTo(315 * kgPerLb * coeff, 1e-9));
+      expect(
+        parts.fold<double>(0, (s, p) => s + p.points),
+        closeTo(w2.wilks, 1e-9),
+      );
+      // Carry tagging: only the untrained lift carries a source week.
+      expect(parts[0].carriedFrom, isNull);
+      expect(parts[1].carriedFrom, isNull);
+      expect(parts[2].carriedFrom, DateTime(2026, 9, 14));
+    });
+
+    test('displayed 1dp parts always sum to the displayed 1dp total', () {
+      // Property check across a spread of totals and bodyweights: the
+      // largest-remainder display rounding keeps the sheet's sum line
+      // exact — three independently rounded parts would drift by up to
+      // ±0.15.
+      for (var s = 200.0; s <= 360; s += 7) {
+        for (var bw = 140.0; bw <= 205; bw += 11) {
+          final lifts = {
+            'squat': s,
+            'bench': s * 0.63,
+            'deadlift': s * 1.117,
+          };
+          final total = lifts.values.fold<double>(0, (a, b) => a + b);
+          final coeff = wilks2020MaleCoeff(bw * kgPerLb);
+          final week = WilksWeek(
+            weekStart: DateTime(2026, 9, 21),
+            wilks: total * kgPerLb * coeff,
+            totalLbs: total,
+            bodyweightLbs: bw,
+            liftLbs: lifts,
+          );
+          final parts = wilksWeekDecomposition(week);
+          final displayed =
+              parts.fold<double>(0, (a, p) => a + p.displayPoints);
+          expect(
+            displayed,
+            closeTo((week.wilks * 10).round() / 10, 1e-9),
+            reason: 'total $total lb at $bw lb bw',
+          );
+          for (final p in parts) {
+            expect(p.displayPoints, closeTo(p.points, 0.11),
+                reason: 'display value must stay within one tenth-step '
+                    'of the exact share');
+          }
+        }
+      }
+    });
+
+    test('empty on weeks without per-lift values (back-compat)', () {
+      // Weeks built without liftLbs (older call sites / hand-rolled
+      // fixtures) decompose to nothing rather than guessing.
+      final week = WilksWeek(
+        weekStart: DateTime(2026, 9, 21),
+        wilks: 320.5,
+        totalLbs: 835,
+        bodyweightLbs: 159,
+      );
+      expect(wilksWeekDecomposition(week), isEmpty);
+    });
+  });
+
   group('wilksPointsLb', () {
     // Independently computed (python3, direct power form, 2026-09-22):
     //   315 lb at 165 lb bw → 121.97756160079403

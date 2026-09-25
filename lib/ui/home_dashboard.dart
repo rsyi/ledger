@@ -7,8 +7,18 @@
 /// inputs_delivered. Each row: a big verdict chip (green agree / amber
 /// drifting / red act), the one number that matters, and a mini
 /// sparkline (7-day-avg bodyweight / weekly Wilks with reference+floor
-/// guides). Row taps NAVIGATE: weight → Program, strength → the
-/// strength domain screen, inputs → the status ledger.
+/// guides). Row taps: weight → Program, inputs → the status ledger
+/// (direct navigation); the STRENGTH row opens its DETAIL SHEET first
+/// (2026-09-25 — tap-model parity with the cards): the weekly
+/// actual-max Wilks DECOMPOSED into its three constituent lifts
+/// (actual weight or a dated "carried from" tag, per-lift kg×coeff
+/// points,
+/// an exact sum line matching the stat) plus the basis note that
+/// reconciles it against the STRENGTH card's 14-day e1RM estimates —
+/// the user tried to sum the card's per-lift ·w tags into the hero
+/// number and couldn't (e1RM-vs-actual + 14d-vs-weekly, both by
+/// design). The sheet's "Open Strength" action navigates on to the
+/// strength domain screen.
 ///
 /// CONDENSED GRID (below the hero — layout decision 2026-09-21): the
 /// old 2x2 four-axis grid folds to STRENGTH + a full-width THIS WEEK
@@ -109,10 +119,12 @@ import '../services/week_drivers.dart';
 import '../services/weight_series.dart';
 import '../services/wilks.dart'
     show
+        WilksLiftPart,
         WilksWeek,
         contemporaneousBodyweightLbs,
         weeklyWilksSeries,
-        wilksPointsLb;
+        wilksPointsLb,
+        wilksWeekDecomposition;
 import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
 
@@ -776,7 +788,7 @@ class HomeDashboardState extends State<HomeDashboard> {
   Widget _heroLayout(BuildContext context, PhaseHeroData hero) {
     return Column(
       children: [
-        _HeroCard(hero: hero, onNav: _navigate),
+        _HeroCard(hero: hero, onRowTap: _onHeroRowTap),
         const SizedBox(height: 8),
         _strengthCard(context),
         const SizedBox(height: 8),
@@ -811,6 +823,18 @@ class HomeDashboardState extends State<HomeDashboard> {
         ),
       ],
     );
+  }
+
+  /// Hero row taps: the Wilks rows (wilks_stability / strength_gain)
+  /// open their detail sheet first — the weekly decomposition is the
+  /// whole point of the tap (2026-09-25); everything else navigates
+  /// straight to the owning screen as before.
+  void _onHeroRowTap(EigenRowData row) {
+    if (row.id == 'wilks_stability' || row.id == 'strength_gain') {
+      _openHeroWilksSheet(row);
+      return;
+    }
+    _navigate(row.nav);
   }
 
   /// Hero row taps navigate straight to the owning screen.
@@ -1038,6 +1062,73 @@ class HomeDashboardState extends State<HomeDashboard> {
       // confirmed/overridden (moved out of Integrations 2026-09-21).
       actionLabel: widget.onOpenProgram == null ? null : 'Open Program',
       onAction: widget.onOpenProgram,
+    );
+  }
+
+  /// The hero STRENGTH row's detail sheet (2026-09-25): the weekly
+  /// actual-max Wilks stat decomposed into its three constituent lifts
+  /// + the basis note vs the STRENGTH card. Same series computation as
+  /// [_computeHero] (rows/weights/week-start all off the shared
+  /// futures), so the sum line and the hero stat can never disagree.
+  /// No computable week → fall back to the row's direct navigation.
+  Future<void> _openHeroWilksSheet(EigenRowData row) async {
+    final rows = await _strengthRows;
+    final daily = (await _weights)?.daily ?? const <WeightRow>[];
+    final wsDay = await _weekStartDay();
+    final weeks = rows.isEmpty || daily.isEmpty
+        ? const <WilksWeek>[]
+        : weeklyWilksSeries(rows, daily, through: _today, weekStartDay: wsDay);
+    final parts = weeks.isEmpty
+        ? const <WilksLiftPart>[]
+        : wilksWeekDecomposition(weeks.last);
+    if (parts.isEmpty) {
+      _navigate(row.nav); // nothing to decompose — old tap behavior
+      return;
+    }
+    final week = weeks.last;
+    String liftLine(WilksLiftPart p) =>
+        '${p.lift} ${fmtLb(p.weightLbs.roundToDouble())}'
+        '${p.carriedFrom == null ? '' : ' (carried from ${DateFormat('MMM d').format(p.carriedFrom!)})'}'
+        ' → ${p.displayPoints.toStringAsFixed(1)}w';
+    final nav = widget.onOpenStrengthDomain ?? widget.onOpenProgram;
+    await _showDetailSheet(
+      title: 'Strength — weekly Wilks',
+      entries: [
+        _DetailEntry(
+          label: 'this week',
+          value: row.detail,
+          explain:
+              'Weekly ACTUAL-max Wilks: per lift, the heaviest weight '
+              'you actually lifted this accounting week (any reps ≥ 1 '
+              '— no Epley, no estimates; untrained lifts carry the '
+              'last trained week\'s weight), summed and priced at the '
+              'week\'s average bodyweight '
+              '(${week.bodyweightLbs.toStringAsFixed(1)} lb). The '
+              'floor hangs off the phase-start reference.',
+        ),
+        _DetailEntry(
+          label: 'decomposition',
+          value: [
+            for (final p in parts) liftLine(p),
+            '= ${week.wilks.toStringAsFixed(1)}',
+          ].join('\n'),
+          explain:
+              'The three lifts the stat sums — each line is the '
+              'lift\'s weight_kg × the WILKS-2020 coefficient at this '
+              'week\'s bodyweight. "carried from" = not trained this '
+              'week. The lines sum to the stat exactly.',
+        ),
+        const _DetailEntry(
+          label: 'vs the STRENGTH card',
+          value: 'card: e1RM · this stat: actual',
+          explain:
+              'The STRENGTH card\'s per-lift numbers are 14-day best '
+              'e1RM ESTIMATES (always ≥ actual) — they will not sum '
+              'to this weekly actual-lift total.',
+        ),
+      ],
+      actionLabel: nav == null ? null : 'Open Strength',
+      onAction: nav == null ? null : () => _navigate(row.nav),
     );
   }
 
@@ -2121,9 +2212,12 @@ String _eigenChipText(EigenVerdict v) => switch (v) {
 /// eigenvector (verdict chip · the one number · sparkline · chevron).
 class _HeroCard extends StatelessWidget {
   final PhaseHeroData hero;
-  final void Function(EigenNav) onNav;
 
-  const _HeroCard({required this.hero, required this.onNav});
+  /// Row-tap handler — the state decides sheet-vs-navigate per row id
+  /// (the Wilks rows open the decomposition sheet, 2026-09-25).
+  final void Function(EigenRowData) onRowTap;
+
+  const _HeroCard({required this.hero, required this.onRowTap});
 
   @override
   Widget build(BuildContext context) {
@@ -2168,7 +2262,7 @@ class _HeroCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             for (final row in hero.rows)
-              _EigenRowTile(row: row, onTap: () => onNav(row.nav)),
+              _EigenRowTile(row: row, onTap: () => onRowTap(row)),
           ],
         ),
       ),
@@ -2176,8 +2270,9 @@ class _HeroCard extends StatelessWidget {
   }
 }
 
-/// One eigenvector row inside the hero. Tap navigates to the owning
-/// screen (Program / strength domain / status ledger).
+/// One eigenvector row inside the hero. Tap behavior is the state's
+/// call: the Wilks rows open the decomposition sheet, the rest
+/// navigate to the owning screen (Program / status ledger).
 class _EigenRowTile extends StatelessWidget {
   final EigenRowData row;
   final VoidCallback onTap;

@@ -4,8 +4,12 @@ import 'package:airledger/models/database_config.dart';
 import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/domain_config.dart';
 import 'package:airledger/services/program_provider.dart';
+import 'package:airledger/services/program_metrics.dart'
+    show StrengthRow, WeightRow;
 import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
+import 'package:airledger/services/wilks.dart'
+    show weeklyWilksSeries, wilksWeekDecomposition;
 import 'package:airledger/ui/home_dashboard.dart';
 
 /// Serves canned program_status rows. No network.
@@ -464,6 +468,121 @@ phases:
     await tester.pumpAndSettle();
     await tester.tap(find.text('WEIGHT'));
     expect(openedProgram, isTrue);
+  });
+
+  testWidgets('hero STRENGTH row opens the weekly-Wilks sheet: the '
+      'decomposition lines sum to the stat, carries are dated, the '
+      'basis note reconciles the STRENGTH card', (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestWeightCache();
+    // Weigh-ins covering Aug 27 → Sep 23; Monday weeks (no week_start
+    // in the fixture program).
+    final weighInRecords = [
+      for (var i = 0; i < 28; i++)
+        {
+          'date': DateTime(2026, 8, 27).add(Duration(days: i)),
+          'weight_lbs': 165.0 - i * (0.75 / 7),
+        },
+    ];
+    // Deadlift trained the week of Sep 14 only → the current week
+    // (Sep 21) CARRIES it; squat + bench are this week's actual lifts.
+    final strengthRecords = [
+      {
+        'date': DateTime(2026, 9, 14),
+        'exercise': 'Barbell Deadlift',
+        'weight': 315,
+        'reps': 1,
+        'rpe': 8,
+      },
+      {
+        'date': DateTime(2026, 9, 21),
+        'exercise': 'Barbell Squat',
+        'weight': 295,
+        'reps': 1,
+        'rpe': 8,
+      },
+      {
+        'date': DateTime(2026, 9, 22),
+        'exercise': 'Flat Barbell Bench Press',
+        'weight': 225,
+        'reps': 2,
+        'rpe': 8,
+      },
+    ];
+    var openedStrength = false;
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(fetcher),
+      dashboards: DomainConfigProvider(fetcher),
+      weightView: _weightView,
+      weightRepo: _FakeStatusRepo(weighInRecords),
+      strengthView: _strengthView,
+      strengthRepo: _FakeStatusRepo(strengthRecords),
+      onOpenStrengthDomain: () => openedStrength = true,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+
+    // Expected numbers straight from the tested pure engine — the same
+    // inputs the dashboard feeds it.
+    final weeks = weeklyWilksSeries(
+      [
+        for (final r in strengthRecords)
+          StrengthRow(
+            date: r['date'] as DateTime,
+            exercise: r['exercise'] as String,
+            weight: (r['weight'] as num).toDouble(),
+            reps: (r['reps'] as num).toInt(),
+          ),
+      ],
+      [
+        for (final r in weighInRecords)
+          WeightRow(
+            date: r['date'] as DateTime,
+            weightLbs: r['weight_lbs'] as double,
+          ),
+      ],
+      through: DateTime(2026, 9, 23),
+    );
+    final week = weeks.last;
+    final parts = wilksWeekDecomposition(week);
+    final stat = week.wilks.toStringAsFixed(1);
+    // Sanity on the fixture itself: displayed parts sum to the stat.
+    expect(
+      parts.fold<double>(0, (s, p) => s + p.displayPoints),
+      closeTo(double.parse(stat), 1e-9),
+    );
+
+    // The hero row shows the stat…
+    expect(find.textContaining('Wilks $stat'), findsOneWidget);
+
+    // …and tapping the row opens the sheet (no direct navigation).
+    await tester.tap(find.text('STRENGTH').first);
+    await tester.pumpAndSettle();
+    expect(openedStrength, isFalse);
+    expect(find.text('Strength — weekly Wilks'), findsOneWidget);
+    expect(find.text('decomposition'), findsOneWidget);
+
+    // The decomposition: actual weights, dated carry, per-lift points,
+    // and the exact sum line matching the stat.
+    final decomposition = [
+      'squat 295 → ${parts[0].displayPoints.toStringAsFixed(1)}w',
+      'bench 225 → ${parts[1].displayPoints.toStringAsFixed(1)}w',
+      'deadlift 315 (carried from Sep 14) → '
+          '${parts[2].displayPoints.toStringAsFixed(1)}w',
+      '= $stat',
+    ].join('\n');
+    expect(find.text(decomposition), findsOneWidget);
+
+    // The two-surface basis note.
+    expect(
+      find.textContaining('14-day best e1RM ESTIMATES'),
+      findsOneWidget,
+    );
+
+    // The sheet's action navigates onward to the strength domain.
+    await tester.tap(find.text('Open Strength'));
+    await tester.pumpAndSettle();
+    expect(openedStrength, isTrue);
   });
 
   testWidgets('weekly_drivers → THIS WEEK renders the driver checklist '

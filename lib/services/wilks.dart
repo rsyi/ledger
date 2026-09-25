@@ -164,12 +164,26 @@ class WilksWeek {
   /// on the series' basis this week).
   final List<String> carried;
 
+  /// Per-lift values (lbs) the week's total sums, carries included —
+  /// keys are [wilksLifts]. Empty on hand-rolled weeks that never set
+  /// it; series-built weeks always carry all three (2026-09-25, the
+  /// hero sheet's decomposition source).
+  final Map<String, double> liftLbs;
+
+  /// Per lift, the start of the week its value was ACTUALLY lifted:
+  /// [weekStart] itself for lifts trained this week, an earlier week
+  /// for carries — what lets the decomposition say "carried from
+  /// Sep 14" instead of a bare "carried".
+  final Map<String, DateTime> liftTrainedWeek;
+
   const WilksWeek({
     required this.weekStart,
     required this.wilks,
     required this.totalLbs,
     required this.bodyweightLbs,
     this.carried = const [],
+    this.liftLbs = const {},
+    this.liftTrainedWeek = const {},
   });
 }
 
@@ -228,12 +242,16 @@ List<WilksWeek> weeklyWilksSeries(
 
   final out = <WilksWeek>[];
   final lifts = <String, double>{}; // carried lift values
+  final trainedWeek = <String, DateTime>{}; // week each value was lifted
   double? bw;
   for (var m = first;
       !m.isAfter(last);
       m = DateTime(m.year, m.month, m.day + 7)) {
     final trained = bestByWeek[m] ?? const <String, double>{};
     lifts.addAll(trained);
+    for (final l in trained.keys) {
+      trainedWeek[l] = m;
+    }
     final n = bwN[m];
     if (n != null) bw = bwSum[m]! / n;
     if (bw == null || wilksLifts.any((l) => !lifts.containsKey(l))) {
@@ -251,10 +269,95 @@ List<WilksWeek> weeklyWilksSeries(
           for (final l in wilksLifts)
             if (!trained.containsKey(l)) l,
         ],
+        liftLbs: Map.unmodifiable(lifts),
+        liftTrainedWeek: Map.unmodifiable(trainedWeek),
       ),
     );
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Weekly decomposition (2026-09-25 — the hero sheet's legibility fix)
+// ---------------------------------------------------------------------------
+
+/// One lift's share of a weekly Wilks total (see [wilksWeekDecomposition]).
+class WilksLiftPart {
+  /// squat | bench | deadlift, in [wilksLifts] order.
+  final String lift;
+
+  /// The actual weight (lbs) the week's total counts for this lift.
+  final double weightLbs;
+
+  /// When the value is a CARRY (the lift wasn't trained in the
+  /// decomposed week): the start of the week it was actually lifted.
+  /// Null for lifts trained this week.
+  final DateTime? carriedFrom;
+
+  /// Exact share: weight_kg × coeff(bw_kg). The three parts sum to
+  /// [WilksWeek.wilks] to floating-point precision (the coefficient is
+  /// linear in the total).
+  final double points;
+
+  /// [points] at one decimal, largest-remainder adjusted across the
+  /// parts so the DISPLAYED lines sum to the DISPLAYED 1dp total
+  /// exactly — three independently rounded parts can drift ±0.15 off
+  /// the stat, which is precisely the "numbers don't add up" complaint
+  /// this decomposition exists to kill. Each display value stays within
+  /// one tenth-step of its exact share.
+  final double displayPoints;
+
+  const WilksLiftPart({
+    required this.lift,
+    required this.weightLbs,
+    required this.carriedFrom,
+    required this.points,
+    required this.displayPoints,
+  });
+}
+
+/// Decomposes one [WilksWeek] into its three per-lift shares — the
+/// constituent lifts of the weekly actual-max Wilks stat, each priced
+/// at the week's bodyweight. Total function: weeks without [WilksWeek.
+/// liftLbs] (hand-rolled fixtures, pre-2026-09-25 constructors) yield
+/// an empty list.
+List<WilksLiftPart> wilksWeekDecomposition(WilksWeek week) {
+  if (wilksLifts.any((l) => !week.liftLbs.containsKey(l))) return const [];
+  final coeff = wilks2020MaleCoeff(week.bodyweightLbs * kgPerLb);
+  final exact = [
+    for (final l in wilksLifts) week.liftLbs[l]! * kgPerLb * coeff,
+  ];
+  // Largest-remainder rounding in tenths: round every part, then walk
+  // the residual vs the rounded TOTAL into the parts whose rounding
+  // remainders point the right way.
+  final tenths = [for (final e in exact) (e * 10).round()];
+  var diff = (week.wilks * 10).round() - tenths.fold<int>(0, (a, b) => a + b);
+  while (diff != 0) {
+    final step = diff > 0 ? 1 : -1;
+    var best = 0;
+    var bestRem = double.negativeInfinity;
+    for (var i = 0; i < exact.length; i++) {
+      final rem = (exact[i] * 10 - tenths[i]) * step;
+      if (rem > bestRem) {
+        bestRem = rem;
+        best = i;
+      }
+    }
+    tenths[best] += step;
+    diff -= step;
+  }
+  return [
+    for (var i = 0; i < wilksLifts.length; i++)
+      WilksLiftPart(
+        lift: wilksLifts[i],
+        weightLbs: week.liftLbs[wilksLifts[i]]!,
+        carriedFrom: week.carried.contains(wilksLifts[i])
+            ? week.liftTrainedWeek[wilksLifts[i]]
+            : null,
+        points: exact[i],
+        displayPoints: tenths[i] / 10,
+      ),
+  ];
 }
 
 /// One monthly Wilks point.

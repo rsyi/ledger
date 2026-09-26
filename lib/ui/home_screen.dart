@@ -61,7 +61,9 @@ const kCoachChatViewName = 'coach_chat';
 ///
 ///   HOME     the synthesis surface only: PHASE hero + STRENGTH card +
 ///            THIS WEEK strip (home_dashboard.dart) and the Coach
-///            preview row. No lists.
+///            preview row. No lists. Its app bar carries the settings
+///            gear that opens Integrations (moved out of the LOG list
+///            2026-09-25 — it is app setup, not logging).
 ///   LOG      the tracker rows, grouped by `app/dashboards.yaml` into
 ///            LOG (entry domains) and CONNECTED (integration domains —
 ///            read-friendly record lists; rows arrive via sync, with a
@@ -69,8 +71,6 @@ const kCoachChatViewName = 'coach_chat';
 ///            unclaimed views still list
 ///            under LOG so nothing becomes unreachable; missing/bad
 ///            config falls back to the flat "Ledgers" section.
-///            Integrations sits last — it is setup for the CONNECTED
-///            sources above it.
 ///   COACH    the coach threads screen embedded as the tab root (the
 ///            old pinned-row → pushed-threads flow, minus the push);
 ///            opening a thread still pushes the chat.
@@ -465,6 +465,19 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPressed: () => setState(() => _bootstrap = _initialize()),
                   tooltip: 'Reload',
                 ),
+                // Integrations (Withings, Whoop, Kaya…) as a settings
+                // gear — moved out of the LOG tab's list 2026-09-25
+                // (user: "'Integrations' doesn't seem like it should
+                // live under 'log'"): it is app setup, not logging.
+                IconButton(
+                  icon: const Icon(Icons.settings_outlined),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const IntegrationsScreen(),
+                    ),
+                  ),
+                  tooltip: 'Integrations',
+                ),
               ];
               if (snap.connectionState != ConnectionState.done) {
                 return Scaffold(
@@ -807,8 +820,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               );
 
-              // ---- LOG: entry domains + CONNECTED, Integrations last
-              // (it is setup for the CONNECTED sources above it).
+              // ---- LOG: entry domains + CONNECTED. (Integrations
+              // moved to the HOME app bar's gear 2026-09-25 — it is
+              // app setup, not logging.)
               final logTab = Scaffold(
                 appBar: AppBar(
                   title: const Text('Log'),
@@ -856,20 +870,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         readOnlyViews: readOnlyViews,
                         onOpenDomain: openDomain,
                         onOpenView: openView,
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: const Icon(Icons.sync_alt),
-                        title: const Text('Integrations'),
-                        subtitle: const Text(
-                          'Withings and other sources → ledger',
-                        ),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const IntegrationsScreen(),
-                          ),
-                        ),
                       ),
                     ],
                   ),

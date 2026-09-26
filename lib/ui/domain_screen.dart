@@ -738,7 +738,7 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
                     trailing = _note(
                       context,
                       'No records yet — this ledger fills in from '
-                      'Integrations (Log tab, bottom row).'
+                      'Integrations (gear icon, Home tab).'
                       '${_canAddManually ? '\nOr use ⋮ → "Add entry manually".' : ''}',
                     );
                   } else {

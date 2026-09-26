@@ -922,13 +922,19 @@ class _HomeScreenState extends State<HomeScreen> {
                       weightRepo: weightView == null
                           ? null
                           : data.registry.forView(weightView),
-                      // OBSERVED Wilks block: strength rows + the
-                      // wilks_series config from dashboards.yaml.
+                      // FORECAST initial state: strength history +
+                      // climbing ascents (kaya_ascents is read-only —
+                      // route through the direct-sheet repo).
                       strengthView: dashStrengthView,
                       strengthRepo: dashStrengthView == null
                           ? null
                           : data.registry.forView(dashStrengthView),
-                      dashboards: domainProvider,
+                      climbingView: dashClimbingView,
+                      climbingRepo: dashboardRepoFor(
+                        dashClimbingView,
+                        readOnlyRepo: data.readOnlyRepo,
+                        forView: data.registry.forView,
+                      ),
                       wmStore: data.wmStore,
                       onOpenWeekPlan: openWeekPlan,
                     );

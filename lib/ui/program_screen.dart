@@ -1,7 +1,8 @@
 /// Program screen — "what did I declare, what is actually happening,
-/// and do they agree?"
+/// and where does it go from here?"
 ///
-/// Four sections, deliberately separate:
+/// Four sections, deliberately separate (W3 IA, design doc
+/// `airledger/docs/superpowers/specs/2026-09-25-sim-design.md` §9):
 ///  1. DECLARED — the intent layer verbatim: phase.yaml (value,
 ///     effective_from, reason, target, exit criteria) + program.yaml's
 ///     block timeline with a you-are-here marker.
@@ -9,45 +10,41 @@
 ///     `working_max` tab via WmStore): per-lift value/variant/source,
 ///     Confirm on pending seeds, manual "Set working max…". The one
 ///     part of this screen that writes (appends) anywhere.
-///  3. OBSERVED — reality from the ledger: daily weigh-ins queried
-///     through airlayer (the `weight` view's declared `avg_weight_lbs`
-///     measure grouped by date — one averaged point per day), then the
-///     §2.5 windowed formulas from program_metrics/program_observed
-///     (7-day avg, weekly rate, 3-week change) computed in pure Dart.
-///     Below the weight chart: the Wilks block — the strength domain's
-///     monthly wilks_series (same MetricChart widget, same
-///     dashboards.yaml config, so the two screens always agree) with
-///     its cut-start reference + floor lines, plus the weekly-current
-///     stat line from the hero's wilksStability math ("Wilks 327.5 ·
-///     floor 319.3 · 0 wks below").
+///  3. FORECAST — the program simulation (ForecastSection): the
+///     observed weigh-in series anchors a dashed simulated bw
+///     trajectory (phase bands + ±daily-scatter band), then the
+///     strength e1RM/Wilks forecast, the offset-anchored climbing p75,
+///     the lever row (bulk/cut rates, climb frequency, horizon —
+///     instant synchronous re-sim), and the phase-boundary milestones.
+///     Coefficients: world_model.yaml (SchemaSync-delivered, 1 h doc
+///     cache) refit against local history with the ±50% drift guard;
+///     pull-to-refresh busts the cache and refits. This section
+///     REPLACED the old OBSERVED weight chart + Wilks block (Home's
+///     hero is the progress surface; Program owns intent + forecast).
 ///  4. VERDICT — PHASE_MISMATCH semantics: green (agree), amber
 ///     (drifting), red (three consecutive mismatch weeks — the flag
 ///     would fire).
 library;
 
-import 'package:fl_chart/fl_chart.dart';
-import 'widgets/chart_bottom_axis.dart';
-import 'widgets/chart_range.dart';
-import 'widgets/pinned_tooltip_line_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
-import '../services/domain_config.dart';
-import '../services/domain_metrics.dart';
+import '../services/doc_cache.dart';
 import '../services/home_synthesis.dart' show strengthRowFromRecord;
-import '../services/phase_eigenvectors.dart' show wilksStability;
 import '../services/program_current.dart';
 import '../services/program_metrics.dart' show StrengthRow, WeightRow;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
+import '../services/sim_fit.dart' show ClimbAscent, buildWeeklySeries;
+import '../services/sim_program.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
-import '../services/wilks.dart' show WilksWeek, weeklyWilksSeries;
 import '../services/wm_store.dart';
+import '../services/world_model.dart';
 import 'app_text.dart';
-import 'widgets/metric_chart.dart';
+import 'widgets/forecast_section.dart';
 import 'widgets/working_max_card.dart';
 
 class ProgramScreen extends StatefulWidget {
@@ -61,17 +58,17 @@ class ProgramScreen extends StatefulWidget {
   final WarehouseConnector? weightRepo;
   final ViewSchema? weightView;
 
-  /// Connector + schema for the `strength` view — feeds the OBSERVED
-  /// Wilks block (same list→strengthRowFromRecord path the domain
-  /// screen uses). Null → the block is omitted.
+  /// Connector + schema for the `strength` view — feeds the FORECAST
+  /// section's initial state (same list→strengthRowFromRecord path the
+  /// domain screen uses). Null → the forecast shows a placeholder.
   final WarehouseConnector? strengthRepo;
   final ViewSchema? strengthView;
 
-  /// dashboards.yaml provider (shared 1 h cache) — the Wilks block
-  /// reads the strength domain's `wilks_series` metric config from it
-  /// (from/floor_pct), so this screen and the strength domain always
-  /// agree. Null → the block is omitted.
-  final DomainConfigProvider? dashboards;
+  /// Connector + schema for the `climbing` view (kaya_ascents,
+  /// read-only) — the FORECAST section's observed grade p75 anchor.
+  /// Null → the climbing forecast is omitted.
+  final WarehouseConnector? climbingRepo;
+  final ViewSchema? climbingView;
 
   /// Working-max controller tabs — the CONFIGURATION section's card.
   /// Null → the section is omitted.
@@ -93,7 +90,8 @@ class ProgramScreen extends StatefulWidget {
     this.weightView,
     this.strengthRepo,
     this.strengthView,
-    this.dashboards,
+    this.climbingRepo,
+    this.climbingView,
     this.wmStore,
     this.onOpenWeekPlan,
     this.today,
@@ -110,28 +108,24 @@ class _ProgramData {
   final List<WeightRow> daily;
 
   /// Non-null when the weight query path failed (missing analytics lib,
-  /// sync error, etc.) — shown as a note in the observed section.
+  /// sync error, etc.) — shown as a note in the forecast section.
   final String? observedError;
 
-  /// Mapped strength-ledger rows for the Wilks block (empty on error /
-  /// when the build has no strength view).
-  final List<StrengthRow> strengthRows;
-
-  /// The strength domain's `wilks_series` metric config from
-  /// dashboards.yaml. Null → no Wilks block.
-  final MetricConfig? wilksConfig;
+  /// Fully assembled forecast inputs; null when the sim can't run
+  /// (missing world model / program docs / local history) — the
+  /// section renders a placeholder instead.
+  final ForecastInputs? forecast;
 
   const _ProgramData({
     required this.docs,
     required this.daily,
     this.observedError,
-    this.strengthRows = const [],
-    this.wilksConfig,
+    this.forecast,
   });
 }
 
 class _ProgramScreenState extends State<ProgramScreen> {
-  late final Future<_ProgramData?> _load;
+  late Future<_ProgramData?> _load;
   late final DateTime _today;
 
   @override
@@ -139,6 +133,16 @@ class _ProgramScreenState extends State<ProgramScreen> {
     super.initState();
     _today = widget.today ?? DateTime.now();
     _load = _fetch();
+  }
+
+  /// Pull-to-refresh: bust the shared doc cache (intent docs +
+  /// world_model.yaml) and re-run the whole load — including the
+  /// local-history refit (design §8 "the app refits on demand").
+  Future<void> _refresh() async {
+    ProgramProvider.clearCache();
+    final next = _fetch();
+    setState(() => _load = next);
+    await next;
   }
 
   Future<_ProgramData?> _fetch() async {
@@ -157,9 +161,9 @@ class _ProgramScreenState extends State<ProgramScreen> {
       repo: widget.weightRepo,
     );
 
-    // Strength rows for the Wilks block — the same raw-list →
+    // Strength rows for the sim's initial state — the same raw-list →
     // strengthRowFromRecord path the domain screen's dashboard uses.
-    // Errors degrade to an empty list (the block shows a placeholder).
+    // Errors degrade to an empty list (the section shows a placeholder).
     var strengthRows = const <StrengthRow>[];
     if (widget.strengthRepo != null && widget.strengthView != null) {
       try {
@@ -168,17 +172,24 @@ class _ProgramScreenState extends State<ProgramScreen> {
       } catch (_) {}
     }
 
-    // wilks_series config: whichever domain declares it (strength).
-    // One config source — this screen can never disagree with the
-    // strength domain's chart about the reference/floor.
-    MetricConfig? wilksConfig;
-    if (widget.dashboards != null) {
+    // Climbing ascents (kaya_ascents) — dates + numeric V grades for
+    // the observed p75 anchor. Missing plumbing → no climbing forecast.
+    final climbs = <ClimbAscent>[];
+    if (widget.climbingRepo != null && widget.climbingView != null) {
       try {
-        final domains = await widget.dashboards!.load();
-        for (final d in domains ?? const <DomainConfig>[]) {
-          for (final m in d.metrics) {
-            if (m.id == 'wilks_series') wilksConfig ??= m;
-          }
+        final recs = await widget.climbingRepo!.list(widget.climbingView!);
+        final vRe = RegExp(r'^v(\d+)', caseSensitive: false);
+        for (final r in recs) {
+          final raw = r['date'];
+          final d = raw is DateTime
+              ? raw
+              : DateTime.tryParse(raw?.toString() ?? '');
+          if (d == null) continue;
+          final g = vRe.firstMatch(r['grade']?.toString().trim() ?? '');
+          climbs.add((
+            date: d,
+            vGrade: g == null ? null : int.parse(g.group(1)!),
+          ));
         }
       } catch (_) {}
     }
@@ -187,9 +198,55 @@ class _ProgramScreenState extends State<ProgramScreen> {
       docs: docs,
       daily: series.daily,
       observedError: series.error,
-      strengthRows: strengthRows,
-      wilksConfig: wilksConfig,
+      forecast: await _buildForecast(docs, series.daily, strengthRows, climbs),
     );
+  }
+
+  /// Assembles [ForecastInputs]: world_model.yaml (same DocCache path
+  /// as dashboards.yaml), SimProgram from the intent docs, the weekly
+  /// series + t0 state from local history, and the drift-guarded refit.
+  /// Any missing piece → null (placeholder card).
+  Future<ForecastInputs?> _buildForecast(
+    IntentDocs docs,
+    List<WeightRow> daily,
+    List<StrengthRow> strengthRows,
+    List<ClimbAscent> climbs,
+  ) async {
+    try {
+      final raw = await DocCache.fetch(kWorldModelPath, widget.provider.fetchDoc);
+      final wm = parseWorldModel(raw);
+      if (wm == null) return null;
+      final program = simProgramFromDocs(
+        program: docs.program,
+        phase: docs.phase,
+        rules: wm.sim,
+      );
+      if (program == null || strengthRows.isEmpty || daily.isEmpty) {
+        return null;
+      }
+      final series = buildWeeklySeries(
+        strengthRows: strengthRows,
+        weightRows: daily,
+        climbs: climbs,
+      );
+      final initial = simInitialFromSeries(series);
+      if (initial == null) return null;
+      final refit = guardedRefit(model: wm, series: series);
+      return ForecastInputs(
+        initial: initial,
+        program: program,
+        coefficients: refit.coefficients,
+        rules: wm.sim,
+        drifted: refit.drifted,
+        strengthMaeLb: strengthMaeFromModel(wm),
+        gradeMaeV: gradeMaeFromModel(wm),
+        observedDaily: daily,
+        stats: observedWeightStats(daily, _today),
+        observedP75: initial.gradeP75,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -221,16 +278,20 @@ class _ProgramScreenState extends State<ProgramScreen> {
               ),
             );
           }
-          return _ProgramView(
-            data: data,
-            today: _today,
-            wmStore: widget.wmStore,
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: _ProgramView(
+              data: data,
+              today: _today,
+              wmStore: widget.wmStore,
+            ),
           );
         },
       ),
     );
   }
 }
+
 
 // ---------------------------------------------------------------------------
 // Main view
@@ -254,23 +315,6 @@ class _ProgramView extends StatelessWidget {
     final programVersion = currentVersion(program);
     final slice = programCurrent(program, data.docs.phase, today);
 
-    // Current block window + target weights (for the chart + verdict).
-    final block = slice?.block;
-    DateTime? blockStart, blockEnd;
-    double? targetFrom, targetTo;
-    if (block != null) {
-      final dates = block['dates'];
-      final weights = block['target_weight'];
-      if (dates is List && dates.length == 2) {
-        blockStart = DateTime.tryParse(dates[0].toString());
-        blockEnd = DateTime.tryParse(dates[1].toString());
-      }
-      if (weights is List && weights.length == 2) {
-        targetFrom = (weights[0] as num?)?.toDouble();
-        targetTo = (weights[1] as num?)?.toDouble();
-      }
-    }
-
     final stats = observedWeightStats(data.daily, today);
     final phase = phaseVersion?['value']?.toString();
     final targetRate = (phaseVersion?['target_rate_lb_per_week'] as num?)
@@ -286,6 +330,7 @@ class _ProgramView extends StatelessWidget {
 
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      physics: const AlwaysScrollableScrollPhysics(),
       children: [
         _SectionLabel('Declared'),
         _DeclaredCard(phaseVersion: phaseVersion, targetRate: targetRate),
@@ -306,30 +351,25 @@ class _ProgramView extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 16),
-        _SectionLabel('Observed'),
-        _ObservedCard(
-          daily: data.daily,
-          stats: stats,
-          today: today,
-          blockStart: blockStart,
-          blockEnd: blockEnd,
-          targetFrom: targetFrom,
-          targetTo: targetTo,
-          error: data.observedError,
-        ),
-        if (data.wilksConfig != null) ...[
-          const SizedBox(height: 8),
-          _WilksCard(
-            config: data.wilksConfig!,
-            strengthRows: data.strengthRows,
-            daily: data.daily,
-            today: today,
-            blockStart: blockStart,
-            // Accounting-week keying for the weekly-current stat
-            // (program.yaml v7 week_start — saturday since 2026-09-22).
-            weekStartDay: weekStartDayOf(programVersion),
+        _SectionLabel('Forecast'),
+        if (data.forecast != null)
+          ForecastSection(inputs: data.forecast!, today: today)
+        else
+          Card(
+            elevation: 0,
+            margin: EdgeInsets.zero,
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                data.observedError ??
+                    'Forecast unavailable — needs world_model.yaml, the '
+                        'program docs, and local weigh-in + strength '
+                        'history (pull to refresh once online).',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
           ),
-        ],
         const SizedBox(height: 16),
         _SectionLabel('Verdict'),
         _VerdictCard(
@@ -623,540 +663,6 @@ class _BlockTimeline extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: row,
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 2. Observed
-// ---------------------------------------------------------------------------
-
-class _ObservedCard extends StatelessWidget {
-  final List<WeightRow> daily;
-  final ObservedWeightStats stats;
-  final DateTime today;
-  final DateTime? blockStart;
-  final DateTime? blockEnd;
-  final double? targetFrom;
-  final double? targetTo;
-  final String? error;
-
-  const _ObservedCard({
-    required this.daily,
-    required this.stats,
-    required this.today,
-    required this.blockStart,
-    required this.blockEnd,
-    required this.targetFrom,
-    required this.targetTo,
-    required this.error,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    if (error != null) {
-      return Card(
-        elevation: 0,
-        color: scheme.surfaceContainerHighest,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(error!, style: Theme.of(context).textTheme.bodySmall),
-        ),
-      );
-    }
-    if (daily.isEmpty) {
-      return Card(
-        elevation: 0,
-        color: scheme.surfaceContainerHighest,
-        child: const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text('No weigh-ins in the ledger yet.'),
-        ),
-      );
-    }
-
-    final targetToday =
-        blockStart != null &&
-            blockEnd != null &&
-            targetFrom != null &&
-            targetTo != null
-        ? targetLineValue(
-            day: today,
-            start: blockStart!,
-            end: blockEnd!,
-            from: targetFrom!,
-            to: targetTo!,
-          )
-        : null;
-
-    return Card(
-      elevation: 0,
-      color: scheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _WeightChart(
-              daily: daily,
-              today: today,
-              blockStart: blockStart,
-              blockEnd: blockEnd,
-              targetFrom: targetFrom,
-              targetTo: targetTo,
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                _Stat(
-                  label: '7-day avg',
-                  value: stats.bw7dAvg == null
-                      ? '—'
-                      : '${stats.bw7dAvg!.toStringAsFixed(1)} lb',
-                ),
-                _Stat(
-                  label: 'rate / wk',
-                  value: stats.bwRateLbWk == null
-                      ? '—'
-                      : '${_fmtSigned(stats.bwRateLbWk!)} lb',
-                ),
-                _Stat(
-                  label: '3-wk change',
-                  value: stats.bw3wkChange == null
-                      ? '—'
-                      : '${_fmtSigned(stats.bw3wkChange!)} lb',
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              [
-                if (targetToday != null)
-                  'block target today ${targetToday.toStringAsFixed(1)} lb',
-                if (stats.lastWeighIn != null)
-                  'last weigh-in ${DateFormat('MMM d').format(stats.lastWeighIn!)}',
-              ].join(' · '),
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Stat extends StatelessWidget {
-  final String label;
-  final String value;
-  const _Stat({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            value,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w700,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-          Text(
-            label,
-            style: Theme.of(
-              context,
-            ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Weight chart: daily weigh-ins (faint dots), trailing 7-day average
-/// (solid line), and the current block's target line (dashed, from→to
-/// across the block's dates).
-///
-/// Range chips `Block · 3M · 1Y · All` (2026-09-22) re-window the same
-/// loaded series client-side. Block — the default, and the chart's
-/// original fixed window — spans ~3 weeks before the block through the
-/// block's end so early-block views still show recent history; the
-/// trailing chips end at today instead. Chips that would be empty or
-/// identical to All hide; the pinned tooltip clears on range switch.
-/// The selection is in-memory widget state only (resets on screen
-/// re-entry; deliberately not persisted).
-class _WeightChart extends StatefulWidget {
-  final List<WeightRow> daily;
-  final DateTime today;
-  final DateTime? blockStart;
-  final DateTime? blockEnd;
-  final double? targetFrom;
-  final double? targetTo;
-
-  const _WeightChart({
-    required this.daily,
-    required this.today,
-    required this.blockStart,
-    required this.blockEnd,
-    required this.targetFrom,
-    required this.targetTo,
-  });
-
-  @override
-  State<_WeightChart> createState() => _WeightChartState();
-}
-
-class _WeightChartState extends State<_WeightChart> {
-  /// The block window — months=null like All, distinguished by label;
-  /// windowing special-cases it before the trailing-months helpers.
-  static const _blockRange = ChartRange('Block', null);
-
-  ChartRange? _selected;
-
-  static double _x(DateTime d) =>
-      DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch / 86400000;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final daily = widget.daily;
-    final today = widget.today;
-    final blockStart = widget.blockStart;
-    final blockEnd = widget.blockEnd;
-    final targetFrom = widget.targetFrom;
-    final targetTo = widget.targetTo;
-
-    final seriesPoints = [
-      for (final w in daily) (day: w.date, value: w.weightLbs),
-    ];
-    final hasBlock = blockStart != null && blockEnd != null;
-    final chips = [
-      if (hasBlock) _blockRange,
-      ...visibleRanges(
-        points: seriesPoints,
-        ranges: const [ChartRange.m3, ChartRange.y1, ChartRange.all],
-        today: today,
-      ),
-    ];
-    var range = _selected ?? (hasBlock ? _blockRange : ChartRange.m3);
-    if (!chips.contains(range)) {
-      range = resolveRange(chips, range == _blockRange ? ChartRange.m3 : range);
-    }
-
-    // Window: Block = 21 days before the block through the block end
-    // (the original fixed view); trailing chips end at today; All hugs
-    // the data.
-    final DateTime windowStart;
-    final DateTime windowEnd;
-    if (range == _blockRange) {
-      windowStart = blockStart!.subtract(const Duration(days: 21));
-      windowEnd = blockEnd!;
-    } else {
-      windowStart =
-          range.startFor(today) ??
-          (seriesPoints.isEmpty ? today : seriesPoints.first.day);
-      windowEnd = today;
-    }
-    var xMin = _x(windowStart);
-    final xMax = _x(windowEnd);
-    if (xMax - xMin < 1) xMin = xMax - 1;
-
-    final visibleDaily = [
-      for (final w in daily)
-        if (!w.date.isBefore(windowStart) && !w.date.isAfter(windowEnd)) w,
-    ];
-    // 7-day average computed over ALL history (so the first visible
-    // point already has its trailing window), then clipped to view.
-    final avg = [
-      for (final w in sevenDayAvgSeries(daily))
-        if (!w.date.isBefore(windowStart) && !w.date.isAfter(windowEnd)) w,
-    ];
-
-    final dailySpots = [
-      for (final w in visibleDaily) FlSpot(_x(w.date), w.weightLbs),
-    ];
-    final avgSpots = [for (final w in avg) FlSpot(_x(w.date), w.weightLbs)];
-    final targetSpots =
-        blockStart != null &&
-            blockEnd != null &&
-            targetFrom != null &&
-            targetTo != null
-        ? [FlSpot(_x(blockStart), targetFrom), FlSpot(_x(blockEnd), targetTo)]
-        : const <FlSpot>[];
-
-    // Selector rendered even over an empty window so a data gap can
-    // always be escaped by switching range.
-    final selector = chips.length > 1
-        ? Padding(
-            padding: const EdgeInsets.only(bottom: 2),
-            child: ChartRangeSelector(
-              ranges: chips,
-              selected: range,
-              onChanged: (r) => setState(() => _selected = r),
-            ),
-          )
-        : null;
-
-    if (dailySpots.isEmpty && targetSpots.isEmpty) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ?selector,
-          const SizedBox(
-            height: 100,
-            child: Center(child: Text('(no weigh-ins in this window)')),
-          ),
-        ],
-      );
-    }
-
-    final ys = [
-      for (final s in dailySpots) s.y,
-      for (final s in avgSpots) s.y,
-      for (final s in targetSpots) s.y,
-    ];
-    final yMin = ys.reduce((a, b) => a < b ? a : b);
-    final yMax = ys.reduce((a, b) => a > b ? a : b);
-    final yPad = ((yMax - yMin).abs() * 0.1).clamp(0.5, 5.0);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        ?selector,
-        SizedBox(
-          height: 240,
-          // LayoutBuilder: the bottom-axis tick keeper needs the plot's
-          // pixel width to estimate label overlap (chart_bottom_axis).
-          child: LayoutBuilder(
-            builder: (context, constraints) => PinnedTooltipLineChart(
-              // Re-key on range switch so the pinned tooltip clears
-              // with the window (spot indices shift under the pin).
-              key: ValueKey(range),
-              // Only the daily weigh-in bar is touchable: the 7-day
-              // average and block-target overlays otherwise get a
-              // same-date tooltip row + indicator dot — one logged
-              // weigh-in reading as two "weights" for that day (the
-              // Sep-22 bug). No weigh-ins in window → nothing to pin.
-              touchableBars: dailySpots.isNotEmpty ? const {0} : const <int>{},
-              data: LineChartData(
-                minX: xMin,
-                maxX: xMax,
-                minY: yMin - yPad,
-                maxY: yMax + yPad,
-                clipData: const FlClipData.all(),
-                gridData: const FlGridData(show: true, drawVerticalLine: false),
-                borderData: FlBorderData(show: false),
-                titlesData: FlTitlesData(
-                  rightTitles: const AxisTitles(),
-                  topTitles: const AxisTitles(),
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 40,
-                      getTitlesWidget: (value, meta) => Text(
-                        value.toStringAsFixed(0),
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                    ),
-                  ),
-                  // Explicit non-overlapping date ticks (endpoints + month
-                  // starts) — see chart_bottom_axis.dart.
-                  bottomTitles: AxisTitles(
-                    sideTitles: dateBottomTitles(
-                      minX: xMin,
-                      maxX: xMax,
-                      plotWidth: (constraints.maxWidth - 40).clamp(1, 10000),
-                      style: const TextStyle(fontSize: 11),
-                      reservedSize: 28,
-                    ),
-                  ),
-                ),
-                lineBarsData: [
-                  // Daily weigh-ins: faint dots, hairline connection.
-                  if (dailySpots.isNotEmpty)
-                    LineChartBarData(
-                      spots: dailySpots,
-                      isCurved: false,
-                      barWidth: 1,
-                      color: scheme.primary.withValues(alpha: 0.25),
-                      dotData: FlDotData(
-                        show: true,
-                        getDotPainter: (spot, pct, bar, i) =>
-                            FlDotCirclePainter(
-                              radius: 2,
-                              color: scheme.primary.withValues(alpha: 0.35),
-                              strokeWidth: 0,
-                            ),
-                      ),
-                    ),
-                  // 7-day average: the real signal.
-                  if (avgSpots.isNotEmpty)
-                    LineChartBarData(
-                      spots: avgSpots,
-                      isCurved: false,
-                      barWidth: 2.5,
-                      color: scheme.primary,
-                      dotData: const FlDotData(show: false),
-                    ),
-                  // Block target line: dashed from→to across the block dates.
-                  if (targetSpots.isNotEmpty)
-                    LineChartBarData(
-                      spots: targetSpots,
-                      isCurved: false,
-                      barWidth: 1.5,
-                      color: scheme.tertiary,
-                      dashArray: [6, 4],
-                      dotData: const FlDotData(show: false),
-                    ),
-                ],
-                lineTouchData: LineTouchData(
-                  enabled: true,
-                  touchTooltipData: LineTouchTooltipData(
-                    getTooltipColor: (_) =>
-                        Colors.black.withValues(alpha: 0.55),
-                    fitInsideHorizontally: true,
-                    fitInsideVertically: true,
-                    getTooltipItems: (spots) => [
-                      for (final s in spots)
-                        LineTooltipItem(
-                          // Multi-year windows (1Y spanning a New Year /
-                          // All) carry the year so old points can't read
-                          // as recent.
-                          '${DateFormat(windowStart.year != windowEnd.year ? "MMM d ''yy" : 'MMM d').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
-                          '${s.y.toStringAsFixed(1)}',
-                          const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            height: 1.3,
-                            fontFeatures: [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// OBSERVED §2: the Wilks block, below the weight chart. Chart = the
-/// strength domain's monthly `wilks_series` (rendered through the SAME
-/// shared [MetricChart], computed by the same [computeMetric] — cut-
-/// start reference + acceptable-drop floor lines included). Stat line =
-/// the weekly-current [wilksStability] output the PHASE hero shows
-/// ("Wilks 327.5 · floor 319.3 · 0 wks below"), so home, strength
-/// domain, and this screen can never disagree.
-class _WilksCard extends StatelessWidget {
-  final MetricConfig config;
-  final List<StrengthRow> strengthRows;
-  final List<WeightRow> daily;
-  final DateTime today;
-
-  /// Fallback reference anchor when the config has no `from:` — same
-  /// default the hero's Wilks eigenvectors use.
-  final DateTime? blockStart;
-
-  /// Accounting-week start for the weekly-current stat (v7 week_start).
-  final int weekStartDay;
-
-  const _WilksCard({
-    required this.config,
-    required this.strengthRows,
-    required this.daily,
-    required this.today,
-    required this.blockStart,
-    this.weekStartDay = DateTime.monday,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final data = computeMetric(
-      config,
-      DomainMetricInputs(
-        strengthRows: strengthRows,
-        weightDaily: daily,
-        today: today,
-        weekStartDay: weekStartDay,
-      ),
-    );
-
-    // Weekly-current stat line (the monthly chart is the trend; THIS is
-    // where the cut stands right now). Actual-max basis — the series
-    // default since 2026-09-22, same basis as the chart above and the
-    // home hero.
-    final weeks = strengthRows.isEmpty || daily.isEmpty
-        ? const <WilksWeek>[]
-        : weeklyWilksSeries(
-            strengthRows,
-            daily,
-            through: today,
-            weekStartDay: weekStartDay,
-          );
-    final s = wilksStability(
-      weeks: weeks,
-      from: config.from ?? blockStart,
-      floorPct: config.floorPct,
-    );
-    String? statLine;
-    if (s.current != null) {
-      statLine = [
-        'Wilks ${s.current!.toStringAsFixed(1)}',
-        if (s.floor != null) 'floor ${s.floor!.toStringAsFixed(1)}',
-        if (s.floor != null)
-          '${s.weeksBelowFloor} wk${s.weeksBelowFloor == 1 ? '' : 's'} below',
-      ].join(' · ');
-    }
-
-    return Card(
-      elevation: 0,
-      color: scheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              (config.label ?? 'Wilks').toUpperCase(),
-              style: AppText.title(context),
-            ),
-            const SizedBox(height: 4),
-            switch (data) {
-              MetricSeries() => MetricChart(
-                series: data,
-                today: today,
-                goalNote: config.goalNote,
-                windowYears: config.windowYears,
-              ),
-              _ => Text(
-                data is MetricUnavailable ? data.message : 'unavailable',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            },
-            if (statLine != null) ...[
-              const SizedBox(height: 6),
-              Text(statLine, style: AppText.value(context)),
-              Text(
-                'weekly-current (chart is monthly)',
-                style: AppText.micro(context),
-              ),
-            ],
-          ],
-        ),
-      ),
     );
   }
 }

@@ -205,7 +205,6 @@ domains:
         weightView: _view('weight'),
         strengthRepo: _FakeRepo(_strengthRows()),
         strengthView: _view('strength'),
-        dashboards: DomainConfigProvider(fetcher),
         today: DateTime(2026, 9, 23),
       ),
     ));

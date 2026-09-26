@@ -36,9 +36,10 @@ enum MetricKind { stat, best, series }
 
 /// One dashboard-header metric declaration.
 class MetricConfig {
-  /// Built-in id (pl_total, e1rm_reference, all_time_best_weight,
-  /// wilks, wilks_series, bw_series, bf_series, kcal_series,
-  /// protein_series, grade_pyramid, session_frequency, hr_4x4_series).
+  /// Built-in id (pl_total, e1rm_reference, recent_e1rm_rpe,
+  /// all_time_best_weight, wilks, wilks_series, bw_series, bf_series,
+  /// kcal_series, protein_series, grade_pyramid, session_frequency,
+  /// hr_4x4_series).
   /// Ids the metric engine doesn't know render as a placeholder, never
   /// an error.
   final String id;

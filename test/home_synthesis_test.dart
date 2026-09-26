@@ -441,6 +441,38 @@ void main() {
     test('null when the lift has no qualifying history', () {
       expect(recentBestE1rm(const [], 'squat', today), isNull);
     });
+
+    test('rpeAdjusted: true values sets by RPE-adjusted e1RM — an '
+        'RPE-8 double outranks a heavier at-failure set', () {
+      final graded = gradeSets([
+        strengthRow('2026-08-01', 'Barbell Squat', 315, 3), // ref seed
+        // 310x1 no RPE → treated at-failure: e1RM 320.3.
+        strengthRow('2026-09-18', 'Barbell Squat', 310, 1),
+        // 300x2@8 → 2 RIR → 4 effective reps: 340.0 adjusted (would
+        // LOSE on plain Epley: 320.0 < 320.3).
+        StrengthRow(
+          date: DateTime(2026, 9, 19),
+          exercise: 'Barbell Squat',
+          weight: 300,
+          reps: 2,
+          rpe: 8,
+        ),
+      ]);
+      final plain = recentBestE1rm(graded, 'squat', today)!;
+      expect(plain.date, DateTime(2026, 9, 18)); // 320.3 > 320.0
+      final adj = recentBestE1rm(graded, 'squat', today, rpeAdjusted: true)!;
+      expect(adj.date, DateTime(2026, 9, 19));
+      expect(adj.value, closeTo(300 * (1 + 4 / 30), 1e-9)); // 340.0
+    });
+
+    test('rpeAdjusted: true leaves RPE-less history identical to the '
+        'plain metric (at-failure fallback)', () {
+      final graded = gradeSets(rows());
+      final plain = recentBestE1rm(graded, 'squat', today)!;
+      final adj = recentBestE1rm(graded, 'squat', today, rpeAdjusted: true)!;
+      expect(adj.value, plain.value);
+      expect(adj.date, plain.date);
+    });
   });
 
   group('liveWeekCounts', () {

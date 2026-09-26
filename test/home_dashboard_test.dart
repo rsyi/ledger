@@ -160,7 +160,7 @@ last_bulk:
     // Two columns (2026-09-22, second rebuild): recent e1RM + the
     // last-bulk top; the all-time top moved to the detail sheet and
     // the working-max column to Program › Configuration.
-    expect(find.text('recent e1RM'), findsOneWidget);
+    expect(find.text('recent e1RM (RPE-adj)'), findsOneWidget);
     expect(find.text('last bulk'), findsOneWidget);
     expect(find.text('all-time top'), findsNothing);
     expect(find.text('working max'), findsNothing);
@@ -204,7 +204,7 @@ last_bulk:
       today: DateTime(2026, 9, 23),
     )));
     await tester.pumpAndSettle();
-    expect(find.text('recent e1RM'), findsOneWidget);
+    expect(find.text('recent e1RM (RPE-adj)'), findsOneWidget);
     expect(find.text('last bulk'), findsNothing);
     expect(find.text('bulk: actual'), findsNothing);
     expect(
@@ -285,7 +285,7 @@ last_bulk:
     // Card columns appear in the header AND the sheet; the all-time
     // top is sheet-only (relegated 2026-09-22 — "relegate all-time to
     // the click-in view").
-    expect(find.text('recent e1RM'), findsNWidgets(2));
+    expect(find.text('recent e1RM (RPE-adj)'), findsNWidgets(2));
     expect(find.text('last bulk'), findsNWidgets(2));
     expect(find.text('all-time top'), findsOneWidget);
     // The all-time VALUE line sits in the sheet (no weigh-ins served →
@@ -320,7 +320,7 @@ last_bulk:
     // The compact tag stays on the card; the sheet's basis entry
     // carries the full two-basis note.
     expect(find.text('bulk: actual'), findsOneWidget);
-    expect(find.text('recent: e1RM · bulk & top: actual'), findsOneWidget);
+    expect(find.text('recent: RPE-adj e1RM · bulk & top: actual'), findsOneWidget);
     // Working max: no column, just the pointer to its new home.
     expect(find.text('working max'), findsOneWidget); // sheet entry only
     expect(find.text('Program › Configuration'), findsOneWidget);
@@ -755,14 +755,14 @@ last_bulk:
       (tester) async {
     await pumpHeroSurfaceAt(tester, const Size(360, 690));
     // Full-width strength card still has room for the aligned columns.
-    expect(find.text('recent e1RM'), findsOneWidget);
+    expect(find.text('recent e1RM (RPE-adj)'), findsOneWidget);
     expect(find.text('last bulk'), findsOneWidget);
   });
 
   testWidgets('hero surface reflows without overflow at 412x900',
       (tester) async {
     await pumpHeroSurfaceAt(tester, const Size(412, 900));
-    expect(find.text('recent e1RM'), findsOneWidget);
+    expect(find.text('recent e1RM (RPE-adj)'), findsOneWidget);
   });
 
   testWidgets('legacy half-width STRENGTH card at 360dp stacks per-lift '
@@ -805,7 +805,7 @@ last_bulk:
     await tester.pumpAndSettle();
     // Stacked mode: the column header row is gone; each basis renders
     // its own full-width line with the value string intact.
-    expect(find.text('recent e1RM'), findsNothing);
+    expect(find.text('recent e1RM (RPE-adj)'), findsNothing);
     expect(
       find.textContaining('310 · 120.0w · 2d', findRichText: true),
       findsOneWidget,

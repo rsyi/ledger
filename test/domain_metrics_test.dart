@@ -274,6 +274,36 @@ void main() {
       expect(d.stats.first.value, '${e1rm(315, 3).round()} lb');
     });
 
+    test('recent_e1rm_rpe is the per-lift RPE-adjusted recent best '
+        '(RIR counts as reps; no-RPE rows stay at-failure)', () {
+      final d = computeMetric(
+        const MetricConfig(
+          id: 'recent_e1rm_rpe',
+          unit: 'lb',
+          lifts: ['squat', 'bench'],
+        ),
+        DomainMetricInputs(
+          strengthRows: [
+            ...strengthRows,
+            // 300x2@8 → 2 RIR → 4 effective reps → 340 adjusted; the
+            // heavier Sep-1 315x3 sits outside the 14-day window.
+            StrengthRow(
+              date: DateTime.parse('2026-09-15'),
+              exercise: 'Barbell Squat',
+              weight: 300,
+              reps: 2,
+              rpe: 8,
+            ),
+          ],
+          today: today,
+        ),
+      ) as MetricStats;
+      final byLift = {for (final s in d.stats) s.label: s.value};
+      expect(byLift['squat'], '340 lb');
+      // bench 225x5 has no RPE → plain capped Epley (at-failure).
+      expect(byLift['bench'], '${e1rm(225, 5).round()} lb');
+    });
+
     test('all_time_best_weight is the actual bar weight', () {
       final d = computeMetric(
         const MetricConfig(id: 'all_time_best_weight', unit: 'lb'),

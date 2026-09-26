@@ -55,6 +55,7 @@ import 'widgets/metric_chart.dart';
 const _strengthMetricIds = {
   'pl_total',
   'e1rm_reference',
+  'recent_e1rm_rpe',
   'all_time_best_weight',
   'wilks',
   'wilks_series',

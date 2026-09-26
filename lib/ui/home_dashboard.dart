@@ -267,9 +267,11 @@ class _StrengthData {
   /// WM snapshot per lift — the card reads ONLY painCap from it now.
   final List<LiftTrend> trends;
 
-  /// recent e1RM: best capped e1RM in the trailing 14 days of real
-  /// work (light weeks + effort < 0.75 excluded; window widens until
-  /// found). Wilks priced at CURRENT bodyweight ([currentBwLbs]).
+  /// recent e1RM (RPE-adjusted since 2026-09-25 — the airlayer
+  /// `max_e1rm_rpe` basis): best RPE-adjusted capped e1RM in the
+  /// trailing 14 days of real work (light weeks + effort < 0.75
+  /// excluded; window widens until found). Wilks priced at CURRENT
+  /// bodyweight ([currentBwLbs]).
   final Map<String, _LiftValue> recent;
 
   /// All-time top per lift: the heaviest weight ACTUALLY lifted (any
@@ -635,10 +637,12 @@ class HomeDashboardState extends State<HomeDashboard> {
     final snap = await _wm;
     final rows = await _strengthRows;
     if (snap == null && rows.isEmpty) return null;
-    // recent e1RM (2026-09-22): 14-day best of REAL work — light
-    // accounting weeks (program week_type via the anchor Monday) and
-    // sub-0.75-effort sets excluded. DISPLAY-ONLY; the §2.5 42-day
-    // reference feeding the controller/planner is untouched.
+    // recent e1RM (2026-09-22; RPE-adjusted 2026-09-25): 14-day best
+    // of REAL work — light accounting weeks (program week_type via the
+    // anchor Monday) and sub-0.75-effort sets excluded — valued on the
+    // RPE-adjusted capped e1RM (`max_e1rm_rpe`: RIR counts as reps).
+    // DISPLAY-ONLY; the §2.5 42-day reference feeding the
+    // controller/planner is untouched and stays plain Epley.
     final docs = await _docs;
     final program = docs?.program;
     final wsDay = weekStartDayOf(currentVersion(program));
@@ -668,6 +672,7 @@ class HomeDashboardState extends State<HomeDashboard> {
         _today,
         weekTypeOf: program == null ? null : weekTypeOf,
         weekStartDay: wsDay,
+        rpeAdjusted: true,
       );
       if (r != null) {
         recent[lift] = (
@@ -985,16 +990,23 @@ class HomeDashboardState extends State<HomeDashboard> {
       title: 'Strength',
       entries: [
         _DetailEntry(
-          label: 'recent e1RM',
+          label: 'recent e1RM (RPE-adj)',
           value: liftLines(d?.recent ?? const {}, age),
           explain:
               'What you\'ve actually shown recently: the best '
-              'estimated 1RM over the last 14 days of real work — '
-              'deload (light-week) sets and easy sets under 75% effort '
-              'don\'t count. When there\'s no real work in the window '
-              'it slides back to your newest qualifying set; the age '
-              'tag tells you how current the number is. The ·w number '
-              'is the lift\'s Wilks points at your current bodyweight'
+              'RPE-ADJUSTED estimated 1RM over the last 14 days of '
+              'real work. RPE says how many reps were left in reserve '
+              '(RIR = 10 − RPE), and those count as reps you did: a '
+              '275×2 @ RPE 8 is scored like 275×4 (Epley, total reps '
+              'capped at 12) — because you don\'t train to failure, '
+              'this reads your strength better than the raw set. Sets '
+              'without an RPE score as-is (treated as at-failure). '
+              'Deload (light-week) sets and easy sets under 75% '
+              'effort don\'t count. When there\'s no real work in the '
+              'window it slides back to your newest qualifying set; '
+              'the age tag tells you how current the number is. The '
+              '·w number is the lift\'s Wilks points at your current '
+              'bodyweight'
               '${bw == null ? '' : ' (${bw.toStringAsFixed(1)} lb)'}.',
         ),
         if (window != null)
@@ -1032,15 +1044,16 @@ class HomeDashboardState extends State<HomeDashboard> {
         ),
         _DetailEntry(
           label: 'basis',
-          value: 'recent: e1RM · bulk & top: actual',
+          value: 'recent: RPE-adj e1RM · bulk & top: actual',
           explain:
               'Two bases here: the recent column is an ESTIMATED 1RM '
-              '(Epley, reps capped at 12) — what you\'ve shown lately; '
-              'the last-bulk and all-time tops are ACTUAL weight '
-              'lifted — the same actual-max basis as the Wilks trend '
-              'chart and its best-ever benchmark. A recent e1RM can '
-              'sit above an actual top without you ever having lifted '
-              'it.',
+              '(Epley over effective reps = reps + RIR, capped at 12 '
+              '— the airlayer max_e1rm_rpe measure) — what you\'ve '
+              'shown lately; the last-bulk and all-time tops are '
+              'ACTUAL weight lifted — the same actual-max basis as '
+              'the Wilks trend chart and its best-ever benchmark. A '
+              'recent e1RM can sit above an actual top without you '
+              'ever having lifted it.',
         ),
         _DetailEntry(
           label: 'working max',
@@ -1898,7 +1911,9 @@ class _LiftHeaderRow extends StatelessWidget {
           const SizedBox(width: 64),
           Expanded(
             child: Text(
-              'recent e1RM',
+              // RPE-adjusted basis since 2026-09-25 (max_e1rm_rpe);
+              // wraps to a second line at narrow widths — reflow.
+              'recent e1RM (RPE-adj)',
               textAlign: TextAlign.right,
               style: style,
             ),
@@ -2046,7 +2061,7 @@ class _LiftStackedRows extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(lift, style: basisStyle),
-          line('e1RM', recent, (d) => fmtAge(d, today)),
+          line('e1RM (RPE-adj)', recent, (d) => fmtAge(d, today)),
           if (showBulk) line('bulk', bulk, fmtMonthTag),
         ],
       ),

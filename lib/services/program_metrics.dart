@@ -141,6 +141,27 @@ int _daysBetween(DateTime a, DateTime b) =>
 double epleyE1rm(double weight, int reps) =>
     weight * (1 + (reps > 12 ? 12 : reps) / 30);
 
+/// RPE-adjusted capped e1RM — the Dart mirror of the airlayer measure
+/// `max_e1rm_rpe` (airledger-fitness views/strength_tracker.view.yml,
+/// the SOURCE OF TRUTH for this expression):
+///
+///   Weight * (1 + MIN(MIN(Reps, 12) + COALESCE(10 - RPE, 0), 12) / 30.0)
+///
+/// Effective reps = capped reps + RIR (10 − RPE), with the TOTAL capped
+/// at 12: an RPE-8 double counts as 4 effective reps (2 done + 2 in the
+/// tank), so submaximal training reads as the strength it demonstrates.
+/// A null [rpe] contributes 0 extra reps — the set is treated as taken
+/// to failure, i.e. plain [epleyE1rm] (the legacy behavior, matching
+/// the measure's COALESCE fallback).
+///
+/// PROGRESS-TRACKING DISPLAY ONLY: the §2.5 effort-grading reference
+/// and the working-max controller stay on [epleyE1rm]/`max_e1rm_capped`.
+double rpeAdjustedE1rm(double weight, int reps, double? rpe) {
+  final capped = (reps > 12 ? 12 : reps).toDouble();
+  final effective = capped + (rpe == null ? 0 : 10 - rpe);
+  return weight * (1 + (effective > 12 ? 12 : effective) / 30);
+}
+
 /// Grades main-lift sets per §2.5. Non-main-lift rows are dropped.
 ///
 /// reference = max set_e1rm over the same lift, sets with reps <= 8, in the

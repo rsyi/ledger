@@ -11,7 +11,7 @@ library;
 import 'program_current.dart';
 import 'program_metrics.dart'
     show GradedSet, StrengthRow, epleyE1rm, gradeSets, mainLiftByExercise,
-        weekStartOf;
+        rpeAdjustedE1rm, weekStartOf;
 import 'wm_tabs.dart';
 
 // ---------------------------------------------------------------------------
@@ -180,6 +180,14 @@ String fmtMonthTag(DateTime d) =>
 /// age tag tells the story. Null only when the lift has no qualifying
 /// history at all.
 ///
+/// [rpeAdjusted] (2026-09-25): value AND select sets by the
+/// RPE-adjusted capped e1RM ([rpeAdjustedE1rm], mirroring the airlayer
+/// `max_e1rm_rpe` measure) instead of plain capped Epley — submaximal
+/// work off a cut then reads as the strength it demonstrates.
+/// QUALIFICATION is unchanged either way: the effort ≥ 0.75 filter
+/// still runs on the §2.5 plain-Epley grading (rpe only changes what
+/// the qualifying sets are WORTH, not which sets qualify).
+///
 /// DISPLAY-ONLY: the §2.5 42-day reference is unchanged internally —
 /// the controller, planner weight fill, and backtest still hang off it.
 ({double value, DateTime date})? recentBestE1rm(
@@ -189,7 +197,10 @@ String fmtMonthTag(DateTime d) =>
   String? Function(DateTime weekStartDate)? weekTypeOf,
   int weekStartDay = DateTime.monday,
   int windowDays = 14,
+  bool rpeAdjusted = false,
 }) {
+  double valueOf(GradedSet s) =>
+      rpeAdjusted ? rpeAdjustedE1rm(s.weight, s.reps, s.rpe) : s.e1rm;
   final q = <GradedSet>[
     for (final s in graded)
       if (s.lift == lift &&
@@ -208,12 +219,12 @@ String fmtMonthTag(DateTime d) =>
     final ago = _daysBetween(s.date, end);
     if (ago < 0 || ago >= windowDays) continue;
     if (best == null ||
-        s.e1rm > best.e1rm ||
-        (s.e1rm == best.e1rm && s.date.isAfter(best.date))) {
+        valueOf(s) > valueOf(best) ||
+        (valueOf(s) == valueOf(best) && s.date.isAfter(best.date))) {
       best = s;
     }
   }
-  return best == null ? null : (value: best.e1rm, date: best.date);
+  return best == null ? null : (value: valueOf(best), date: best.date);
 }
 
 // ---------------------------------------------------------------------------

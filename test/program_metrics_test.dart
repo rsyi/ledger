@@ -767,4 +767,36 @@ void main() {
       expect(hit!.map((h) => h.id), contains('TOP_SET_HEAVY'));
     });
   });
+
+  // Dart mirror of the airlayer measure `max_e1rm_rpe`
+  // (airledger-fitness views/strength_tracker.view.yml):
+  //   Weight * (1 + MIN(MIN(Reps, 12) + COALESCE(10 - RPE, 0), 12) / 30.0)
+  group('rpeAdjustedE1rm', () {
+    test('RPE 8 double = 2 RIR → 4 effective reps (275x2@8 → 311.7)', () {
+      // 275 * (1 + 4/30) = 311.666…
+      expect(rpeAdjustedE1rm(275, 2, 8), closeTo(311.7, 0.05));
+    });
+
+    test('no RPE falls back to plain capped Epley (at-failure legacy)', () {
+      expect(rpeAdjustedE1rm(275, 2, null), epleyE1rm(275, 2));
+      expect(rpeAdjustedE1rm(275, 2, null), closeTo(293.33, 0.01));
+    });
+
+    test('effective reps cap at 12 — 200x10@7 is 12 effective, not 13', () {
+      // min(min(10,12) + 3, 12) = 12 → 200 * 1.4 = 280.
+      expect(rpeAdjustedE1rm(200, 10, 7), closeTo(280, 1e-9));
+    });
+
+    test('RPE 10 (true failure) leaves the capped Epley unchanged', () {
+      expect(rpeAdjustedE1rm(300, 1, 10), epleyE1rm(300, 1));
+      expect(rpeAdjustedE1rm(315, 5, 10), epleyE1rm(315, 5));
+    });
+
+    test('raw reps still cap at 12 before RIR is added', () {
+      // min(min(15,12) + 0, 12) = 12 with no RPE…
+      expect(rpeAdjustedE1rm(100, 15, null), closeTo(140, 1e-9));
+      // …and with RPE the total still can't exceed 12.
+      expect(rpeAdjustedE1rm(100, 15, 8), closeTo(140, 1e-9));
+    });
+  });
 }

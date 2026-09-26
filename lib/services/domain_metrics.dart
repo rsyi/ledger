@@ -7,6 +7,8 @@
 /// unit-tested; the UI stays layout-only.
 ///
 /// Full built-in vocabulary (P2 + P3): pl_total, e1rm_reference,
+/// recent_e1rm_rpe (per-lift recent best on the RPE-adjusted capped
+/// e1RM — the airlayer `max_e1rm_rpe` basis, 2026-09-25),
 /// all_time_best_weight, wilks, wilks_series (strength — wilks is the
 /// WILKS-2020 SBD score, weekly-current stat; wilks_series is the
 /// MONTHLY trend; both on the ACTUAL-MAX basis since 2026-09-22 —
@@ -25,10 +27,10 @@ library;
 
 import 'domain_config.dart';
 import 'home_synthesis.dart'
-    show allTimeBestE1rms, fmtLb, fmtMonthTag, synthesisLifts;
+    show allTimeBestE1rms, fmtLb, fmtMonthTag, recentBestE1rm, synthesisLifts;
 import 'program_metrics.dart'
-    show StrengthRow, WeightRow, liftReferencesAsOf, mainLiftByExercise,
-        weekStartOf;
+    show StrengthRow, WeightRow, gradeSets, liftReferencesAsOf,
+        mainLiftByExercise, weekStartOf;
 import 'program_observed.dart' show sevenDayAvgSeries;
 import 'wilks.dart';
 
@@ -421,6 +423,30 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       final refs = liftReferencesAsOf(inputs.strengthRows, inputs.today);
       return _perLiftStats(refs, lifts, withUnit);
 
+    // Current-1RM ESTIMATE for progress tracking (2026-09-25): per-lift
+    // best over the trailing 14 days of real work (warm-ups excluded;
+    // window widens to the newest qualifying set), valued on the
+    // RPE-adjusted capped e1RM — the airlayer `max_e1rm_rpe` measure's
+    // basis (RIR = 10 − RPE counts as reps, total capped at 12; no RPE
+    // → plain capped Epley). Distinct from e1rm_reference on purpose:
+    // that one is the §2.5 42-day GRADING reference and stays plain.
+    case 'recent_e1rm_rpe':
+      if (inputs.strengthRows.isEmpty) {
+        return const MetricUnavailable('no strength history');
+      }
+      final graded = gradeSets(inputs.strengthRows);
+      final recents = <String, double>{};
+      for (final lift in lifts) {
+        final r = recentBestE1rm(
+          graded,
+          lift,
+          inputs.today,
+          rpeAdjusted: true,
+        );
+        if (r != null) recents[lift] = r.value;
+      }
+      return _perLiftStats(recents, lifts, withUnit);
+
     case 'all_time_best_weight':
       if (inputs.strengthRows.isEmpty) {
         return const MetricUnavailable('no strength history');
@@ -646,6 +672,7 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
 const _headlineLabels = {
   'pl_total': 'PL',
   'e1rm_reference': 'e1RM',
+  'recent_e1rm_rpe': 'e1RM (RPE-adj)',
   'all_time_best_weight': 'best',
   'wilks': 'Wilks',
   'wilks_series': 'Wilks',

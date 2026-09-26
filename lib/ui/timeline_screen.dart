@@ -1807,7 +1807,7 @@ class _CalendarPickerDialogState extends State<_CalendarPickerDialog> {
                             child: Text(
                               '·',
                               style: TextStyle(
-                                fontSize: 10,
+                                fontSize: 12,
                                 color: scheme.onSurface,
                               ),
                             ),
@@ -1816,7 +1816,7 @@ class _CalendarPickerDialogState extends State<_CalendarPickerDialog> {
                           Text(
                             '= logged',
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 12,
                               color: scheme.onSurfaceVariant,
                             ),
                           ),
@@ -2540,7 +2540,7 @@ class _ExpandedDetails extends StatelessWidget {
                 child: Text(
                   '${rg.label} #${i + 1}',
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: 12,
                     fontWeight: FontWeight.w600,
                     color: scheme.onSurfaceVariant,
                   ),
@@ -2662,7 +2662,7 @@ class _RecipesStrip extends StatelessWidget {
                   child: Text(
                     'Make a batch',
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: 12,
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.4,
                       color: scheme.onSurfaceVariant,
@@ -2880,7 +2880,7 @@ class _FullscreenBatchScreenState extends State<_FullscreenBatchScreen> {
                     child: Text(
                       'IN PROGRESS',
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.8,
                         color: scheme.onSurfaceVariant,
@@ -2901,7 +2901,7 @@ class _FullscreenBatchScreenState extends State<_FullscreenBatchScreen> {
                   child: Text(
                     'MAKE A BATCH',
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: 12,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.8,
                       color: scheme.onSurfaceVariant,
@@ -2925,7 +2925,7 @@ class _FullscreenBatchScreenState extends State<_FullscreenBatchScreen> {
                     child: Text(
                       'RECENT BATCHES',
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.8,
                         color: scheme.onSurfaceVariant,
@@ -3040,7 +3040,7 @@ class _BatchSummaryRow extends StatelessWidget {
               child: Text(
                 start,
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 12,
                   color: scheme.onSurfaceVariant,
                 ),
               ),

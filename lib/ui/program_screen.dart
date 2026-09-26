@@ -46,6 +46,7 @@ import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
 import '../services/wilks.dart' show WilksWeek, weeklyWilksSeries;
 import '../services/wm_store.dart';
+import 'app_text.dart';
 import 'widgets/metric_chart.dart';
 import 'widgets/working_max_card.dart';
 
@@ -351,13 +352,7 @@ class _SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6, left: 4),
-      child: Text(
-        text.toUpperCase(),
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          letterSpacing: 1.2,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
+      child: Text(text.toUpperCase(), style: AppText.title(context)),
     );
   }
 }
@@ -602,12 +597,16 @@ class _BlockTimeline extends StatelessWidget {
             Row(
               children: [
                 const SizedBox(width: 40),
-                Text(
-                  'You are here — week ${slice?.weekInBlock} of block $n'
-                  '${slice?.weekType != 'normal' ? ' (${slice?.weekType} week)' : ''}',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.w600,
+                // Expanded so the line WRAPS at narrow widths (360dp)
+                // instead of overflowing — reflow over ellipsis.
+                Expanded(
+                  child: Text(
+                    'You are here — week ${slice?.weekInBlock} of block $n'
+                    '${slice?.weekType != 'normal' ? ' (${slice?.weekType} week)' : ''}',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: color,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],
@@ -962,7 +961,7 @@ class _WeightChartState extends State<_WeightChart> {
                       reservedSize: 40,
                       getTitlesWidget: (value, meta) => Text(
                         value.toStringAsFixed(0),
-                        style: const TextStyle(fontSize: 10),
+                        style: const TextStyle(fontSize: 11),
                       ),
                     ),
                   ),
@@ -973,7 +972,7 @@ class _WeightChartState extends State<_WeightChart> {
                       minX: xMin,
                       maxX: xMax,
                       plotWidth: (constraints.maxWidth - 40).clamp(1, 10000),
-                      style: const TextStyle(fontSize: 9),
+                      style: const TextStyle(fontSize: 11),
                       reservedSize: 28,
                     ),
                   ),
@@ -1033,7 +1032,7 @@ class _WeightChartState extends State<_WeightChart> {
                           '${s.y.toStringAsFixed(1)}',
                           const TextStyle(
                             color: Colors.white,
-                            fontSize: 11,
+                            fontSize: 12,
                             height: 1.3,
                             fontFeatures: [FontFeature.tabularFigures()],
                           ),
@@ -1129,11 +1128,7 @@ class _WilksCard extends StatelessWidget {
           children: [
             Text(
               (config.label ?? 'Wilks').toUpperCase(),
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                letterSpacing: 1.1,
-                fontWeight: FontWeight.w700,
-                color: scheme.onSurfaceVariant,
-              ),
+              style: AppText.title(context),
             ),
             const SizedBox(height: 4),
             switch (data) {
@@ -1145,7 +1140,7 @@ class _WilksCard extends StatelessWidget {
               ),
               _ => Text(
                 data is MetricUnavailable ? data.message : 'unavailable',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: scheme.onSurfaceVariant,
                   fontStyle: FontStyle.italic,
                 ),
@@ -1153,18 +1148,10 @@ class _WilksCard extends StatelessWidget {
             },
             if (statLine != null) ...[
               const SizedBox(height: 6),
-              Text(
-                statLine,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
+              Text(statLine, style: AppText.value(context)),
               Text(
                 'weekly-current (chart is monthly)',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+                style: AppText.micro(context),
               ),
             ],
           ],

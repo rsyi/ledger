@@ -193,10 +193,10 @@ class _MetricChartState extends State<MetricChart> {
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      reservedSize: 34,
+                      reservedSize: 38,
                       getTitlesWidget: (value, meta) => Text(
                         value.toStringAsFixed(0),
-                        style: const TextStyle(fontSize: 9),
+                        style: const TextStyle(fontSize: 11),
                       ),
                     ),
                   ),
@@ -206,9 +206,9 @@ class _MetricChartState extends State<MetricChart> {
                     sideTitles: dateBottomTitles(
                       minX: xMin,
                       maxX: xMax,
-                      plotWidth: (constraints.maxWidth - 34).clamp(1, 10000),
-                      style: const TextStyle(fontSize: 8),
-                      reservedSize: 22,
+                      plotWidth: (constraints.maxWidth - 38).clamp(1, 10000),
+                      style: const TextStyle(fontSize: 11),
+                      reservedSize: 24,
                       space: 3,
                     ),
                   ),
@@ -303,7 +303,7 @@ class _MetricChartState extends State<MetricChart> {
                           '${s.y.toStringAsFixed(1)}',
                           const TextStyle(
                             color: Colors.white,
-                            fontSize: 10,
+                            fontSize: 12,
                             height: 1.3,
                             fontFeatures: [FontFeature.tabularFigures()],
                           ),

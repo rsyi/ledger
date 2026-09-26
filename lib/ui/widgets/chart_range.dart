@@ -185,7 +185,7 @@ class ChartRangeSelector extends StatelessWidget {
         style: const ButtonStyle(
           visualDensity: VisualDensity(horizontal: -4, vertical: -4),
           padding: WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 7)),
-          textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 10)),
+          textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12)),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
       ),

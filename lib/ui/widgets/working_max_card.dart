@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/wm_store.dart';
 import '../../services/wm_tabs.dart';
 import '../../services/working_max.dart' show defaultVariantByLift;
+import '../app_text.dart';
 
 /// "Working maxes" card — reads the append-only `working_max` tab via
 /// [WmStore]. Every action APPENDS (seed confirmation = duplicate row
@@ -166,9 +167,22 @@ class _WorkingMaxCardState extends State<WorkingMaxCard> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    '$lift  ${_n(row.valueLb)} lb · ${row.variant} · '
-                    '${row.source}',
+                  // Lift + value at the primary-value scale; variant /
+                  // source stay muted tags (app-wide readability pass).
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(text: '$lift  '),
+                        TextSpan(
+                          text: '${_n(row.valueLb)} lb',
+                          style: AppText.value(context),
+                        ),
+                        TextSpan(
+                          text: ' · ${row.variant} · ${row.source}',
+                          style: AppText.tag(context),
+                        ),
+                      ],
+                    ),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 ),

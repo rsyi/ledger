@@ -34,10 +34,12 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-/// Estimated label width per character at the small axis styles the
-/// charts use (fontSize 8–10). Deliberately generous: over-estimating
+/// Estimated label width per character at the axis styles the charts
+/// use (fontSize 11 since the 2026-09 readability pass — nothing
+/// user-facing below ~11-12sp). Deliberately generous: over-estimating
 /// drops a keepable tick, under-estimating overlaps two kept ones.
-const double kAxisPxPerChar = 8.0;
+/// Raise this if the axis font size goes up again.
+const double kAxisPxPerChar = 9.0;
 
 /// One kept tick: chart-x position + preformatted label.
 class DateAxisTick {

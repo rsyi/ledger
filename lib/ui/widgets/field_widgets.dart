@@ -1137,7 +1137,7 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
                       'RUNNING',
                       style: TextStyle(
                         color: scheme.primary,
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.6,
                       ),
@@ -1148,7 +1148,7 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
                       'PAUSED',
                       style: TextStyle(
                         color: scheme.onSurfaceVariant,
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.6,
                       ),
@@ -1159,7 +1159,7 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
                       'STOPPED',
                       style: TextStyle(
                         color: scheme.onSurfaceVariant,
-                        fontSize: 11,
+                        fontSize: 12,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.6,
                       ),
@@ -1229,7 +1229,7 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
                     'Tap to record · fills the field marked ⏱',
                     style: TextStyle(
                       color: scheme.onSurfaceVariant,
-                      fontSize: 11,
+                      fontSize: 12,
                     ),
                   ),
                   const SizedBox(height: 4),

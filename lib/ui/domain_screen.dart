@@ -46,6 +46,7 @@ import '../services/program_provider.dart';
 import '../services/qbo_service.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
+import 'app_text.dart';
 import 'form_screen.dart';
 import 'timeline_screen.dart';
 import 'widgets/metric_chart.dart';
@@ -312,6 +313,8 @@ class _ModeBar extends StatelessWidget {
                     ),
                   );
                 }
+                // Labels at the tag scale, values at the 16sp value
+                // scale; two lines of reflow before any ellipsis.
                 return Text.rich(
                   TextSpan(
                     children: [
@@ -319,24 +322,18 @@ class _ModeBar extends StatelessWidget {
                         if (i > 0)
                           TextSpan(
                             text: '  ·  ',
-                            style: TextStyle(color: scheme.outline),
+                            style: TextStyle(color: scheme.onSurfaceVariant),
                           ),
-                        TextSpan(
-                          text: '${s.label} ',
-                          style: TextStyle(color: scheme.onSurfaceVariant),
-                        ),
+                        TextSpan(text: '${s.label} '),
                         TextSpan(
                           text: s.value,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontFeatures: [FontFeature.tabularFigures()],
-                          ),
+                          style: AppText.value(context),
                         ),
                       ],
                     ],
                   ),
-                  style: Theme.of(context).textTheme.bodySmall,
-                  maxLines: 1,
+                  style: AppText.tag(context),
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 );
               },
@@ -451,19 +448,11 @@ class _MetricBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final heading = (config.label ?? config.id).toUpperCase();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          heading,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            letterSpacing: 1.1,
-            fontWeight: FontWeight.w700,
-            color: scheme.onSurfaceVariant,
-          ),
-        ),
+        Text(heading, style: AppText.title(context)),
         const SizedBox(height: 3),
         switch (data) {
           MetricStats(stats: final stats, note: final note) => Column(
@@ -507,7 +496,7 @@ class _MetricBlock extends StatelessWidget {
 
   Widget _dim(BuildContext context, String text) => Text(
     text,
-    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+    style: Theme.of(context).textTheme.bodySmall?.copyWith(
       color: Theme.of(context).colorScheme.onSurfaceVariant,
       fontStyle: FontStyle.italic,
     ),
@@ -532,13 +521,7 @@ class _StatChip extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            stat.value,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
+          Text(stat.value, style: AppText.value(context)),
           Text(
             stat.label,
             style: Theme.of(
@@ -799,7 +782,6 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
   );
 
   Widget _dayHeading(BuildContext context, DateTime day, int count) {
-    final scheme = Theme.of(context).colorScheme;
     final now = DateTime.now();
     final fmt = day.year == now.year ? 'EEE, MMM d' : 'EEE, MMM d, yyyy';
     return Padding(
@@ -808,20 +790,10 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
         children: [
           Text(
             DateFormat(fmt).format(day).toUpperCase(),
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              letterSpacing: 1.1,
-              fontWeight: FontWeight.w700,
-              color: scheme.onSurfaceVariant,
-            ),
+            style: AppText.title(context),
           ),
           const SizedBox(width: 6),
-          Text(
-            '$count',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: scheme.outline,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
+          Text('$count', style: AppText.micro(context)),
         ],
       ),
     );
@@ -853,7 +825,8 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
           ],
         ),
         style: Theme.of(context).textTheme.bodyMedium,
-        maxLines: 1,
+        // Reflow over ellipsis: salient fields can take a second line.
+        maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
     );

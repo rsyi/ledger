@@ -127,7 +127,7 @@ import '../services/wilks.dart'
         wilksWeekDecomposition;
 import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
-import 'home_text.dart';
+import 'app_text.dart';
 
 class HomeDashboard extends StatefulWidget {
   /// Working-max controller tabs (3-min cached). Null → STRENGTH renders
@@ -1253,7 +1253,7 @@ class HomeDashboardState extends State<HomeDashboard> {
                   if (d.targetRate != null)
                     'target ${_fmtSigned(d.targetRate!)}',
                 ].join(' · '),
-                style: HomeText.tag(context),
+                style: AppText.tag(context),
               ),
               const SizedBox(height: 6),
               if (d.verdict != null)
@@ -1290,7 +1290,7 @@ class HomeDashboardState extends State<HomeDashboard> {
             'bulk: actual',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: HomeText.tag(context),
+            style: AppText.tag(context),
           );
         },
       ),
@@ -1448,7 +1448,7 @@ class HomeDashboardState extends State<HomeDashboard> {
                     ? 'no 4x4 logged'
                     : '4x4 max HR ${fmtLb(ff.maxHr)} · wk '
                           '${DateFormat('MMM d').format(ff.weekMonday)}',
-                style: HomeText.tag(context),
+                style: AppText.tag(context),
               ),
               if (d.templateLine != null) ...[
                 const SizedBox(height: 5),
@@ -1456,7 +1456,7 @@ class HomeDashboardState extends State<HomeDashboard> {
                   'Today: ${d.templateLine}',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: HomeText.tag(
+                  style: AppText.tag(
                     context,
                   )?.copyWith(fontStyle: FontStyle.italic),
                 ),
@@ -1696,7 +1696,7 @@ class HomeDashboardState extends State<HomeDashboard> {
                   'Today: ${e!.templateLine}',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: HomeText.tag(
+                  style: AppText.tag(
                     context,
                   )?.copyWith(fontStyle: FontStyle.italic),
                 ),
@@ -1729,7 +1729,7 @@ class HomeDashboardState extends State<HomeDashboard> {
             'Today: $templateLine',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: HomeText.tag(
+            style: AppText.tag(
               context,
             )?.copyWith(fontStyle: FontStyle.italic),
           ),
@@ -1786,7 +1786,7 @@ class _SynthCard extends StatelessWidget {
                       label.toUpperCase(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: HomeText.title(context),
+                      style: AppText.title(context),
                     ),
                   ),
                   if (trailingBuilder != null)
@@ -1812,7 +1812,7 @@ class _Dim extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Text(text, style: HomeText.tag(context)),
+      child: Text(text, style: AppText.tag(context)),
     );
   }
 }
@@ -1831,7 +1831,7 @@ class _BigNumber extends StatelessWidget {
           fontWeight: FontWeight.w700,
           fontFeatures: const [FontFeature.tabularFigures()],
         ),
-        children: [TextSpan(text: unit, style: HomeText.tag(context))],
+        children: [TextSpan(text: unit, style: AppText.tag(context))],
       ),
     );
   }
@@ -1869,7 +1869,7 @@ class _VerdictChip extends StatelessWidget {
         verdictChipText(verdict.label),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: HomeText.tag(
+        style: AppText.tag(
           context,
         )?.copyWith(color: fg, fontWeight: FontWeight.w600),
       ),
@@ -1878,7 +1878,7 @@ class _VerdictChip extends StatelessWidget {
 }
 
 /// Column headers for the STRENGTH card's two columns. Readability
-/// pass 2026-09-25: HomeText.tag (12sp floor) in onSurfaceVariant —
+/// pass 2026-09-25: AppText.tag (12sp floor) in onSurfaceVariant —
 /// the old 9sp outline-colored tags were illegible on the dark theme.
 class _LiftHeaderRow extends StatelessWidget {
   /// Second column label ('last bulk') — null renders the single
@@ -1888,7 +1888,7 @@ class _LiftHeaderRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = HomeText.tag(
+    final style = AppText.tag(
       context,
     )?.copyWith(fontWeight: FontWeight.w600);
     return Padding(
@@ -1923,8 +1923,8 @@ class _LiftHeaderRow extends StatelessWidget {
 /// matches the Wilks benchmark's "best ever … · May '24" vocabulary
 /// (the sheet's all-time lines use the same month tags). Readability
 /// pass 2026-09-25 (user: "fonts are too small on the homepage"):
-/// numbers at HomeText.value (16sp w700), Wilks + when tags at
-/// HomeText.tag (12sp floor, onSurfaceVariant) — and the size increase
+/// numbers at AppText.value (16sp w700), Wilks + when tags at
+/// AppText.tag (12sp floor, onSurfaceVariant) — and the size increase
 /// is absorbed by LAYOUT, not ellipsis: cells soft-wrap to a second
 /// line when the tags don't fit beside the number.
 class _LiftNumbersRow extends StatelessWidget {
@@ -1947,8 +1947,8 @@ class _LiftNumbersRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final numStyle = HomeText.value(context);
-    final tagStyle = HomeText.tag(context);
+    final numStyle = AppText.value(context);
+    final tagStyle = AppText.tag(context);
     Widget cell(_LiftValue? v, String Function(DateTime) when) => Expanded(
       child: v == null
           ? Text('—', textAlign: TextAlign.right, style: tagStyle)
@@ -2015,8 +2015,8 @@ class _LiftStackedRows extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final numStyle = HomeText.value(context);
-    final tagStyle = HomeText.tag(context);
+    final numStyle = AppText.value(context);
+    final tagStyle = AppText.tag(context);
     final basisStyle = tagStyle?.copyWith(fontWeight: FontWeight.w600);
     Widget line(String basis, _LiftValue? v, String Function(DateTime) when) =>
         Text.rich(
@@ -2073,7 +2073,7 @@ class _PainCapChip extends StatelessWidget {
         'pain cap: ${lifts.join(', ')}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: HomeText.tag(context)?.copyWith(
+        style: AppText.tag(context)?.copyWith(
           color: scheme.onErrorContainer,
           fontWeight: FontWeight.w600,
         ),
@@ -2178,11 +2178,11 @@ class _TargetRow extends StatelessWidget {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: HomeText.tag(context),
+            style: AppText.tag(context),
           ),
           Text(
             '${done == null ? '—' : fmtLb(done!)}/${targetText(target)}',
-            style: HomeText.value(context),
+            style: AppText.value(context),
           ),
           const SizedBox(height: 2),
           ClipRRect(
@@ -2218,7 +2218,7 @@ class _FlagChip extends StatelessWidget {
       ),
       child: Text(
         hot ? '$count ⚑' : '0 ⚑',
-        style: HomeText.tag(context)?.copyWith(
+        style: AppText.tag(context)?.copyWith(
           color: hot ? scheme.onErrorContainer : Colors.green.shade800,
           fontWeight: FontWeight.w700,
         ),
@@ -2302,7 +2302,7 @@ class _HeroCard extends StatelessWidget {
                     [?hero.blockLine, ?hero.trajectory].join('   ·   '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: HomeText.tag(context),
+                    style: AppText.tag(context),
                   ),
                 ),
               ],
@@ -2331,7 +2331,7 @@ class _EigenRowTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final (_, fg) = _eigenColors(scheme, row.verdict);
     // Readability pass 2026-09-25: the detail line's leading value
-    // ("178.4 lb", "Wilks 327.5") renders at HomeText.value (16sp
+    // ("178.4 lb", "Wilks 327.5") renders at AppText.value (16sp
     // w700); the ' · rate · target' context that follows stays a 12sp
     // tag. Placeholder details ("no Wilks history yet") have no digits
     // and stay tags. maxLines 2 — the line WRAPS instead of
@@ -2343,10 +2343,10 @@ class _EigenRowTile extends StatelessWidget {
     final detail = Text.rich(
       TextSpan(
         text: head,
-        style: headIsValue ? HomeText.value(context) : HomeText.tag(context),
+        style: headIsValue ? AppText.value(context) : AppText.tag(context),
         children: [
           if (rest != null)
-            TextSpan(text: rest, style: HomeText.tag(context)),
+            TextSpan(text: rest, style: AppText.tag(context)),
         ],
       ),
       maxLines: 2,
@@ -2382,7 +2382,7 @@ class _EigenRowTile extends StatelessWidget {
                     children: [
                       Text(
                         row.label.toUpperCase(),
-                        style: HomeText.title(context),
+                        style: AppText.title(context),
                       ),
                       detail,
                       if (spark != null && !sideBySide) ...[
@@ -2423,9 +2423,9 @@ class _EigenChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       // Readability pass 2026-09-25: the old hand-set 9.5sp is gone —
-      // HomeText.chip sits on the 12sp floor; the row reflows (spark
+      // AppText.chip sits on the 12sp floor; the row reflows (spark
       // below the numbers) to give the wider chip its room.
-      child: Text(_eigenChipText(verdict), style: HomeText.chip(context, color: fg)),
+      child: Text(_eigenChipText(verdict), style: AppText.chip(context, color: fg)),
     );
   }
 }
@@ -2580,9 +2580,9 @@ class _DriverPill extends StatelessWidget {
         ? '${eval.value} · as of '
               '${DateFormat('MMM d').format(eval.staleAsOf!)}'
         : eval.value;
-    // Readability pass 2026-09-25: HomeText.tag (12sp floor) — the
+    // Readability pass 2026-09-25: AppText.tag (12sp floor) — the
     // pills' Wrap parent already reflows them onto extra rows.
-    final style = HomeText.tag(context);
+    final style = AppText.tag(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -2615,7 +2615,7 @@ class _WeekOfNote extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 2),
       child: Text(
         'wk of ${DateFormat('MMM d').format(week.weekMonday)}',
-        style: HomeText.tag(context)?.copyWith(
+        style: AppText.tag(context)?.copyWith(
           color: Theme.of(context).colorScheme.tertiary,
           fontStyle: FontStyle.italic,
         ),

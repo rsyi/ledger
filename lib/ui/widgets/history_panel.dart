@@ -538,7 +538,7 @@ class _TrendChartState extends State<_TrendChart> {
                           padding: const EdgeInsets.only(right: 4),
                           child: Text(
                             value.toStringAsFixed(0),
-                            style: const TextStyle(fontSize: 10),
+                            style: const TextStyle(fontSize: 11),
                           ),
                         ),
                       ),
@@ -550,7 +550,7 @@ class _TrendChartState extends State<_TrendChart> {
                         minX: xMin,
                         maxX: xMax,
                         plotWidth: (constraints.maxWidth - 44).clamp(1, 10000),
-                        style: const TextStyle(fontSize: 10),
+                        style: const TextStyle(fontSize: 11),
                         reservedSize: 32,
                       ),
                     ),
@@ -587,7 +587,7 @@ class _TrendChartState extends State<_TrendChart> {
                             '${s.y.toStringAsFixed(1)}',
                             const TextStyle(
                               color: Colors.white,
-                              fontSize: 11,
+                              fontSize: 12,
                               height: 1.3,
                             ),
                           );
@@ -604,7 +604,7 @@ class _TrendChartState extends State<_TrendChart> {
             child: Text(
               '${spots.length} day(s) · '
               'range ${yMin.toStringAsFixed(1)}–${yMax.toStringAsFixed(1)}',
-              style: const TextStyle(fontSize: 11, color: Colors.grey),
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
           ),
         ],

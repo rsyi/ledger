@@ -671,7 +671,7 @@ $dashYamlWithPhases
   });
 
   // ---------------------------------------------------------------------
-  // Readability pass 2026-09-25 (HomeText, 16sp values / 12sp floor):
+  // Readability pass 2026-09-25 (AppText, 16sp values / 12sp floor):
   // the bigger type must REFLOW — no RenderFlex overflows at phone
   // widths, and the STRENGTH card stacks per-lift rows when the
   // half-width legacy grid can't hold two 16sp columns.

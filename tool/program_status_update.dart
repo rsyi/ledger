@@ -3,10 +3,16 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:airledger/services/forecast_tab.dart';
 import 'package:airledger/services/program_current.dart';
 import 'package:airledger/services/program_metrics.dart';
+import 'package:airledger/services/sim_core.dart';
+import 'package:airledger/services/sim_fit.dart'
+    show buildWeeklySeries, climbsFromTab;
+import 'package:airledger/services/sim_program.dart';
 import 'package:airledger/services/wm_tabs.dart';
 import 'package:airledger/services/working_max.dart';
+import 'package:airledger/services/world_model.dart';
 import 'package:googleapis/sheets/v4.dart' as gsheets;
 import 'package:googleapis_auth/auth_io.dart';
 import 'package:yaml/yaml.dart';
@@ -482,6 +488,55 @@ Future<void> main(List<String> args) async {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Program-sim forecast (design §8): default-lever sim from the current
+  // observed state with the DECLARED world-model coefficients; the whole
+  // trajectory REPLACE-ALL lands in the `forecast` tab (grade column
+  // offset-anchored to the observed p75). Missing config/history degrades
+  // to "skipped" — never blocks the status write.
+  // -------------------------------------------------------------------------
+  List<List<Object?>>? forecastRows;
+  try {
+    final wmFile = File('$home/repos/airledger-fitness/app/world_model.yaml');
+    final worldModel =
+        wmFile.existsSync() ? parseWorldModel(wmFile.readAsStringSync()) : null;
+    final simProgram = simProgramFromDocs(
+      program: programYaml,
+      phase: phaseYaml,
+      rules: worldModel?.sim ?? const SimRules(),
+    );
+    if (worldModel == null || simProgram == null) {
+      print('forecast: skipped (world_model.yaml or program docs missing)');
+    } else {
+      final series = buildWeeklySeries(
+        strengthRows: strengthRows,
+        weightRows: weightRows,
+        climbs: climbsFromTab(climbTab),
+      );
+      final initial = simInitialFromSeries(series);
+      if (initial == null) {
+        print('forecast: skipped (no t0 state — empty history)');
+      } else {
+        final result = simulate(
+          initial: initial,
+          coefficients: worldModel.toCoefficients(),
+          rules: worldModel.sim,
+          program: simProgram,
+        );
+        forecastRows = forecastTabRows(
+          result,
+          gradeOffset: gradeAnchorOffset(
+            observedP75: initial.gradeP75,
+            modelP75:
+                result.weeks.isEmpty ? null : result.weeks.first.gradeP75,
+          ),
+        );
+      }
+    }
+  } catch (e) {
+    print('forecast: skipped ($e)');
+  }
+
   if (dryRun) {
     print('--dry-run: skipping writes');
     print('program_status: ${psRows.length} rows');
@@ -489,6 +544,9 @@ Future<void> main(List<String> args) async {
     print('working_max: would append '
         '${seeds.length + chain.newWorkingMaxRows.length} rows');
     print('readings: would append ${chain.newReadings.length} rows');
+    if (forecastRows != null) {
+      print('forecast: would write ${forecastRows.length} weekly rows');
+    }
     _printCurrentWeekRow(filteredWeeks, flagsByWeek, psHeaders);
     return;
   }
@@ -548,6 +606,20 @@ Future<void> main(List<String> args) async {
     rows: cfRows,
   );
   print('wrote coach_flags: ${cfRows.length} flag rows');
+
+  // -------------------------------------------------------------------------
+  // REPLACE-ALL write forecast (weekly sim rows; nothing else appended)
+  // -------------------------------------------------------------------------
+  if (forecastRows != null) {
+    await _replaceTab(
+      api: api,
+      spreadsheetId: config.spreadsheetId,
+      tabName: forecastTabName,
+      headers: forecastTabHeaders,
+      rows: forecastRows,
+    );
+    print('wrote forecast: ${forecastRows.length} weekly rows');
+  }
 
   // -------------------------------------------------------------------------
   // Report

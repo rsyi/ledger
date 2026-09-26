@@ -1,0 +1,6 @@
+# Test tags. All tagged suites still run in a plain `flutter test`.
+tags:
+  # The W2 program-simulation acceptance gate: walk-forward validation
+  # over the frozen 804-week fixture (test/sim_gate_test.dart). Slower
+  # than a unit test but CI-normal; run alone with `-t sim_gate`.
+  sim_gate:

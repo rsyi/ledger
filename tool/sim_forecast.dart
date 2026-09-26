@@ -2,9 +2,9 @@
 
 import 'dart:io';
 
-import 'package:airledger/services/program_current.dart' show currentVersion;
 import 'package:airledger/services/sim_core.dart';
 import 'package:airledger/services/sim_fit.dart';
+import 'package:airledger/services/sim_program.dart';
 import 'package:airledger/services/world_model.dart';
 import 'package:googleapis/sheets/v4.dart' as gsheets;
 import 'package:googleapis_auth/auth_io.dart';
@@ -54,40 +54,18 @@ Future<void> main(List<String> args) async {
   final programDoc = loadYaml(
     File('$fitnessRepo/coach/program.yaml').readAsStringSync(),
   ) as Map<Object?, Object?>;
-  final version = currentVersion(programDoc)!;
   final phaseDoc = loadYaml(
     File('$fitnessRepo/coach/phase.yaml').readAsStringSync(),
   ) as Map<Object?, Object?>;
-  final phaseVersion = currentVersion(phaseDoc)!;
-  final cutTarget =
-      (phaseVersion['target_weight_lb'] as num?)?.toDouble() ??
-          wm.sim.phaseRules.nextCycle.cutTargetLb;
-
-  final blocks = <SimBlock>[];
-  DateTime? cutEnd;
-  for (final b in version['blocks'] as List) {
-    final m = b as Map;
-    final n = (m['n'] as num).toInt();
-    final dates = m['dates'] as List;
-    final start = DateTime.parse(dates[0].toString());
-    final end = DateTime.parse(dates[1].toString());
-    if (n == 0) {
-      cutEnd = end; // block 0 IS the cut; its end is the declared date
-      continue;
-    }
-    blocks.add(SimBlock(
-      n: n,
-      start: start,
-      end: end,
-      emphasis: m['emphasis'].toString(),
-      rate: (m['rate'] as num?)?.toDouble(),
-    ));
-  }
-  final program = SimProgram(
-    cutTargetLb: cutTarget,
-    cutEndDate: cutEnd!,
-    blocks: blocks,
+  final program = simProgramFromDocs(
+    program: programDoc,
+    phase: phaseDoc,
+    rules: wm.sim,
   );
+  if (program == null) {
+    stderr.writeln('cannot build SimProgram from coach/program.yaml');
+    exit(1);
+  }
 
   // --- Live state: full history → weekly series → t0 vector -----------------
   final config = readConfig();
@@ -110,37 +88,11 @@ Future<void> main(List<String> args) async {
     weightRows: weightRowsFromTab(await tab('weight')),
     climbs: climbsFromTab(await tab('kaya_ascents')),
   );
-  final last = series.length - 1;
-  final e1rm0 = <String, double>{};
-  final peak0 = <String, double>{};
-  for (final l in simLifts) {
-    final v = series.e1rm[l]![last];
-    if (v == null) continue;
-    e1rm0[l] = v;
-    var peak = v;
-    for (final raw in series.e1rmRaw[l]!) {
-      if (raw != null && raw > peak) peak = raw;
-    }
-    peak0[l] = peak;
+  final initial = simInitialFromSeries(series);
+  if (initial == null) {
+    stderr.writeln('cannot build the t0 state vector from the workbook');
+    exit(1);
   }
-  var actualSbd = 0.0;
-  var actualComplete = true;
-  for (final l in simSbdLifts) {
-    final v = series.bestActual[l]![last];
-    if (v == null) {
-      actualComplete = false;
-    } else {
-      actualSbd += v;
-    }
-  }
-  final initial = SimInitialState(
-    monday: series.mondays[last],
-    bw: series.bw[last]!,
-    e1rm: e1rm0,
-    peak: peak0,
-    gradeP75: series.gradeP75[last],
-    actualMaxSbdTotalLbs: actualComplete ? actualSbd : null,
-  );
 
   var coefficients = wm.toCoefficients();
   if (refit) {

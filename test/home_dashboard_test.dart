@@ -796,6 +796,53 @@ $dashYamlWithPhases
     );
   });
 
+  testWidgets('THIS WEEK strip carries no flags chip (removed 2026-09-25); '
+      'its sheet points at Program › status instead', (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestWeightCache();
+    DomainConfigProvider.clearCache();
+    final statusRepo = _FakeStatusRepo([
+      {
+        'week_monday': DateTime(2026, 9, 21),
+        'working_sets': 6,
+        'near_max_sets': 0,
+        'bench_days': 0,
+        'flags': 'NEAR_MAX_LOW,WORKING_LOW,TUESDAY_LOWER,BIKE_DROP,'
+            'TWO_SIGNALS',
+      },
+    ]);
+    var openedStatus = false;
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(fetcher),
+      dashboards: DomainConfigProvider(fetcher),
+      statusView: _statusView,
+      statusRepo: statusRepo,
+      onOpenStatus: () => openedStatus = true,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+
+    // Hero layout with the condensed strip — and no ⚑ chip anywhere.
+    expect(find.text('THIS WEEK'), findsOneWidget);
+    expect(find.textContaining('⚑'), findsNothing);
+
+    // The sheet: no flag dump, one pointer line at the real home of
+    // the coach's signal history.
+    await tester.tap(find.text('THIS WEEK'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('NEAR_MAX_LOW'), findsNothing);
+    expect(find.text('Coach signals'), findsOneWidget);
+    expect(find.text('Program › status'), findsOneWidget);
+    expect(
+      find.textContaining('signal history lives'),
+      findsOneWidget,
+    );
+    // The onward action still reaches the status ledger.
+    await tester.tap(find.text('Open status ledger'));
+    await tester.pumpAndSettle();
+    expect(openedStatus, isTrue);
+  });
+
   // ---------------------------------------------------------------------
   // Readability pass 2026-09-25 (AppText, 16sp values / 12sp floor):
   // the bigger type must REFLOW — no RenderFlex overflows at phone

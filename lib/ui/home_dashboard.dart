@@ -38,7 +38,11 @@
 /// (H)/(L) tag, and the heavy-single recency line under the pills
 /// tracks the two-week heavy rule (config heavy_single_max_days). The
 /// climb driver carries the kaya-snapshot honesty tag ("as of …")
-/// when the import predates the accounting week. No weekly_drivers →
+/// when the import predates the accounting week. The strip's
+/// fired-flag chip is GONE (2026-09-25, output>>input — the user
+/// couldn't act on "5 ⚑"): flags stay in the program_status ledger /
+/// coach context / briefings, and the strip's sheet points at
+/// Program → status. No weekly_drivers →
 /// the pre-redesign quota strip renders unchanged. The
 /// BODY card is dropped in hero mode — the hero's weight row carries
 /// its 7d avg + rate + target + verdict and taps through to the same
@@ -1603,7 +1607,6 @@ class HomeDashboardState extends State<HomeDashboard> {
         'Counted LIVE from your logged rows for the current week '
         '(updates the moment you log; the nightly tab keeps history).';
 
-    final flags = row?['flags']?.toString() ?? '';
     final ff = e?.lastFourByFour;
     // Driver mode (output>>input redesign): one entry per driver with
     // its causal story. The old quota entries only render when no
@@ -1663,12 +1666,14 @@ class HomeDashboardState extends State<HomeDashboard> {
               'Highest heart rate hit in the most recent measured '
               '4x4 interval session — the engine\'s top-end output proxy.',
         ),
-        _DetailEntry(
-          label: 'Flags',
-          value: flags.trim().isEmpty ? 'none' : flags,
+        const _DetailEntry(
+          label: 'Coach signals',
+          value: 'Program › status',
           explain:
-              'Coach rules that fired for this week — evidence and '
-              'actions live in the status ledger.',
+              'The coach\'s weekly rule flags no longer appear on this '
+              'strip — the checklist above and the hero verdicts carry '
+              'the actionable content; the full signal history lives '
+              'in the status ledger.',
         ),
         _DetailEntry(
           label: 'Today',
@@ -1759,18 +1764,15 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// Full-width compact strip: the week's four quotas side by side +
   /// today's template line. Replaces the EXECUTION and ENGINE cards in
   /// the hero layout; their explainer entries merge into one sheet.
+  /// The fired-flag chip was REMOVED from this strip 2026-09-25
+  /// (output>>input: the driver checklist + hero verdicts carry the
+  /// actionable content; the coach's signal history stays in the
+  /// program_status ledger, coach context and briefings — Program →
+  /// status). The legacy EXECUTION card keeps its chip.
   Widget _weekCard(BuildContext context) {
     return _SynthCard(
       label: 'This week',
       onTap: _openWeekSheet,
-      trailingBuilder: (context) => FutureBuilder<_ExecData?>(
-        future: _exec,
-        builder: (context, snap) {
-          final row = snap.data?.week?.row;
-          if (row == null) return const SizedBox.shrink();
-          return _FlagChip(count: flagCount(row['flags']));
-        },
-      ),
       child: FutureBuilder<List<Object?>>(
         future: Future.wait<Object?>([_exec, _engine, _drivers]),
         builder: (context, snap) {

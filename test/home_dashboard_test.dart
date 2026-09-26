@@ -670,6 +670,152 @@ $dashYamlWithPhases
     expect(find.text('near-max'), findsNothing);
   });
 
+  // ---------------------------------------------------------------------
+  // Readability pass 2026-09-25 (HomeText, 16sp values / 12sp floor):
+  // the bigger type must REFLOW — no RenderFlex overflows at phone
+  // widths, and the STRENGTH card stacks per-lift rows when the
+  // half-width legacy grid can't hold two 16sp columns.
+  // ---------------------------------------------------------------------
+
+  Future<void> pumpHeroSurfaceAt(WidgetTester tester, Size size) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestWeightCache();
+    DomainConfigProvider.clearCache();
+    tester.view.physicalSize = size;
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    // Richest live surface: hero (weight + Wilks rows with sparklines),
+    // driver checklist pills, STRENGTH card with both columns.
+    const dashYaml = '''
+$dashYamlWithPhases
+    weekly_drivers:
+      - id: top_single_per_lift
+        label: singles
+        lifts: [squat, bench, deadlift, press]
+        outcome: "Wilks preserved"
+        why: "One heavy single per lift holds neural strength."
+      - id: bench_frequency
+        label: bench 2x
+        target: 2
+        outcome: "bench holds"
+        why: "Bench detrains fastest."
+last_bulk:
+  start: "2025-02-05"
+  end: "2025-10-06"
+  label: "2025 bulk"
+''';
+    Future<String?> heroFetcher(String path) async => switch (path) {
+          'coach/phase.yaml' => phaseYaml,
+          'coach/program.yaml' => programYaml,
+          'app/dashboards.yaml' => dashYaml,
+          _ => null,
+        };
+    final weightRepo = _FakeStatusRepo([
+      for (var i = 0; i < 28; i++)
+        {
+          'date': DateTime(2026, 8, 27).add(Duration(days: i)),
+          'weight_lbs': 165.0 - i * (0.75 / 7),
+        },
+      {'date': DateTime(2025, 6, 5), 'weight_lbs': 184.0},
+    ]);
+    final strengthRepo = _FakeStatusRepo([
+      {
+        'date': DateTime(2026, 9, 21),
+        'exercise': 'Barbell Squat',
+        'weight': 300,
+        'reps': 1,
+        'rpe': 8,
+      },
+      {
+        'date': DateTime(2025, 6, 10),
+        'exercise': 'Barbell Deadlift',
+        'weight': 405,
+        'reps': 2,
+        'rpe': 9,
+      },
+    ]);
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(heroFetcher),
+      dashboards: DomainConfigProvider(heroFetcher),
+      weightView: _weightView,
+      weightRepo: weightRepo,
+      strengthView: _strengthView,
+      strengthRepo: strengthRepo,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+    expect(find.text('CUT'), findsOneWidget);
+    expect(find.text('THIS WEEK'), findsOneWidget);
+    // Any RenderFlex overflow would have failed the test via the
+    // FlutterError reporter — reaching here means the reflow held.
+  }
+
+  testWidgets('hero surface reflows without overflow at 360x690',
+      (tester) async {
+    await pumpHeroSurfaceAt(tester, const Size(360, 690));
+    // Full-width strength card still has room for the aligned columns.
+    expect(find.text('recent e1RM'), findsOneWidget);
+    expect(find.text('last bulk'), findsOneWidget);
+  });
+
+  testWidgets('hero surface reflows without overflow at 412x900',
+      (tester) async {
+    await pumpHeroSurfaceAt(tester, const Size(412, 900));
+    expect(find.text('recent e1RM'), findsOneWidget);
+  });
+
+  testWidgets('legacy half-width STRENGTH card at 360dp stacks per-lift '
+      'rows (layout reflow, not ellipsis) without overflow',
+      (tester) async {
+    HomeDashboardState.clearBestWeightCache();
+    DomainConfigProvider.clearCache();
+    tester.view.physicalSize = const Size(360, 690);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final strengthRepo = _FakeStatusRepo([
+      {
+        'date': DateTime(2026, 9, 21),
+        'exercise': 'Barbell Squat',
+        'weight': 300,
+        'reps': 1,
+      },
+      {
+        'date': DateTime(2025, 6, 10),
+        'exercise': 'Barbell Squat',
+        'weight': 315,
+        'reps': 2,
+      },
+    ]);
+    final weightRepo = _FakeStatusRepo([
+      for (var i = 17; i <= 23; i++)
+        {'date': DateTime(2026, 9, i), 'weight_lbs': 165.0},
+      {'date': DateTime(2025, 6, 5), 'weight_lbs': 184.0},
+      {'date': DateTime(2025, 6, 20), 'weight_lbs': 186.0},
+    ]);
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      strengthView: _strengthView,
+      strengthRepo: strengthRepo,
+      weightView: _weightView,
+      weightRepo: weightRepo,
+      dashboards: DomainConfigProvider(lastBulkFetcher),
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+    // Stacked mode: the column header row is gone; each basis renders
+    // its own full-width line with the value string intact.
+    expect(find.text('recent e1RM'), findsNothing);
+    expect(
+      find.textContaining('310 · 120.0w · 2d', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining("315 · 113.8w · Jun '25", findRichText: true),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('no phases section → legacy four-card grid unchanged',
       (tester) async {
     ProgramProvider.clearCache();

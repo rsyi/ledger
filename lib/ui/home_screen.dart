@@ -47,6 +47,7 @@ import 'program_screen.dart';
 import 'coach_chat_screen.dart';
 import 'coach_threads_screen.dart';
 import 'home_dashboard.dart';
+import 'home_text.dart';
 import 'timeline_screen.dart';
 import 'week_plan_screen.dart';
 
@@ -1345,14 +1346,7 @@ class _DomainSectionsState extends State<_DomainSections> {
   Widget _sectionHeader(BuildContext context, String text) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
-      child: Text(
-        text.toUpperCase(),
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          letterSpacing: 1.2,
-          fontWeight: FontWeight.w700,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
+      child: Text(text.toUpperCase(), style: HomeText.title(context)),
     );
   }
 
@@ -1421,12 +1415,7 @@ class _DomainSectionsState extends State<_DomainSections> {
         if (widget.readOnlyViews.isNotEmpty) ...[
           Padding(
             padding: const EdgeInsets.fromLTRB(28, 8, 16, 2),
-            child: Text(
-              'Read-only',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
+            child: Text('Read-only', style: HomeText.tag(context)),
           ),
           for (final view in widget.readOnlyViews) _viewTile(context, view),
         ],

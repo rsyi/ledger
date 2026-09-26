@@ -127,6 +127,7 @@ import '../services/wilks.dart'
         wilksWeekDecomposition;
 import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
+import 'home_text.dart';
 
 class HomeDashboard extends StatefulWidget {
   /// Working-max controller tabs (3-min cached). Null → STRENGTH renders
@@ -797,29 +798,30 @@ class HomeDashboardState extends State<HomeDashboard> {
     );
   }
 
+  // Top-aligned rows (readability pass 2026-09-25): the old
+  // IntrinsicHeight equal-stretch is incompatible with the STRENGTH
+  // card's LayoutBuilder reflow (LayoutBuilder can't answer intrinsic
+  // sizing), and with the stacked narrow layout the cards' heights
+  // diverge by design anyway.
   Widget _legacyGrid(BuildContext context) {
     return Column(
       children: [
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(child: _bodyCard(context)),
-              const SizedBox(width: 8),
-              Expanded(child: _strengthCard(context)),
-            ],
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: _bodyCard(context)),
+            const SizedBox(width: 8),
+            Expanded(child: _strengthCard(context)),
+          ],
         ),
         const SizedBox(height: 8),
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(child: _execCard(context)),
-              const SizedBox(width: 8),
-              Expanded(child: _engineCard(context)),
-            ],
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: _execCard(context)),
+            const SizedBox(width: 8),
+            Expanded(child: _engineCard(context)),
+          ],
         ),
       ],
     );
@@ -1224,7 +1226,6 @@ class HomeDashboardState extends State<HomeDashboard> {
   // -------------------------------------------------------------------------
 
   Widget _bodyCard(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return _SynthCard(
       label: 'Body',
       onTap: _openBodySheet,
@@ -1252,9 +1253,7 @@ class HomeDashboardState extends State<HomeDashboard> {
                   if (d.targetRate != null)
                     'target ${_fmtSigned(d.targetRate!)}',
                 ].join(' · '),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+                style: HomeText.tag(context),
               ),
               const SizedBox(height: 6),
               if (d.verdict != null)
@@ -1289,9 +1288,9 @@ class HomeDashboardState extends State<HomeDashboard> {
           if (snap.data?.bulkWindow == null) return const SizedBox.shrink();
           return Text(
             'bulk: actual',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: HomeText.tag(context),
           );
         },
       ),
@@ -1313,23 +1312,41 @@ class HomeDashboardState extends State<HomeDashboard> {
           // last-bulk window (absent → single recent column; the
           // all-time top lives in the detail sheet either way).
           final hasBulk = d.bulkWindow != null;
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _LiftHeaderRow(second: hasBulk ? 'last bulk' : null),
-              for (final lift in synthesisLifts)
-                _LiftNumbersRow(
-                  lift: lift,
-                  recent: d.recent[lift],
-                  bulk: hasBulk ? d.lastBulk[lift] : null,
-                  showBulk: hasBulk,
-                  today: _today,
-                ),
-              if (capped.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                _PainCapChip(lifts: capped),
-              ],
-            ],
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              // Readability pass 2026-09-25: 16sp values don't fit the
+              // half-width legacy grid's two-column layout — reflow to
+              // full-width per-lift blocks (name line + value lines)
+              // instead of shrinking or ellipsizing.
+              final stacked = constraints.maxWidth < 250;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (!stacked)
+                    _LiftHeaderRow(second: hasBulk ? 'last bulk' : null),
+                  for (final lift in synthesisLifts)
+                    stacked
+                        ? _LiftStackedRows(
+                            lift: lift,
+                            recent: d.recent[lift],
+                            bulk: hasBulk ? d.lastBulk[lift] : null,
+                            showBulk: hasBulk,
+                            today: _today,
+                          )
+                        : _LiftNumbersRow(
+                            lift: lift,
+                            recent: d.recent[lift],
+                            bulk: hasBulk ? d.lastBulk[lift] : null,
+                            showBulk: hasBulk,
+                            today: _today,
+                          ),
+                  if (capped.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    _PainCapChip(lifts: capped),
+                  ],
+                ],
+              );
+            },
           );
         },
       ),
@@ -1401,7 +1418,6 @@ class HomeDashboardState extends State<HomeDashboard> {
   // -------------------------------------------------------------------------
 
   Widget _engineCard(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return _SynthCard(
       label: 'Engine',
       onTap: _openEngineSheet,
@@ -1432,9 +1448,7 @@ class HomeDashboardState extends State<HomeDashboard> {
                     ? 'no 4x4 logged'
                     : '4x4 max HR ${fmtLb(ff.maxHr)} · wk '
                           '${DateFormat('MMM d').format(ff.weekMonday)}',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+                style: HomeText.tag(context),
               ),
               if (d.templateLine != null) ...[
                 const SizedBox(height: 5),
@@ -1442,10 +1456,9 @@ class HomeDashboardState extends State<HomeDashboard> {
                   'Today: ${d.templateLine}',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                    fontStyle: FontStyle.italic,
-                  ),
+                  style: HomeText.tag(
+                    context,
+                  )?.copyWith(fontStyle: FontStyle.italic),
                 ),
               ],
             ],
@@ -1593,7 +1606,6 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// today's template line. Replaces the EXECUTION and ENGINE cards in
   /// the hero layout; their explainer entries merge into one sheet.
   Widget _weekCard(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return _SynthCard(
       label: 'This week',
       onTap: _openWeekSheet,
@@ -1684,10 +1696,9 @@ class HomeDashboardState extends State<HomeDashboard> {
                   'Today: ${e!.templateLine}',
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                    fontStyle: FontStyle.italic,
-                  ),
+                  style: HomeText.tag(
+                    context,
+                  )?.copyWith(fontStyle: FontStyle.italic),
                 ),
               ],
             ],
@@ -1704,7 +1715,6 @@ class HomeDashboardState extends State<HomeDashboard> {
     List<DriverEval> drivers,
     String? templateLine,
   ) {
-    final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1719,10 +1729,9 @@ class HomeDashboardState extends State<HomeDashboard> {
             'Today: $templateLine',
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-              fontStyle: FontStyle.italic,
-            ),
+            style: HomeText.tag(
+              context,
+            )?.copyWith(fontStyle: FontStyle.italic),
           ),
         ],
       ],
@@ -1769,16 +1778,19 @@ class _SynthCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Text(
-                    label.toUpperCase(),
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      letterSpacing: 1.1,
-                      fontWeight: FontWeight.w700,
-                      color: scheme.onSurfaceVariant,
+                  // Expanded title + Flexible trailing: on very narrow
+                  // cards the header degrades gracefully (title yields
+                  // first, then the tag) instead of overflowing.
+                  Expanded(
+                    child: Text(
+                      label.toUpperCase(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: HomeText.title(context),
                     ),
                   ),
-                  const Spacer(),
-                  if (trailingBuilder != null) trailingBuilder!(context),
+                  if (trailingBuilder != null)
+                    Flexible(child: trailingBuilder!(context)),
                 ],
               ),
               const SizedBox(height: 6),
@@ -1800,12 +1812,7 @@ class _Dim extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Text(
-        text,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
-      ),
+      child: Text(text, style: HomeText.tag(context)),
     );
   }
 }
@@ -1817,7 +1824,6 @@ class _BigNumber extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Text.rich(
       TextSpan(
         text: value,
@@ -1825,14 +1831,7 @@ class _BigNumber extends StatelessWidget {
           fontWeight: FontWeight.w700,
           fontFeatures: const [FontFeature.tabularFigures()],
         ),
-        children: [
-          TextSpan(
-            text: unit,
-            style: Theme.of(
-              context,
-            ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-        ],
+        children: [TextSpan(text: unit, style: HomeText.tag(context))],
       ),
     );
   }
@@ -1870,18 +1869,17 @@ class _VerdictChip extends StatelessWidget {
         verdictChipText(verdict.label),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          color: fg,
-          fontWeight: FontWeight.w600,
-        ),
+        style: HomeText.tag(
+          context,
+        )?.copyWith(color: fg, fontWeight: FontWeight.w600),
       ),
     );
   }
 }
 
 /// Column headers for the STRENGTH card's two columns. Readability
-/// pass 2026-09-22: labelSmall (11sp) in onSurfaceVariant — the old
-/// 9sp outline-colored tags were illegible on the dark theme.
+/// pass 2026-09-25: HomeText.tag (12sp floor) in onSurfaceVariant —
+/// the old 9sp outline-colored tags were illegible on the dark theme.
 class _LiftHeaderRow extends StatelessWidget {
   /// Second column label ('last bulk') — null renders the single
   /// recent-e1RM column (no `last_bulk:` window configured).
@@ -1890,15 +1888,14 @@ class _LiftHeaderRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final style = Theme.of(context).textTheme.labelSmall?.copyWith(
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
-      fontWeight: FontWeight.w600,
-    );
+    final style = HomeText.tag(
+      context,
+    )?.copyWith(fontWeight: FontWeight.w600);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Row(
         children: [
-          const SizedBox(width: 56),
+          const SizedBox(width: 64),
           Expanded(
             child: Text(
               'recent e1RM',
@@ -1925,9 +1922,11 @@ class _LiftHeaderRow extends StatelessWidget {
 /// a year-old date reads better as a month than as "15mo", and it
 /// matches the Wilks benchmark's "best ever … · May '24" vocabulary
 /// (the sheet's all-time lines use the same month tags). Readability
-/// pass 2026-09-22: numbers at bodySmall (12sp), Wilks + when tags at
-/// labelSmall (11sp) onSurfaceVariant — nothing below Material's 11sp
-/// legibility floor, no outline-on-dark text.
+/// pass 2026-09-25 (user: "fonts are too small on the homepage"):
+/// numbers at HomeText.value (16sp w700), Wilks + when tags at
+/// HomeText.tag (12sp floor, onSurfaceVariant) — and the size increase
+/// is absorbed by LAYOUT, not ellipsis: cells soft-wrap to a second
+/// line when the tags don't fit beside the number.
 class _LiftNumbersRow extends StatelessWidget {
   final String lift;
   final _LiftValue? recent;
@@ -1948,15 +1947,8 @@ class _LiftNumbersRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final numStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
-      fontWeight: FontWeight.w700,
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
-    final tagStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
-      color: scheme.onSurfaceVariant,
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
+    final numStyle = HomeText.value(context);
+    final tagStyle = HomeText.tag(context);
     Widget cell(_LiftValue? v, String Function(DateTime) when) => Expanded(
       child: v == null
           ? Text('—', textAlign: TextAlign.right, style: tagStyle)
@@ -1974,25 +1966,88 @@ class _LiftNumbersRow extends StatelessWidget {
                 ],
               ),
               textAlign: TextAlign.right,
-              maxLines: 1,
+              // Reflow, don't shrink: the tags wrap under the number
+              // when the column is narrow (16sp numbers need room).
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
     );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 56,
-            child: Text(
-              lift,
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            width: 64,
+            child: Padding(
+              // Optically aligns the 12sp label with the 16sp numbers.
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(lift, style: tagStyle),
             ),
           ),
           cell(recent, (d) => fmtAge(d, today)),
           if (showBulk) cell(bulk, fmtMonthTag),
+        ],
+      ),
+    );
+  }
+}
+
+/// Narrow-width STRENGTH reflow (readability pass 2026-09-25): when the
+/// legacy half-width grid can't hold 16sp two-column cells, each lift
+/// becomes a full-width block — name line + one value line per basis
+/// ("e1RM 310 · 120.0w · 2d" / "bulk 315 · 113.8w · Jun '25") — layout
+/// absorbs the bigger type instead of ellipsis. The wide layout keeps
+/// the aligned columns (_LiftHeaderRow + _LiftNumbersRow).
+class _LiftStackedRows extends StatelessWidget {
+  final String lift;
+  final _LiftValue? recent;
+  final _LiftValue? bulk;
+  final bool showBulk;
+  final DateTime today;
+  const _LiftStackedRows({
+    required this.lift,
+    required this.recent,
+    required this.bulk,
+    required this.showBulk,
+    required this.today,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final numStyle = HomeText.value(context);
+    final tagStyle = HomeText.tag(context);
+    final basisStyle = tagStyle?.copyWith(fontWeight: FontWeight.w600);
+    Widget line(String basis, _LiftValue? v, String Function(DateTime) when) =>
+        Text.rich(
+          TextSpan(
+            text: '$basis  ',
+            style: basisStyle,
+            children: [
+              if (v == null)
+                TextSpan(text: '—', style: tagStyle)
+              else ...[
+                TextSpan(text: fmtLb(v.value.roundToDouble()), style: numStyle),
+                if (v.wilks != null)
+                  TextSpan(
+                    text: ' · ${v.wilks!.toStringAsFixed(1)}w',
+                    style: tagStyle,
+                  ),
+                TextSpan(text: ' · ${when(v.date)}', style: tagStyle),
+              ],
+            ],
+          ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(lift, style: basisStyle),
+          line('e1RM', recent, (d) => fmtAge(d, today)),
+          if (showBulk) line('bulk', bulk, fmtMonthTag),
         ],
       ),
     );
@@ -2018,7 +2073,7 @@ class _PainCapChip extends StatelessWidget {
         'pain cap: ${lifts.join(', ')}',
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+        style: HomeText.tag(context)?.copyWith(
           color: scheme.onErrorContainer,
           fontWeight: FontWeight.w600,
         ),
@@ -2116,24 +2171,18 @@ class _TargetRow extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  label,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              Text(
-                '${done == null ? '—' : fmtLb(done!)}/${targetText(target)}',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-            ],
+          // Readability pass 2026-09-25: label stacked ABOVE the value
+          // — the 16sp count and a 12sp label don't share a narrow
+          // quota column's width, so the layout gives each its own line.
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: HomeText.tag(context),
+          ),
+          Text(
+            '${done == null ? '—' : fmtLb(done!)}/${targetText(target)}',
+            style: HomeText.value(context),
           ),
           const SizedBox(height: 2),
           ClipRRect(
@@ -2169,7 +2218,7 @@ class _FlagChip extends StatelessWidget {
       ),
       child: Text(
         hot ? '$count ⚑' : '0 ⚑',
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+        style: HomeText.tag(context)?.copyWith(
           color: hot ? scheme.onErrorContainer : Colors.green.shade800,
           fontWeight: FontWeight.w700,
         ),
@@ -2253,9 +2302,7 @@ class _HeroCard extends StatelessWidget {
                     [?hero.blockLine, ?hero.trajectory].join('   ·   '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    style: HomeText.tag(context),
                   ),
                 ),
               ],
@@ -2283,53 +2330,76 @@ class _EigenRowTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final (_, fg) = _eigenColors(scheme, row.verdict);
+    // Readability pass 2026-09-25: the detail line's leading value
+    // ("178.4 lb", "Wilks 327.5") renders at HomeText.value (16sp
+    // w700); the ' · rate · target' context that follows stays a 12sp
+    // tag. Placeholder details ("no Wilks history yet") have no digits
+    // and stay tags. maxLines 2 — the line WRAPS instead of
+    // ellipsizing when the bigger type needs the room.
+    final split = row.detail.indexOf(' · ');
+    final head = split < 0 ? row.detail : row.detail.substring(0, split);
+    final rest = split < 0 ? null : row.detail.substring(split);
+    final headIsValue = RegExp(r'\d').hasMatch(head);
+    final detail = Text.rich(
+      TextSpan(
+        text: head,
+        style: headIsValue ? HomeText.value(context) : HomeText.tag(context),
+        children: [
+          if (rest != null)
+            TextSpan(text: rest, style: HomeText.tag(context)),
+        ],
+      ),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    );
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: Row(
-          children: [
-            _EigenChip(verdict: row.verdict),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    row.label.toUpperCase(),
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      fontSize: 9,
-                      letterSpacing: 1.1,
-                      fontWeight: FontWeight.w700,
-                      color: scheme.onSurfaceVariant,
-                    ),
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final hasSpark = row.spark.length >= 2;
+            // Reflow, don't shrink: on narrow rows (360dp-class
+            // screens) the sparkline stacks BELOW the numbers instead
+            // of squeezing the 16sp value into ellipsis.
+            final sideBySide = hasSpark && constraints.maxWidth >= 340;
+            final spark = hasSpark
+                ? _Sparkline(
+                    points: row.spark,
+                    reference: row.sparkReference,
+                    floor: row.sparkFloor,
+                    color: fg,
+                  )
+                : null;
+            return Row(
+              children: [
+                _EigenChip(verdict: row.verdict),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        row.label.toUpperCase(),
+                        style: HomeText.title(context),
+                      ),
+                      detail,
+                      if (spark != null && !sideBySide) ...[
+                        const SizedBox(height: 4),
+                        spark,
+                      ],
+                    ],
                   ),
-                  Text(
-                    row.detail,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    // labelSmall so the full "x lb · rate · target" line
-                    // fits beside the sparkline on a 360dp screen.
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
+                ),
+                if (spark != null && sideBySide) ...[
+                  const SizedBox(width: 6),
+                  spark,
                 ],
-              ),
-            ),
-            if (row.spark.length >= 2) ...[
-              const SizedBox(width: 6),
-              _Sparkline(
-                points: row.spark,
-                reference: row.sparkReference,
-                floor: row.sparkFloor,
-                color: fg,
-              ),
-            ],
-            Icon(Icons.chevron_right, size: 18, color: scheme.outline),
-          ],
+                Icon(Icons.chevron_right, size: 18, color: scheme.outline),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -2345,22 +2415,17 @@ class _EigenChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final (bg, fg) = _eigenColors(Theme.of(context).colorScheme, verdict);
     return Container(
-      constraints: const BoxConstraints(minWidth: 66),
+      constraints: const BoxConstraints(minWidth: 74),
       alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Text(
-        _eigenChipText(verdict),
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-          fontSize: 9.5,
-          letterSpacing: 0.6,
-          color: fg,
-          fontWeight: FontWeight.w800,
-        ),
-      ),
+      // Readability pass 2026-09-25: the old hand-set 9.5sp is gone —
+      // HomeText.chip sits on the 12sp floor; the row reflows (spark
+      // below the numbers) to give the wider chip its room.
+      child: Text(_eigenChipText(verdict), style: HomeText.chip(context, color: fg)),
     );
   }
 }
@@ -2515,9 +2580,11 @@ class _DriverPill extends StatelessWidget {
         ? '${eval.value} · as of '
               '${DateFormat('MMM d').format(eval.staleAsOf!)}'
         : eval.value;
-    final style = Theme.of(context).textTheme.labelSmall;
+    // Readability pass 2026-09-25: HomeText.tag (12sp floor) — the
+    // pills' Wrap parent already reflows them onto extra rows.
+    final style = HomeText.tag(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(8),
@@ -2529,11 +2596,7 @@ class _DriverPill extends StatelessWidget {
           children: [
             TextSpan(
               text: detail,
-              style: style?.copyWith(
-                color: fg,
-                fontWeight: FontWeight.w700,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
+              style: style?.copyWith(color: fg, fontWeight: FontWeight.w700),
             ),
           ],
         ),
@@ -2552,7 +2615,7 @@ class _WeekOfNote extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 2),
       child: Text(
         'wk of ${DateFormat('MMM d').format(week.weekMonday)}',
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+        style: HomeText.tag(context)?.copyWith(
           color: Theme.of(context).colorScheme.tertiary,
           fontStyle: FontStyle.italic,
         ),

@@ -86,7 +86,7 @@
 ///             the sheet's basis entry spells out "recent: e1RM ·
 ///             bulk & top: actual") — two bases on one card, and only
 ///             the actual tops share the Wilks trend chart's
-///             actual-max basis. Pain caps show as a labeled chip.
+///             actual-max basis.
 ///   EXECUTION this week's working / near-max / bench counts vs the
 ///             program targets, + fired-flag count. Data: the current
 ///             program_status row (read-only sheet path).
@@ -279,12 +279,10 @@ typedef _LiftValue = ({double value, DateTime date, double? wilks});
 /// STRENGTH card data (rebuild 2026-09-22, twice): recent e1RM vs
 /// LAST-BULK top per lift on the card (user: "just show my numbers
 /// from my last bulk here"), the all-time top relegated to the detail
-/// sheet. [trends] stays only for pain caps — the working-max COLUMN
-/// moved to the Program tab's Configuration card.
+/// sheet. The working-max COLUMN moved to the Program tab's
+/// Configuration card; the pain-cap chip was removed 2026-09-25
+/// (user: "I don't know what 'pain cap: deadlift' means").
 class _StrengthData {
-  /// WM snapshot per lift — the card reads ONLY painCap from it now.
-  final List<LiftTrend> trends;
-
   /// recent e1RM (RPE-adjusted since 2026-09-25 — the airlayer
   /// `max_e1rm_rpe` basis): best RPE-adjusted capped e1RM in the
   /// trailing 14 days of real work (light weeks + effort < 0.75
@@ -316,7 +314,6 @@ class _StrengthData {
   final double? currentBwLbs;
 
   const _StrengthData({
-    required this.trends,
     required this.recent,
     required this.best,
     required this.lastBulk,
@@ -821,7 +818,6 @@ class HomeDashboardState extends State<HomeDashboard> {
             bestWeightsInWindow(rows, start: window.start, end: window.end),
           );
     return _StrengthData(
-      trends: liftTrends(snap, _today),
       recent: recent,
       best: best,
       lastBulk: lastBulk,
@@ -1082,10 +1078,6 @@ class HomeDashboardState extends State<HomeDashboard> {
               )
               .join('\n');
     String age(DateTime dt) => fmtAge(dt, _today);
-    final capped = [
-      for (final t in d?.trends ?? const <LiftTrend>[])
-        if (t.painCap) t.lift,
-    ];
     final bw = d?.currentBwLbs;
     final window = d?.bulkWindow;
     await _showDetailSheet(
@@ -1166,14 +1158,6 @@ class HomeDashboardState extends State<HomeDashboard> {
               '— not a measured max. It lives on the Program tab\'s '
               'Configuration card, where you confirm or override it.',
         ),
-        if (capped.isNotEmpty)
-          _DetailEntry(
-            label: 'pain cap',
-            value: capped.join(', '),
-            explain:
-                'The lift is frozen and top sets are capped at RPE 7 '
-                'until two clean sessions.',
-          ),
       ],
       // Program screen: its CONFIGURATION section is where WMs are
       // confirmed/overridden (moved out of Integrations 2026-09-21).
@@ -1419,10 +1403,6 @@ class HomeDashboardState extends State<HomeDashboard> {
           if (d == null || d.isEmpty) {
             return const _Dim('no strength data yet');
           }
-          final capped = [
-            for (final t in d.trends)
-              if (t.painCap) t.lift,
-          ];
           // Second column only when dashboards.yaml declares the
           // last-bulk window (absent → single recent column; the
           // all-time top lives in the detail sheet either way).
@@ -1455,10 +1435,6 @@ class HomeDashboardState extends State<HomeDashboard> {
                             showBulk: hasBulk,
                             today: _today,
                           ),
-                  if (capped.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    _PainCapChip(lifts: capped),
-                  ],
                 ],
               );
             },
@@ -2215,34 +2191,6 @@ class _LiftStackedRows extends StatelessWidget {
           line('e1RM (RPE-adj)', recent, (d) => fmtAge(d, today)),
           if (showBulk) line('bulk', bulk, fmtMonthTag),
         ],
-      ),
-    );
-  }
-}
-
-/// Labeled pain-cap chip ("pain cap: deadlift") — replaces the old bare
-/// red icon. The detail sheet explains the semantics.
-class _PainCapChip extends StatelessWidget {
-  final List<String> lifts;
-  const _PainCapChip({required this.lifts});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: scheme.errorContainer,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        'pain cap: ${lifts.join(', ')}',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: AppText.tag(context)?.copyWith(
-          color: scheme.onErrorContainer,
-          fontWeight: FontWeight.w600,
-        ),
       ),
     );
   }

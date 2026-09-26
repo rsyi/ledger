@@ -35,25 +35,38 @@ GradedSet g(
 
 WeekDriverInputs inputs({
   List<GradedSet> graded = const [],
+  List<TopSetReading>? readings,
+  DateTime? alternationAnchorMonday,
   List<DateTime> climbingDates = const [],
   List<DateTime> cardioDates = const [],
   Map<DateTime, double> proteinByDay = const {},
   double? bodyweightLb,
 }) => WeekDriverInputs(
   graded: graded,
+  readings: readings,
+  alternationAnchorMonday: alternationAnchorMonday,
   climbingDates: climbingDates,
   cardioDates: cardioDates,
   proteinByDay: proteinByDay,
   bodyweightLb: bodyweightLb,
 );
 
+TopSetReading reading(
+  String lift,
+  DateTime date, {
+  String kind = 'heavy_top',
+  int reps = 1,
+  double rpe = 8,
+}) => TopSetReading(date: date, lift: lift, kind: kind, reps: reps, rpe: rpe);
+
 DriverEval evalOne(
   WeekDriverConfig config,
-  WeekDriverInputs data,
-) => evaluateWeekDrivers(
+  WeekDriverInputs data, {
+  DateTime? at,
+}) => evaluateWeekDrivers(
   configs: [config],
   inputs: data,
-  today: today,
+  today: at ?? today,
   weekStartDay: satStart,
 ).single;
 
@@ -67,6 +80,7 @@ phases:
       - id: top_single_per_lift
         label: singles
         lifts: [squat, bench, deadlift, press]
+        heavy_single_max_days: 14
         outcome: "Wilks preserved"
         why: "One heavy single per lift holds neural strength."
       - id: bench_frequency
@@ -113,6 +127,7 @@ void main() {
       expect(cut, hasLength(5));
       expect(cut[0].id, 'top_single_per_lift');
       expect(cut[0].lifts, ['squat', 'bench', 'deadlift', 'press']);
+      expect(cut[0].heavySingleMaxDays, 14);
       expect(cut[0].outcome, 'Wilks preserved');
       expect(cut[0].why, contains('neural'));
       expect(cut[1].target, 2);
@@ -163,7 +178,172 @@ phases:
     });
   });
 
-  group('top_single_per_lift', () {
+  group('top_single_per_lift — readings-based (2026-09-25)', () {
+    final config = WeekDriverConfig(
+      id: 'top_single_per_lift',
+      lifts: const ['squat', 'bench', 'deadlift', 'press'],
+    );
+
+    test('any top-set reading ticks its lift — the Monday 275x2@8 squat '
+        '(not near-max by §2.5 grading) passes the week', () {
+      final e = evalOne(
+        config,
+        inputs(
+          // §2.5 grading says NOT near-max — must be irrelevant now.
+          graded: [g('squat', DateTime(2026, 9, 21))],
+          readings: [reading('squat', DateTime(2026, 9, 21), reps: 2)],
+        ),
+      );
+      expect(e.value, '1/4');
+      expect(e.ticks.firstWhere((t) => t.lift == 'squat').done, isTrue);
+    });
+
+    test('heavy_top, saturday_single, capped and test readings all tick; '
+        'light_week never does', () {
+      DriverTick tickOf(String kind, String lift) => evalOne(
+        config,
+        inputs(readings: [
+          reading(lift, DateTime(2026, 9, 21), kind: kind, reps: 3),
+        ]),
+      ).ticks.firstWhere((t) => t.lift == lift);
+      expect(tickOf('heavy_top', 'squat').done, isTrue);
+      expect(tickOf('saturday_single', 'bench').done, isTrue);
+      expect(tickOf('capped', 'deadlift').done, isTrue);
+      expect(tickOf('test', 'press').done, isTrue);
+      expect(tickOf('light_week', 'squat').done, isFalse);
+    });
+
+    test('readings outside the accounting week (or in the future) never '
+        'tick', () {
+      final e = evalOne(
+        config,
+        inputs(readings: [
+          reading('deadlift', DateTime(2026, 9, 17)), // prior week (Thu)
+          reading('squat', DateTime(2026, 9, 24)), // future (planned)
+        ]),
+      );
+      expect(e.value, '0/4');
+    });
+
+    test('all four lifts covered by readings → met', () {
+      final e = evalOne(
+        config,
+        inputs(readings: [
+          reading('squat', DateTime(2026, 9, 21), reps: 2),
+          reading('bench', DateTime(2026, 9, 21)),
+          reading('deadlift', DateTime(2026, 9, 22), kind: 'capped'),
+          reading('press', DateTime(2026, 9, 19), reps: 5, rpe: 9),
+        ]),
+      );
+      expect(e.status, DriverStatus.met);
+      expect(e.value, '4/4');
+    });
+
+    test('parity labels from the alternation anchor: A week = squat '
+        'heavy + deadlift light; B week swaps; bench/press unlabeled', () {
+      // Week of Sat 2026-09-19: its Monday is the anchor itself → A.
+      final a = evalOne(
+        config,
+        inputs(
+          readings: const [],
+          alternationAnchorMonday: DateTime(2026, 9, 21),
+        ),
+      );
+      final aByLift = {for (final t in a.ticks) t.lift: t.parity};
+      expect(aByLift, {
+        'squat': 'heavy',
+        'bench': null,
+        'deadlift': 'light',
+        'press': null,
+      });
+      // One accounting week later (Tue 2026-09-29 → Monday 09-28) → B.
+      final b = evalOne(
+        config,
+        inputs(
+          readings: const [],
+          alternationAnchorMonday: DateTime(2026, 9, 21),
+        ),
+        at: DateTime(2026, 9, 29),
+      );
+      final bByLift = {for (final t in b.ticks) t.lift: t.parity};
+      expect(bByLift['squat'], 'light');
+      expect(bByLift['deadlift'], 'heavy');
+    });
+
+    test('no anchor → no parity labels', () {
+      final e = evalOne(config, inputs(readings: const []));
+      expect(e.ticks.every((t) => t.parity == null), isTrue);
+    });
+
+    group('heavy-single recency (every-two-weeks rule)', () {
+      final heavyConfig = WeekDriverConfig(
+        id: 'top_single_per_lift',
+        lifts: const ['squat', 'bench', 'deadlift', 'press'],
+        heavySingleMaxDays: 14,
+      );
+
+      test('newest ≤2-rep RPE ≥ 7.5 reading dates the exposure; bands: '
+          'fresh ≤ 14d, amber past 14d, red past 21d', () {
+        final e = evalOne(
+          heavyConfig,
+          inputs(readings: [
+            // Squat: heavy 3d ago (later 3-rep day must not count).
+            reading('squat', DateTime(2026, 9, 19), reps: 2, rpe: 8),
+            reading('squat', DateTime(2026, 9, 21), reps: 3, rpe: 8),
+            // Deadlift: heavy 16 days ago → amber.
+            reading('deadlift', DateTime(2026, 9, 6), reps: 1, rpe: 7.5),
+          ]),
+        );
+        final byLift = {for (final h in e.heavyRecency) h.lift: h};
+        expect(byLift.keys.toSet(), {'squat', 'deadlift'});
+        expect(byLift['squat']!.daysAgo, 3);
+        expect(byLift['squat']!.band, HeavySingleBand.fresh);
+        expect(byLift['deadlift']!.daysAgo, 16);
+        expect(byLift['deadlift']!.band, HeavySingleBand.overdue);
+      });
+
+      test('past 21 days → stale (red); light_week / high-rep / easy '
+          'readings never qualify', () {
+        final e = evalOne(
+          heavyConfig,
+          inputs(readings: [
+            reading('squat', DateTime(2026, 8, 30), reps: 1, rpe: 9),
+            // None of these refresh the squat exposure:
+            reading('squat', DateTime(2026, 9, 21), reps: 3, rpe: 9),
+            reading('squat', DateTime(2026, 9, 21), reps: 2, rpe: 7),
+            reading('squat', DateTime(2026, 9, 20),
+                reps: 1, rpe: 8, kind: 'light_week'),
+          ]),
+        );
+        final squat = e.heavyRecency.firstWhere((h) => h.lift == 'squat');
+        expect(squat.daysAgo, 23);
+        expect(squat.band, HeavySingleBand.stale);
+      });
+
+      test('no qualifying reading yet → null daysAgo, amber (unknown is '
+          'not violated)', () {
+        final e = evalOne(heavyConfig, inputs(readings: const []));
+        final squat = e.heavyRecency.firstWhere((h) => h.lift == 'squat');
+        expect(squat.daysAgo, isNull);
+        expect(squat.band, HeavySingleBand.overdue);
+      });
+
+      test('recency only tracks the alternating lifts (squat/deadlift), '
+          'and only when heavy_single_max_days is configured', () {
+        final e = evalOne(heavyConfig, inputs(readings: const []));
+        expect(e.heavyRecency.map((h) => h.lift).toSet(),
+            {'squat', 'deadlift'});
+        final noConfig = evalOne(config, inputs(readings: const []));
+        expect(noConfig.heavyRecency, isEmpty);
+        // Legacy mode (no readings source) has no recency data either.
+        final legacy = evalOne(heavyConfig, inputs());
+        expect(legacy.heavyRecency, isEmpty);
+      });
+    });
+  });
+
+  group('top_single_per_lift — legacy near-max fallback (no readings '
+      'source plumbed)', () {
     final config = WeekDriverConfig(
       id: 'top_single_per_lift',
       lifts: const ['squat', 'bench', 'deadlift', 'press'],
@@ -506,6 +686,8 @@ phases:
       ]);
       expect(cut[3].cap, 2); // climbing CAP, program targets_block_0
       expect(cut[2].floorGPerLb, 0.8);
+      // The every-two-weeks heavy-single rule (2026-09-25).
+      expect(cut[0].heavySingleMaxDays, 14);
       final bulk = byPhase['bulk']!;
       expect(bulk.map((d) => d.id).toList(),
           ['lift_frequency', 'near_max_exposure', 'protein_floor']);

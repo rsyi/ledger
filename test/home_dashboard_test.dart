@@ -10,7 +10,19 @@ import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
 import 'package:airledger/services/wilks.dart'
     show weeklyWilksSeries, wilksWeekDecomposition;
+import 'package:airledger/services/wm_store.dart';
+import 'package:airledger/services/wm_tabs.dart';
 import 'package:airledger/ui/home_dashboard.dart';
+
+/// Serves a canned WM snapshot (readings tab). No network.
+class _FakeWmStore extends WmStore {
+  final WmSnapshot snap;
+  _FakeWmStore(this.snap)
+      : super(spreadsheetId: 'test', serviceAccountKeyJson: '{}');
+
+  @override
+  Future<WmSnapshot?> snapshot({bool force = false}) async => snap;
+}
 
 /// Serves canned program_status rows. No network.
 class _FakeStatusRepo implements WarehouseConnector {
@@ -668,6 +680,120 @@ $dashYamlWithPhases
     // Output>>input: the activity tallies are not on the strip.
     expect(find.text('sets'), findsNothing);
     expect(find.text('near-max'), findsNothing);
+  });
+
+  testWidgets('singles driver is readings-based + parity-aware '
+      '(2026-09-25): tab ∪ live readings tick, (H)/(L) alternation tags, '
+      'heavy-single recency line under the pills', (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestWeightCache();
+    DomainConfigProvider.clearCache();
+    // Program with the squat/deadlift alternation anchor (Mon 9/21 → the
+    // week of Sep 21 is an A week: squat heavy, deadlift light).
+    const altProgramYaml = '''
+versions:
+  - version: 1
+    effective_from: "2026-09-21"
+    id: bulk-2026-27
+    blocks:
+      - { n: 0, dates: ["2026-09-21", "2026-12-13"], emphasis: cut, weight: [163, 154] }
+    planned_alternation:
+      anchor_monday: "2026-09-21"
+    targets:
+      near_max_sets_wk: 4
+''';
+    const dashYaml = '''
+$dashYamlWithPhases
+    weekly_drivers:
+      - id: top_single_per_lift
+        label: singles
+        lifts: [squat, bench, deadlift, press]
+        heavy_single_max_days: 14
+        outcome: "Wilks preserved"
+        why: "Heavy every two weeks; lighter stimulus alternate weeks."
+''';
+    Future<String?> readingsFetcher(String path) async => switch (path) {
+          'coach/phase.yaml' => phaseYaml,
+          'coach/program.yaml' => altProgramYaml,
+          'app/dashboards.yaml' => dashYaml,
+          _ => null,
+        };
+    // The stored readings tab carries Monday's squat 275x2@8 — NOT a
+    // §2.5 near-max set, which must no longer matter.
+    final wmStore = _FakeWmStore((
+      workingMax: <WorkingMaxRow>[],
+      readings: <ReadingRow>[
+        ReadingRow(
+          id: '2026-09-21|squat',
+          date: DateTime.utc(2026, 9, 21),
+          lift: 'squat',
+          variant: 'belted',
+          weightLb: 275,
+          reps: 2,
+          rpe: 8,
+          kind: 'heavy_top',
+          grinder: false,
+          missed: false,
+          impliedMax: 308.3,
+          decision: 'hold',
+          wmAfter: 320,
+        ),
+      ],
+    ));
+    // Live gap-fill: a bench top set the nightly hasn't stored yet.
+    final strengthRepo = _FakeStatusRepo([
+      {
+        'date': DateTime(2026, 9, 22),
+        'exercise': 'Flat Barbell Bench Press',
+        'weight': 225,
+        'reps': 1,
+        'rpe': 8,
+      },
+    ]);
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      wmStore: wmStore,
+      provider: ProgramProvider(readingsFetcher),
+      dashboards: DomainConfigProvider(readingsFetcher),
+      strengthView: _strengthView,
+      strengthRepo: strengthRepo,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+
+    // Ticks: squat from the TAB reading (parity-tagged heavy), bench
+    // from the LIVE extraction; deadlift wears its light-week tag.
+    expect(
+      find.textContaining('S✓(H)', findRichText: true),
+      findsOneWidget,
+    );
+    expect(find.textContaining('B✓', findRichText: true), findsOneWidget);
+    expect(
+      find.textContaining('D·(L)', findRichText: true),
+      findsOneWidget,
+    );
+    expect(find.textContaining('P·', findRichText: true), findsOneWidget);
+    // The two-week heavy rule's secondary line: squat's 275x2@8 is a
+    // heavy exposure (2d ago); deadlift has none recorded → overdue.
+    expect(
+      find.text('heavy single: S 2d · D none yet — overdue'),
+      findsOneWidget,
+    );
+
+    // The detail sheet explains the parity + two-week mechanics.
+    await tester.tap(find.text('THIS WEEK'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('a lighter top set still ticks on its light week'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('every-two-weeks rule'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('amber past 14 days'),
+      findsOneWidget,
+    );
   });
 
   // ---------------------------------------------------------------------

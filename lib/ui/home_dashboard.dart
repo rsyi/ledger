@@ -30,6 +30,13 @@
 /// — the phase's causal inputs, each tied to a named outcome — instead
 /// of activity tallies; `sets`/`near-max` quotas are gone from the
 /// surface (working_sets stays a program_status/flags concern). The
+/// SINGLES driver is READINGS-BASED + PARITY-AWARE since 2026-09-25
+/// (user: "a heavy single every two weeks, a lighter stimulus on
+/// alternate weeks"): a lift ticks when a working-max top-set reading
+/// (tab rows ∪ live extraction, light_week excluded) exists this
+/// accounting week; squat/deadlift ticks wear the planned_alternation
+/// (H)/(L) tag, and the heavy-single recency line under the pills
+/// tracks the two-week heavy rule (config heavy_single_max_days). The
 /// climb driver carries the kaya-snapshot honesty tag ("as of …")
 /// when the import predates the accounting week. No weekly_drivers →
 /// the pre-redesign quota strip renders unchanged. The
@@ -111,12 +118,19 @@ import '../services/home_synthesis.dart';
 import '../services/phase_eigenvectors.dart';
 import '../services/program_current.dart';
 import '../services/program_metrics.dart'
-    show GradedSet, StrengthRow, WeightRow, anchorMondayOf, gradeSets;
+    show
+        GradedSet,
+        StrengthRow,
+        WeightRow,
+        anchorMondayOf,
+        gradeSets,
+        weekStartOf;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/warehouse_connector.dart';
 import '../services/week_drivers.dart';
 import '../services/weight_series.dart';
+import '../services/working_max.dart' show extractReadings;
 import '../services/wilks.dart'
     show
         WilksLiftPart,
@@ -559,11 +573,91 @@ class HomeDashboardState extends State<HomeDashboard> {
     }
   }
 
+  /// Top-set readings for the singles driver (readings-based tick,
+  /// 2026-09-25): the stored `readings` tab rows (the working-max
+  /// controller's ground truth) UNIONed with a LIVE extraction from
+  /// local strength rows for days the nightly hasn't evaluated yet —
+  /// per lift, dates strictly after its newest stored reading, same
+  /// candidate rule as runWmChain — so the tick moves the moment the
+  /// top set is logged and an empty tab still reads honestly. Live
+  /// rows only carry the tick-relevant kind (light_week / test via the
+  /// program's week type, else heavy_top); the nightly chain remains
+  /// the owner of the full kind taxonomy. Null only when the WM
+  /// snapshot itself is unavailable → the evaluator falls back to the
+  /// legacy §2.5 near-max tick.
+  Future<List<TopSetReading>?> _loadTopSetReadings() async {
+    final snap = await _wm;
+    if (snap == null) return null;
+    final out = <TopSetReading>[
+      for (final r in snap.readings)
+        TopSetReading(
+          date: r.date,
+          lift: r.lift,
+          kind: r.kind,
+          reps: r.reps,
+          rpe: r.rpe,
+        ),
+    ];
+    final rows = await _strengthRows;
+    if (rows.isEmpty) return out;
+    final docs = await _docs;
+    final program = docs?.program;
+    final wsDay = await _weekStartDay();
+    String liveKind(DateTime date, String lift) {
+      final wt = program == null
+          ? null
+          : programCurrent(
+              program,
+              docs?.phase,
+              anchorMondayOf(weekStartOf(date, wsDay)),
+            )?.weekType;
+      return wt == 'light'
+          ? 'light_week'
+          : wt == 'test'
+              ? 'test'
+              : 'heavy_top';
+    }
+
+    DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
+    final today = day(_today);
+    final lastStored = <String, DateTime>{};
+    for (final r in snap.readings) {
+      final d = day(r.date);
+      final cur = lastStored[r.lift];
+      if (cur == null || d.isAfter(cur)) lastStored[r.lift] = d;
+    }
+    for (final r in extractReadings(rows, kindOf: liveKind)) {
+      final d = day(r.date);
+      if (d.isAfter(today)) continue; // planned rows never count
+      final last = lastStored[r.lift];
+      if (last != null && !d.isAfter(last)) continue; // nightly owns it
+      out.add(
+        TopSetReading(
+          date: r.date,
+          lift: r.lift,
+          kind: r.kind,
+          reps: r.reps,
+          rpe: r.rpe,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// planned_alternation's anchor Monday from the program version —
+  /// feeds the singles ticks' (H)/(L) parity tags.
+  static DateTime? _alternationAnchor(Map<Object?, Object?>? version) {
+    final alt = version?['planned_alternation'];
+    if (alt is! Map) return null;
+    return DateTime.tryParse(alt['anchor_monday']?.toString() ?? '');
+  }
+
   /// Driver checklist (output>>input principle): dashboards.yaml
   /// `weekly_drivers:` for the declared phase, evaluated live against
-  /// strength (top singles, frequency), meals (protein), the kaya
-  /// snapshot (climb, with staleness honesty) and cardio (4x4) over
-  /// the current accounting week. Null → old quota strip.
+  /// the working-max readings (top singles), strength (frequency),
+  /// meals (protein), the kaya snapshot (climb, with staleness
+  /// honesty) and cardio (4x4) over the current accounting week.
+  /// Null → old quota strip.
   Future<List<DriverEval>?> _computeDrivers() async {
     final raw = await _guard(() async => widget.dashboards?.loadRaw());
     final byPhase = parseWeeklyDrivers(raw);
@@ -581,6 +675,10 @@ class HomeDashboardState extends State<HomeDashboard> {
       configs: configs,
       inputs: WeekDriverInputs(
         graded: rows.isEmpty ? const [] : gradeSets(rows),
+        readings: await _loadTopSetReadings(),
+        alternationAnchorMonday: _alternationAnchor(
+          currentVersion(docs?.program),
+        ),
         climbingDates: await _climbDates,
         cardioDates: await _loadCardioDates(),
         proteinByDay: await _loadProteinByDay(),
@@ -1586,7 +1684,9 @@ class HomeDashboardState extends State<HomeDashboard> {
   }
 
   /// One driver's detail-sheet entry: value (+ per-lift ticks, + the
-  /// staleness tag) and the one-line causal story.
+  /// staleness tag, + the heavy-single recency line) and the one-line
+  /// causal story. The singles driver additionally explains its parity
+  /// and two-week-heavy mechanics (2026-09-25).
   _DetailEntry _driverEntry(DriverEval d) {
     final ticks = d.ticks.isEmpty
         ? ''
@@ -1599,20 +1699,61 @@ class HomeDashboardState extends State<HomeDashboard> {
         : ' The Kaya snapshot\'s newest ascent predates this week — '
               'this count can\'t see newer climbs until you re-export '
               '(Integrations → Kaya → Sync).';
+    final heavyLine = heavyRecencyText(d);
+    final heavy = heavyLine == null ? '' : '\n$heavyLine';
+    // The singles rule, mechanically: how a tick is earned, what
+    // (H)/(L) means, and how the two-week heavy rule is tracked. The
+    // user's own phrasing of the rule lives in the config's `why`.
+    final singlesExplain = d.config.id != 'top_single_per_lift'
+        ? ''
+        : ' A tick = a top-set reading for that lift this accounting '
+              'week — the working-max controller\'s day-top RPE set, '
+              'heavy or light, any reps (deload-week readings don\'t '
+              'count).'
+              '${d.ticks.any((t) => t.parity != null) ? ' (H)/(L) on squat/deadlift is this week\'s side '
+                    'of the heavy↔light alternation — a lighter top set '
+                    'still ticks on its light week.' : ''}'
+              '${d.config.heavySingleMaxDays == null ? '' : ' The heavy-single line tracks the every-two-weeks '
+                    'rule: the newest ≤2-rep set at RPE ≥ 7.5 per lift '
+                    '— amber past ${d.config.heavySingleMaxDays} days, '
+                    'red a week later.'}';
     return _DetailEntry(
       label: d.label,
-      value: '${d.value}$ticks$stale',
+      value: '${d.value}$ticks$stale$heavy',
       explain:
           'Why this matters: ${d.config.why ?? '—'} '
-          'Drives: ${d.config.outcome ?? '—'}.$staleExplain',
+          'Drives: ${d.config.outcome ?? '—'}.$singlesExplain$staleExplain',
     );
   }
 
   static String _tickText(DriverTick t) {
     final letter = t.lift.isEmpty ? '?' : t.lift[0].toUpperCase();
-    return t.target > 1
+    final base = t.target > 1
         ? '$letter ${t.count}/${t.target}'
         : '$letter${t.done ? '✓' : '·'}';
+    // Alternation parity tag (2026-09-25): this week's EXPECTED side
+    // of the squat/deadlift heavy↔light swap — display only, a light
+    // top set still ticks.
+    return switch (t.parity) {
+      'heavy' => '$base(H)',
+      'light' => '$base(L)',
+      _ => base,
+    };
+  }
+
+  /// "heavy single: S 4d · D 16d — overdue" — the every-two-weeks
+  /// heavy rule's secondary line (null when the eval carries none).
+  static String? heavyRecencyText(DriverEval d) {
+    if (d.heavyRecency.isEmpty) return null;
+    String part(HeavySingleRecency h) {
+      final letter = h.lift.isEmpty ? '?' : h.lift[0].toUpperCase();
+      final age = h.daysAgo == null ? 'none yet' : '${h.daysAgo}d';
+      return h.band == HeavySingleBand.fresh
+          ? '$letter $age'
+          : '$letter $age — overdue';
+    }
+
+    return 'heavy single: ${d.heavyRecency.map(part).join(' · ')}';
   }
 
   /// Full-width compact strip: the week's four quotas side by side +
@@ -1736,6 +1877,14 @@ class HomeDashboardState extends State<HomeDashboard> {
           runSpacing: 6,
           children: [for (final d in drivers) _DriverPill(eval: d)],
         ),
+        // The every-two-weeks heavy-single rule, under the singles
+        // pills (2026-09-25): amber past heavy_single_max_days, red a
+        // week past that.
+        for (final d in drivers)
+          if (d.heavyRecency.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            _HeavySingleLine(eval: d),
+          ],
         if (templateLine != null) ...[
           const SizedBox(height: 6),
           Text(
@@ -2615,6 +2764,35 @@ class _DriverPill extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The singles driver's heavy-single recency line ("heavy single:
+/// S 4d · D 16d — overdue"), colored by the WORST band: normal tag
+/// color while fresh, amber once any lift is past
+/// `heavy_single_max_days`, error red a week past that.
+class _HeavySingleLine extends StatelessWidget {
+  final DriverEval eval;
+  const _HeavySingleLine({required this.eval});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final worst = eval.heavyRecency
+        .map((h) => h.band.index)
+        .fold(0, (a, b) => a > b ? a : b);
+    final color = switch (HeavySingleBand.values[worst]) {
+      HeavySingleBand.fresh => scheme.onSurfaceVariant,
+      HeavySingleBand.overdue => Colors.orange.shade900,
+      HeavySingleBand.stale => scheme.error,
+    };
+    return Text(
+      HomeDashboardState.heavyRecencyText(eval)!,
+      style: AppText.tag(context)?.copyWith(
+        color: color,
+        fontWeight: worst > 0 ? FontWeight.w600 : null,
       ),
     );
   }

@@ -10,9 +10,23 @@
 /// by construction, same contract as the `phases:` hero itself).
 ///
 /// Driver vocabulary (id selects the computation):
-///   top_single_per_lift  each listed lift gets its heavy single this
-///                        week (a §2.5 near-max set) — four per-lift
-///                        ticks, not a count.
+///   top_single_per_lift  each listed lift gets its top-set READING
+///                        this week (working-max controller extraction
+///                        — the ground truth of "top stimulus
+///                        happened": heavy_top / saturday_single /
+///                        capped / test all tick, light_week never
+///                        does; ANY reps — the user's codified rule,
+///                        2026-09-25: "a heavy single every two weeks,
+///                        a lighter stimulus on alternate weeks").
+///                        Squat/deadlift ticks carry the alternation
+///                        parity tag (heavy/light expected this week,
+///                        from planned_alternation's anchor Monday),
+///                        and `heavy_single_max_days` adds the
+///                        every-two-weeks heavy-exposure recency line
+///                        (a ≤2-rep reading at RPE ≥ 7.5; amber past
+///                        the config, red a week later). When no
+///                        readings source is plumbed the tick falls
+///                        back to the legacy §2.5 near-max criterion.
 ///   bench_frequency      distinct bench days vs `target`.
 ///   lift_frequency       per-lift distinct days vs `per_lift_targets`
 ///                        (the muscle-group 2x/wk eigenvector
@@ -33,7 +47,7 @@ library;
 
 import 'package:yaml/yaml.dart';
 
-import 'program_metrics.dart' show GradedSet, weekStartOf;
+import 'program_metrics.dart' show GradedSet, anchorMondayOf, weekStartOf;
 
 // ---------------------------------------------------------------------------
 // Config (dashboards.yaml phases.<phase>.weekly_drivers)
@@ -61,6 +75,13 @@ class WeekDriverConfig {
   /// protein_floor's g-per-lb-of-bodyweight floor.
   final double? floorGPerLb;
 
+  /// top_single_per_lift: the every-two-weeks heavy rule (2026-09-25).
+  /// A HEAVY exposure (reading with reps ≤ 2 at RPE ≥ 7.5) must exist
+  /// within this many trailing days for squat/deadlift; the eval's
+  /// [DriverEval.heavyRecency] line goes amber past it and red a week
+  /// later. Null → no recency tracking.
+  final int? heavySingleMaxDays;
+
   /// The outcome this driver produces ("Wilks preserved") — every
   /// driver must name one (the principle's ship gate).
   final String? outcome;
@@ -76,6 +97,7 @@ class WeekDriverConfig {
     this.target,
     this.cap,
     this.floorGPerLb,
+    this.heavySingleMaxDays,
     this.outcome,
     this.why,
   });
@@ -127,6 +149,7 @@ Map<String, List<WeekDriverConfig>>? parseWeeklyDrivers(String? raw) {
           target: (d['target'] as num?)?.toDouble(),
           cap: (d['cap'] as num?)?.toDouble(),
           floorGPerLb: (d['floor_g_per_lb'] as num?)?.toDouble(),
+          heavySingleMaxDays: (d['heavy_single_max_days'] as num?)?.toInt(),
           outcome: d['outcome']?.toString(),
           why: d['why']?.toString(),
         ),
@@ -154,13 +177,64 @@ class DriverTick {
   final int count;
   final int target;
 
+  /// This week's alternation expectation for the lift — 'heavy' /
+  /// 'light' (squat/deadlift under planned_alternation), null for
+  /// non-alternating lifts or when no anchor is declared. Display
+  /// only: a light-week top set still ticks.
+  final String? parity;
+
   const DriverTick({
     required this.lift,
     required this.count,
     required this.target,
+    this.parity,
   });
 
   bool get done => count >= target;
+}
+
+/// One top-set reading the singles driver evaluates — a thin projection
+/// of the working-max controller's readings (tab rows + the app's live
+/// extraction for not-yet-evaluated days). Kept local so this lib stays
+/// dependency-free.
+class TopSetReading {
+  final DateTime date;
+
+  /// squat | bench | deadlift | press.
+  final String lift;
+
+  /// heavy_top | saturday_single | test | light_week | capped.
+  final String kind;
+  final int reps;
+  final double rpe;
+
+  const TopSetReading({
+    required this.date,
+    required this.lift,
+    required this.kind,
+    required this.reps,
+    required this.rpe,
+  });
+}
+
+/// Freshness band of a lift's newest HEAVY exposure vs the config's
+/// `heavy_single_max_days`: fresh ≤ max, overdue (amber) past it —
+/// including "no qualifying reading yet" (unknown, not violated) —
+/// stale (red) a week past that.
+enum HeavySingleBand { fresh, overdue, stale }
+
+/// The every-two-weeks heavy rule, per alternating lift: days since the
+/// newest reading with reps ≤ 2 at RPE ≥ 7.5 (null = none recorded).
+class HeavySingleRecency {
+  final String lift;
+  final int? daysAgo;
+  final HeavySingleBand band;
+
+  const HeavySingleRecency({
+    required this.lift,
+    required this.daysAgo,
+    required this.band,
+  });
 }
 
 /// One evaluated driver, preformatted for the strip.
@@ -178,12 +252,19 @@ class DriverEval {
   /// predates the accounting week (count unknowable until re-import).
   final DateTime? staleAsOf;
 
+  /// top_single_per_lift's every-two-weeks heavy rule — one entry per
+  /// alternating lift (squat/deadlift) when `heavy_single_max_days` is
+  /// configured and a readings source is plumbed; the strip renders it
+  /// as the secondary line under the singles pills.
+  final List<HeavySingleRecency> heavyRecency;
+
   const DriverEval({
     required this.config,
     required this.status,
     required this.value,
     this.ticks = const [],
     this.staleAsOf,
+    this.heavyRecency = const [],
   });
 
   /// Strip label fallback chain: declared label → per-id default.
@@ -208,6 +289,17 @@ class WeekDriverInputs {
   /// nightly tab); evaluation filters to the accounting week.
   final List<GradedSet> graded;
 
+  /// Working-max controller readings (tab + live extraction), the
+  /// singles driver's source of truth since 2026-09-25. NULL (as
+  /// opposed to empty) = no readings source plumbed → the tick falls
+  /// back to the legacy §2.5 near-max criterion on [graded].
+  final List<TopSetReading>? readings;
+
+  /// planned_alternation's anchor Monday (program.yaml) — even whole
+  /// weeks since it = A week (squat heavy + deadlift light), odd = B.
+  /// Null → no parity tags.
+  final DateTime? alternationAnchorMonday;
+
   /// kaya_ascents ascent dates (full snapshot — staleness needs the
   /// overall latest).
   final List<DateTime> climbingDates;
@@ -224,6 +316,8 @@ class WeekDriverInputs {
 
   const WeekDriverInputs({
     this.graded = const [],
+    this.readings,
+    this.alternationAnchorMonday,
     this.climbingDates = const [],
     this.cardioDates = const [],
     this.proteinByDay = const {},
@@ -269,18 +363,97 @@ List<DriverEval> evaluateWeekDrivers({
     switch (c.id) {
       case 'top_single_per_lift':
         final lifts = c.lifts.isEmpty ? _defaultLifts : c.lifts;
+        final readings = inputs.readings;
+
+        // Weekly tick (codified 2026-09-25): a top-set READING exists
+        // for the lift this accounting week — the controller's own
+        // extraction is the ground truth of "top stimulus happened".
+        // Any reps, any kind except light_week (a capped or Saturday
+        // single is still top stimulus; a deload single is not). The
+        // user's rule: heavy every two weeks, a lighter stimulus is
+        // fine on alternate weeks — so §2.5 near-max grading no longer
+        // gates the tick. Legacy fallback when no readings source.
+        bool ticked(String lift) => readings != null
+            ? readings.any(
+                (r) =>
+                    r.lift == lift &&
+                    r.kind != 'light_week' &&
+                    inWeek(r.date),
+              )
+            : inputs.graded.any(
+                (s) => s.lift == lift && s.nearMax && inWeek(s.date),
+              );
+
+        // Parity tag: this week's side of the squat/deadlift heavy ↔
+        // light alternation. Program STRUCTURE is Monday-anchored, so
+        // the accounting week's parity is its contained Monday's whole
+        // weeks since the anchor — even (incl. 0) = A = squat heavy +
+        // deadlift light (planned_alternation note), matching the week
+        // planner's a/b resolution.
+        String? parityOf(String lift) {
+          final anchor = inputs.alternationAnchorMonday;
+          if (anchor == null) return null;
+          if (lift != 'squat' && lift != 'deadlift') return null;
+          final monday = anchorMondayOf(weekStart);
+          final weeks = DateTime.utc(monday.year, monday.month, monday.day)
+                  .difference(
+                    DateTime.utc(anchor.year, anchor.month, anchor.day),
+                  )
+                  .inDays ~/
+              7;
+          final aWeek = weeks.isEven;
+          return (lift == 'squat') == aWeek ? 'heavy' : 'light';
+        }
+
         final ticks = <DriverTick>[
           for (final lift in lifts)
             DriverTick(
               lift: lift,
-              count: inputs.graded.any(
-                (s) => s.lift == lift && s.nearMax && inWeek(s.date),
-              )
-                  ? 1
-                  : 0,
+              count: ticked(lift) ? 1 : 0,
               target: 1,
+              parity: parityOf(lift),
             ),
         ];
+
+        // The every-two-weeks heavy rule, tracked per alternating lift:
+        // days since the newest HEAVY exposure (reps ≤ 2 at RPE ≥ 7.5,
+        // weights already variant-converted upstream). Amber past
+        // `heavy_single_max_days`, red a week later; "never recorded"
+        // is unknown → amber, not violated.
+        final heavy = <HeavySingleRecency>[];
+        final maxDays = c.heavySingleMaxDays;
+        if (maxDays != null && readings != null) {
+          for (final lift in const ['squat', 'deadlift']) {
+            if (!lifts.contains(lift)) continue;
+            DateTime? last;
+            for (final r in readings) {
+              if (r.lift != lift ||
+                  r.kind == 'light_week' ||
+                  r.reps > 2 ||
+                  r.rpe < 7.5) {
+                continue;
+              }
+              final day = _day(r.date);
+              if (_daysBetween(day, today) < 0) continue; // future
+              if (last == null || day.isAfter(last)) last = day;
+            }
+            final days = last == null ? null : _daysBetween(last, today);
+            heavy.add(
+              HeavySingleRecency(
+                lift: lift,
+                daysAgo: days,
+                band: days == null
+                    ? HeavySingleBand.overdue
+                    : days <= maxDays
+                        ? HeavySingleBand.fresh
+                        : days <= maxDays + 7
+                            ? HeavySingleBand.overdue
+                            : HeavySingleBand.stale,
+              ),
+            );
+          }
+        }
+
         final done = ticks.where((t) => t.done).length;
         out.add(
           DriverEval(
@@ -290,6 +463,7 @@ List<DriverEval> evaluateWeekDrivers({
                 : DriverStatus.pending,
             value: frac(done, lifts.length),
             ticks: ticks,
+            heavyRecency: heavy,
           ),
         );
 

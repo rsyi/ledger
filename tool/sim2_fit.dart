@@ -124,7 +124,9 @@ void main() {
 
 double _pred(List<double> x, List<double> th) {
   var s = 0.0;
-  for (var i = 0; i < 4; i++) s += x[i] * th[i];
+  for (var i = 0; i < 4; i++) {
+    s += x[i] * th[i];
+  }
   return s;
 }
 
@@ -161,7 +163,9 @@ List<double> _gauss4(List<List<double>> a, List<double> b) {
     for (var r = 0; r < 4; r++) {
       if (r == col) continue;
       final f = m[r][col] / m[col][col];
-      for (var c2 = col; c2 <= 4; c2++) m[r][c2] -= f * m[col][c2];
+      for (var c2 = col; c2 <= 4; c2++) {
+        m[r][c2] -= f * m[col][c2];
+      }
     }
   }
   return [for (var i = 0; i < 4; i++) m[i][4] / m[i][i]];

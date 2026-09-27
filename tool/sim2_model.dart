@@ -1,11 +1,25 @@
 // ignore_for_file: avoid_print
-// sim2_model.dart — shared model core for the training-simulator v2
-// (spec: airledger docs/superpowers/specs/2026-09-26-training-simulator-spec.md).
-// Pure Dart, no Flutter. Wave 1: consumed by tool/sim2_fit.dart,
-// tool/sim2_replay.dart, tool/sim2_horizon.dart. Wave 2 lifts this into lib/.
+// sim2_model.dart — shared model core for the training-simulator v2.1
+// (spec: airledger docs/superpowers/specs/2026-09-26-training-simulator-spec.md,
+// REVISED §2: capacity and expression are two different things).
+// Pure Dart, no Flutter. Consumed by tool/sim2_fit.dart, tool/sim2_replay.dart,
+// tool/sim2_horizon.dart. Wave 3 lifts this into lib/.
+//
+// v2.1 (revision wave): §2 is two layers — slow capacity S_cap moved only by
+// training/food/time, and an expression overlay E (energy-state dep, body-mass
+// leverage, rust, fatigue) with S_obs = S_cap · E. The v2.0 explicit rebound
+// term is REMOVED: the post-cut snap-back is emergent via dep decaying 1→0
+// over the first 3 surplus weeks.
+//
+// S_obs basis note: the spec prefers RPE-implied maxes where a reading exists
+// and the Epley index as fallback. BOTH calibration CSVs are index-basis
+// (total_at_start / gains are the app's Epley index), so fit and replay run
+// on the index; the index's under-read in cuts is carried by the dep + rust
+// terms (few near-max attempts is exactly what rust measures). The horizon
+// seeds S_cap from the RPE-implied readings (§2 anchors, Sep 2026).
 //
 // PROVENANCE LABELS (§9.5): every constant is tagged
-//   [fit]    — fitted on calibration_windows.csv by tool/sim2_fit.dart
+//   [fit]    — fitted on calibration CSVs by tool/sim2_fit.dart
 //   [log]    — anchored on the user's log (spec anchors)
 //   [lit]    — literature / published anchor per spec
 //   [assume] — assumption (spec's or this implementation's, noted)
@@ -18,12 +32,36 @@ import 'dart:math';
 // ---------------------------------------------------------------------------
 
 class Sim2Params {
-  // §2 strength — priors a=3.0, b=0.4, c=2.5, d=0.8; defaults below are the
-  // ridge fit from tool/sim2_fit.dart (run it to regenerate). [fit]
+  // §2 capacity layer — priors a=2.5, b=0.4, c=1.5, c_cut=1.0, d=0.6 (revised
+  // spec). Defaults are the priors; Sim2Params.fitted() is pass 2. [fit]
   double a; // near-max saturating gain, lb/wk
   double b; // working-volume slope per 10 sets around 20, lb/wk
-  double c; // food slope per lb/wk of bw rate, lb/wk
+  double c; // food slope per lb/wk of SURPLUS bw rate (clip 0..+0.5), lb/wk
+  double cCut; // cut cost per lb/wk of deficit rate, lb/wk
   double d; // drift with no stimulus, lb/wk
+
+  // §2 expression layer E — priors 0.06 / 0.0025 / 0.04 (revised spec).
+  // Defaults are the priors; Sim2Params.fitted() is pass 1. [fit]
+  double eDep; // energy-state depletion, fraction of S_cap at dep=1
+  double eBw; // body-mass leverage per lb around 165
+  double eRust; // rust (no near-max attempts) fraction at rust=1
+  final double eF = 0.03; // fatigue term, held at prior (not fitted) [assume]
+
+  // Measurement model for the app's EPLEY INDEX (the calibration basis):
+  // the index is built from whatever sets happened, so it re-reads true
+  // expressed strength only when near-max attempts occur — attempt weeks
+  // converge fast (kAttempt), attempt-sparse weeks are nearly frozen
+  // (kIdle). Log evidence: Dec-2024→Mar-2025 (N≈13.7/wk) the index caught
+  // the E snap-back within weeks (+88 lb/14 wk at 2025-01-13), while the
+  // 2025-26 cut's attempt-sparse onset shows only −12 on the index over 14
+  // weeks as E crashed, the fall arriving with the N≈8-13 attempt burst of
+  // Feb-Mar 2026. Applied by smoothing the E path:
+  // E_idx = gatedEma(E, N, kAttempt, kIdle); used ONLY when comparing model
+  // S_obs to the index (fit, replay) — the horizon's expressed output is
+  // true/RPE-basis, no smoothing. [fit]
+  double idxKAttempt;
+  double idxKIdle;
+  final double idxGateN = 2; // attempt week: N ≥ 2 [assume]
 
   // §1 budget [log anchors, form fixed by spec]
   final double fDecay = 0.7; // fatigue carries 70% week to week
@@ -31,20 +69,46 @@ class Sim2Params {
 
   // §3 climbing [lit/log anchors per spec]
   final double kC = 0.013; // V/wk at K=3 baseline [lit]
-  // §4 VO2 [log/assume]. ADAPTATION: the spec's form (gain ∝ Z_eff) cannot
-  // satisfy both anchors "1/wk holds Vabs" and "2/wk gains +1 pt/8wk"; we use
-  // gain ∝ max(0, Z_eff − 1) so Z_eff=1 holds exactly. [assume]
+  // §4 VO2 [log/assume]. W1 ADAPTATION (kept, labeled): the spec's form
+  // (gain ∝ Z_eff) cannot satisfy both anchors "1/wk holds Vabs" and "2/wk
+  // gains +1 pt/8wk"; we use gain ∝ max(0, Z_eff − 1) so Z_eff=1 holds
+  // exactly. [assume]
   final double vo2Ceiling = 58; // [assume, exposed per spec]
   final double kV = 0.089; // L/min per wk per session above maintenance [log]
   final double vDelta = 0.0024; // weekly Vabs decay when Z_eff < 0.5 [log]
 
   Sim2Params(
-      {this.a = 3.0, this.b = 0.4, this.c = 2.5, this.d = 0.8}); // priors
+      {this.a = 2.5,
+      this.b = 0.4,
+      this.c = 1.5,
+      this.cCut = 1.0,
+      this.d = 0.6,
+      this.eDep = 0.06,
+      this.eBw = 0.0025,
+      this.eRust = 0.04,
+      this.idxKAttempt = 0.4,
+      this.idxKIdle = 0.05}); // priors
 
-  /// Ridge fit 2026-09-26 (tool/sim2_fit.dart on calibration_windows.csv):
-  /// R² 0.331 train (gain_14wk_from_start) / 0.277 validate (after_window).
-  factory Sim2Params.fitted() =>
-      Sim2Params(a: 4.06, b: 0.51, c: 1.59, d: 1.54);
+  /// Two-pass fit 2026-09-26 (tool/sim2_fit.dart, calibration CSVs, 2 sweeps
+  /// per cell; cell — index response × eDep — selected by the §9.2 replay
+  /// checkpoints, see the tool's selection-rule note):
+  /// pass 1 (E, flip windows) eBw/eRust ridge-fit, eDep replay-selected;
+  /// pass 2 (capacity, steady windows, capacity-basis target) a,b,c,cCut,d.
+  /// Replay 4/5 (only the documented Bulk-C level anomaly fails), median
+  /// level |err| 31 lb. Values regenerated by running the fit tool; see the
+  /// v2.1 fit report (airledger docs/superpowers/specs) for R², bins and
+  /// the identification caveats.
+  factory Sim2Params.fitted() => Sim2Params(
+      a: 2.49,
+      b: 0.39,
+      c: 1.44,
+      cCut: 0.92,
+      d: 0.59,
+      eDep: 0.0400,
+      eBw: 0.0020,
+      eRust: 0.0075,
+      idxKAttempt: 0.7,
+      idxKIdle: 0.1);
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +128,7 @@ class Dials {
   double r; // bw rate lb/wk
   double p; // protein g/lb
   double benchDays;
+  double? muOverride; // §5 deficit lean-loss fraction override (μ branches)
 
   Dials(
       {required this.dSessions,
@@ -77,11 +142,12 @@ class Dials {
       this.q = 0,
       this.r = 0,
       this.p = 0.9,
-      this.benchDays = 2});
+      this.benchDays = 2,
+      this.muOverride});
 
   Dials copy() => Dials(
       dSessions: dSessions, n: n, w: w, k: k, kLim: kLim, h: h, z: z, z2: z2,
-      q: q, r: r, p: p, benchDays: benchDays);
+      q: q, r: r, p: p, benchDays: benchDays, muOverride: muOverride);
 }
 
 // ---------------------------------------------------------------------------
@@ -104,85 +170,146 @@ double lCap({required double bw, required double r}) {
 
 double effectiveness(double f) => 1 / (1 + 1.5 * f);
 
-/// Steady-state F for a sustained load (window-level fitting; F* = over/0.3).
+/// Steady-state F for a sustained load (F* = over/0.3).
 double steadyF(double l, double cap) {
   final over = max(0.0, l - cap) / cap;
   return min(over / 0.3, 1.5);
 }
 
 // ---------------------------------------------------------------------------
-// §2 strength (one week)
+// §2 expression layer E
 // ---------------------------------------------------------------------------
 
-double deltaS(Sim2Params p, Dials x,
+/// dep ramps 0→1 over 3 weeks in a deficit, decays 1→0 over 3 weeks in a
+/// surplus (spec §2). Maintenance (|r| ≤ 0.05) holds [assume]; the series
+/// builder uses a hysteresis deficit flag instead of raw r (see below).
+double depNext(double dep, {required bool inDeficit, bool inSurplus = true}) {
+  if (inDeficit) return min(1.0, dep + 1 / 3);
+  if (inSurplus) return max(0.0, dep - 1 / 3);
+  return dep;
+}
+
+/// rust ramps 0→1 over 4 weeks with N < 2, clears over 2 weeks of N ≥ 4
+/// (spec §2); 2 ≤ N < 4 holds [assume].
+double rustNext(double rust, double n) {
+  if (n < 2) return min(1.0, rust + 0.25);
+  if (n >= 4) return max(0.0, rust - 0.5);
+  return rust;
+}
+
+/// E = 1 − eDep·dep + eBw·(BW−165) − eRust·rust − eF·F.
+/// [bwScale]: per-lift leverage split (spec: +2.5%/10 lb total, split
+/// bench/squat/deadlift 0.35/0.25/0.15 %/lb → scale 1.4/1.0/0.6 on eBw;
+/// press follows bench).
+double exprE(Sim2Params p,
+        {required double dep,
+        required double bw,
+        required double rust,
+        required double f,
+        double bwScale = 1.0}) =>
+    1 - p.eDep * dep + p.eBw * bwScale * (bw - 165) - p.eRust * rust - p.eF * f;
+
+const liftBwScale = [1.0, 1.4, 0.6]; // squat, bench, deadlift [log split]
+
+// ---------------------------------------------------------------------------
+// §2 capacity layer (one week)
+// ---------------------------------------------------------------------------
+
+double deltaSCap(Sim2Params p, Dials x,
     {required double bw,
     required double e,
     double stimulusScale = 1.0 // light week = 0.4 (§8)
     }) {
   final gN = p.a * (1 - exp(-x.n / 4));
   final gW = p.b * (x.w - 20) / 10;
-  final gR = p.c * x.r.clamp(-1.0, 0.5);
+  final gR = p.c * x.r.clamp(0.0, 0.5) - p.cCut * max(0.0, -x.r);
   final pen = bw > 176 ? 0.5 : 0.0;
   return e * stimulusScale * (gN + gW) + gR - p.d - pen;
 }
 
 // ---------------------------------------------------------------------------
-// Full weekly state step (§1–§6) — used by replay (strength path) and horizon.
+// Full weekly state step (§1–§6) — used by the horizon harness.
 // ---------------------------------------------------------------------------
 
 class Sim2State {
-  double s; // strength total (squat+bench+deadlift), lb
-  double squat, bench, deadlift, press;
+  // capacity layer (slow)
+  double sCap; // capacity total (squat+bench+deadlift), lb
+  double squatCap, benchCap, deadliftCap, pressCap;
+  // expression overlay state
+  double dep; // energy-state depletion 0..1
+  double rust; // 0..1
+  // observed (cached S_cap·E at the current state; refreshed by stepWeek)
+  double s = 0;
+  double squat = 0, bench = 0, deadlift = 0, press = 0;
+
   double cSkill; // §3 climbing skill component
   double c; // displayed grade, lags C_pot by ~4 wk
   double vabs; // L/min
   double bw, fm, lm;
   double f; // fatigue
   double m; // muscle-up reps
-  double cutStartS; // S when the current deficit began (rebound bookkeeping)
-  double reboundPool; // remaining +0.6*cut_loss to release
-  int reboundWeeksLeft;
-  bool inDeficit;
 
   Sim2State(
-      {required this.s,
-      required this.squat,
-      required this.bench,
-      required this.deadlift,
-      required this.press,
+      {required this.sCap,
+      required this.squatCap,
+      required this.benchCap,
+      required this.deadliftCap,
+      required this.pressCap,
       required this.cSkill,
       required this.vabs,
       required this.bw,
       required this.fm,
       required this.lm,
+      this.dep = 0,
+      this.rust = 0,
       this.f = 0,
       this.m = 0,
-      double? c,
-      this.cutStartS = 0,
-      this.reboundPool = 0,
-      this.reboundWeeksLeft = 0,
-      this.inDeficit = false})
+      double? c})
       : c = c ?? cSkill;
 
   double get vo2 => vabs / (bw * 0.45359) * 1000;
   double get bfPct => fm / bw * 100;
 
+  /// Total-level expression multiplier implied by the cached observed total.
+  double get ex => s / sCap;
+
+  /// Refresh cached observed values from the current overlay state.
+  void refreshObserved(Sim2Params p) {
+    final caps = [squatCap, benchCap, deadliftCap];
+    final obs = <double>[];
+    for (var i = 0; i < 3; i++) {
+      obs.add(caps[i] *
+          exprE(p, dep: dep, bw: bw, rust: rust, f: f, bwScale: liftBwScale[i]));
+    }
+    squat = obs[0];
+    bench = obs[1];
+    deadlift = obs[2];
+    press = pressCap *
+        exprE(p, dep: dep, bw: bw, rust: rust, f: f, bwScale: liftBwScale[1]);
+    s = obs[0] + obs[1] + obs[2];
+  }
+
   Sim2State copy() => Sim2State(
-      s: s, squat: squat, bench: bench, deadlift: deadlift, press: press,
-      cSkill: cSkill, vabs: vabs, bw: bw, fm: fm, lm: lm, f: f, m: m, c: c,
-      cutStartS: cutStartS, reboundPool: reboundPool,
-      reboundWeeksLeft: reboundWeeksLeft, inDeficit: inDeficit);
+      sCap: sCap, squatCap: squatCap, benchCap: benchCap,
+      deadliftCap: deadliftCap, pressCap: pressCap,
+      cSkill: cSkill, vabs: vabs, bw: bw, fm: fm, lm: lm,
+      dep: dep, rust: rust, f: f, m: m, c: c)
+    ..s = s
+    ..squat = squat
+    ..bench = bench
+    ..deadlift = deadlift
+    ..press = press;
 }
 
 enum WeekType { normal, light, test }
 
 class WeekResult {
-  final double l, cap, e, dS;
+  final double l, cap, e, dCap, ex;
   final bool overBudget;
-  WeekResult(this.l, this.cap, this.e, this.dS, this.overBudget);
+  WeekResult(this.l, this.cap, this.e, this.dCap, this.ex, this.overBudget);
 }
 
-/// One week. Mutates [st]. Per-lift split per §2: ΔS distributed by each
+/// One week. Mutates [st]. Per-lift split per §2: ΔS_cap distributed by each
 /// lift's share of N × frequency factor (2 heavy exposures = 1.0, 1 = 0.6);
 /// press follows bench at 0.55×. Baseline shares squat/bench .375 each,
 /// deadlift .25 [assume from the weekly template]; freq 1.0/1.0/0.6.
@@ -196,7 +323,7 @@ WeekResult stepWeek(Sim2Params p, Sim2State st, Dials x, WeekType wk,
     dials.h = 0;
     dials.n = min(dials.n, 2);
   } else if (wk == WeekType.test) {
-    dials.n = 4; // §8: N counts the four singles
+    dials.n = 4; // §8: N counts the four singles (also clears rust, §2)
     dials.w = 10; // [assume] reduced volume on test week
   }
 
@@ -207,38 +334,20 @@ WeekResult stepWeek(Sim2Params p, Sim2State st, Dials x, WeekType wk,
   var fNext = p.fDecay * st.f + over;
   if (wk == WeekType.light) fNext *= 0.5;
 
-  // §2 strength
-  var dS = deltaS(p, dials, bw: st.bw, e: e, stimulusScale: stim);
-  if (rng != null && sNoise > 0) dS += _gauss(rng) * sNoise;
+  // §2 capacity
+  var dCap = deltaSCap(p, dials, bw: st.bw, e: e, stimulusScale: stim);
+  if (rng != null && sNoise > 0) dCap += _gauss(rng) * sNoise;
 
-  // §2 time-to-return: deficit episode tracking + 60% rebound over 3 wk [log]
-  const deficitEnter = -0.15, surplusEnter = 0.05;
-  if (!st.inDeficit && dials.r < deficitEnter) {
-    st.inDeficit = true;
-    st.cutStartS = st.s;
-  } else if (st.inDeficit && dials.r > surplusEnter) {
-    st.inDeficit = false;
-    final loss = max(0.0, st.cutStartS - st.s);
-    st.reboundPool = 0.6 * loss;
-    st.reboundWeeksLeft = 3;
-  }
-  if (st.reboundWeeksLeft > 0) {
-    final chunk = st.reboundPool / st.reboundWeeksLeft;
-    dS += chunk;
-    st.reboundPool -= chunk;
-    st.reboundWeeksLeft--;
-  }
-
-  // per-lift split
+  // per-lift capacity split
   const shares = [0.375, 0.375, 0.25]; // squat, bench, deadlift share of N
   const freq = [1.0, 1.0, 0.6];
   final wts = [for (var i = 0; i < 3; i++) shares[i] * freq[i]];
   final wSum = wts.reduce((a, b) => a + b);
-  st.squat += dS * wts[0] / wSum;
-  st.bench += dS * wts[1] / wSum;
-  st.deadlift += dS * wts[2] / wSum;
-  st.press += 0.55 * dS * wts[1] / wSum;
-  st.s += dS;
+  st.squatCap += dCap * wts[0] / wSum;
+  st.benchCap += dCap * wts[1] / wSum;
+  st.deadliftCap += dCap * wts[2] / wSum;
+  st.pressCap += 0.55 * dCap * wts[1] / wSum;
+  st.sCap += dCap;
 
   // §5 body composition (BW driven by r)
   final dBW = dials.r;
@@ -250,9 +359,10 @@ WeekResult stepWeek(Sim2Params p, Sim2State st, Dials x, WeekType wk,
     dLM = lam * dBW;
     dFM = (1 - lam) * dBW;
   } else {
-    final mu = (dBW.abs() <= 0.5 && dials.w >= 15 && dials.benchDays >= 2)
-        ? 0.15
-        : 0.30;
+    final mu = dials.muOverride ??
+        ((dBW.abs() <= 0.5 && dials.w >= 15 && dials.benchDays >= 2)
+            ? 0.15
+            : 0.30);
     dLM = mu * dBW;
     dFM = (1 - mu) * dBW;
   }
@@ -260,6 +370,12 @@ WeekResult stepWeek(Sim2Params p, Sim2State st, Dials x, WeekType wk,
   st.lm += dLM;
   st.fm += dFM;
   st.bw += dBW;
+
+  // §2 expression overlay state (deficit/surplus from the dialed r [assume
+  // ±0.05 deadband; the fit/replay use a hysteresis flag on logged bw])
+  st.dep = depNext(st.dep,
+      inDeficit: dials.r < -0.05, inSurplus: dials.r > 0.05);
+  st.rust = rustNext(st.rust, dials.n);
 
   // §3 climbing
   var dCs = e *
@@ -289,7 +405,8 @@ WeekResult stepWeek(Sim2Params p, Sim2State st, Dials x, WeekType wk,
       (dials.k >= 2 ? 0.01 : 0);
 
   st.f = fNext;
-  return WeekResult(l, cap, e, dS, l > cap);
+  st.refreshObserved(p); // observed S = capacity × E at the new state
+  return WeekResult(l, cap, e, dCap, st.ex, l > cap);
 }
 
 double _pf(double p) {
@@ -312,13 +429,162 @@ double _gauss(Random rng) {
 }
 
 // ---------------------------------------------------------------------------
+// Weekly state series from the log (shared by fit + replay).
+// Start-of-week states for bw, deficit flag, dep, rust, F, e, stim.
+// ---------------------------------------------------------------------------
+
+class WeeklySeries {
+  final List<WeeklyRow> rows;
+  final List<double> bw; // carry-forward 7-day bw
+  final List<double> rSm; // 3-wk MA of weekly bw diffs (capacity g_r input)
+  final List<double> dep, rust, f; // start-of-week overlay states
+  final List<double> e, stim; // that week's effectiveness & stimulus scale
+  final List<bool> deficit; // hysteresis energy-state flag, start of week
+  final Map<DateTime, int> index;
+  WeeklySeries(this.rows, this.bw, this.rSm, this.dep, this.rust, this.f,
+      this.e, this.stim, this.deficit, this.index);
+
+  /// True expression E at start of week i.
+  double eAt(Sim2Params p, int i) =>
+      exprE(p, dep: dep[i], bw: bw[i], rust: rust[i], f: f[i]);
+
+  /// Full true-E series for [p], for index smoothing via [gatedEma].
+  List<double> eSeries(Sim2Params p) =>
+      [for (var i = 0; i < rows.length; i++) eAt(p, i)];
+
+  /// Index-basis E path for [p]: gated on the log's weekly near-max sets.
+  List<double> eIdxSeries(Sim2Params p) => gatedEma(eSeries(p),
+      [for (final r in rows) r.n], p.idxKAttempt, p.idxKIdle,
+      gate: p.idxGateN);
+}
+
+/// N-gated EMA: the trail converges on x at rate [kAttempt] in weeks with
+/// n ≥ [gate] near-max sets (an attempt re-reads current strength) and at
+/// [kIdle] otherwise (the Epley-index measurement model, see
+/// Sim2Params.idxKAttempt/idxKIdle).
+List<double> gatedEma(List<double> x, List<double> n, double kAttempt,
+    double kIdle, {double gate = 2}) {
+  final out = <double>[x.first];
+  for (var i = 1; i < x.length; i++) {
+    final k = n[i] >= gate ? kAttempt : kIdle;
+    out.add(out.last + k * (x[i] - out.last));
+  }
+  return out;
+}
+
+/// Builds the full weekly overlay-state series from calibration_weekly.csv.
+/// K = 0 before Aug 2024 (§9.2); Z = Q = 0, K_lim = 0 (no columns) [assume].
+/// Energy state: hysteresis on a 4-wk MA of bw diffs — enter deficit below
+/// −0.2 lb/wk, exit above +0.1 [assume, carried from W1 replay] — then
+/// runs shorter than 4 weeks are merged into the preceding state (weekly
+/// bw noise flickers the raw flag ~90 times over 12 years; real energy
+/// phases last months), and the flag is shifted [detectShift] weeks left
+/// to compensate the trailing-MA detection lag [assume]. dep decays
+/// whenever not in deficit (maintenance counts as recovery) [assume].
+WeeklySeries buildSeries(List<WeeklyRow> weekly, {int detectShift = 3}) {
+  final rows = weekly;
+  // bw carry-forward
+  final bws = <double>[];
+  double? last;
+  for (final w in rows) {
+    last = w.bw ?? last;
+    bws.add(last ?? 170.0);
+  }
+  // backfill the pre-first-reading stretch with the first reading
+  final firstIdx = rows.indexWhere((w) => w.bw != null);
+  if (firstIdx > 0) {
+    for (var i = 0; i < firstIdx; i++) {
+      bws[i] = rows[firstIdx].bw!;
+    }
+  }
+  final diffs = <double>[0.0];
+  for (var i = 1; i < bws.length; i++) {
+    diffs.add(bws[i] - bws[i - 1]);
+  }
+  List<double> ma(int k) => [
+        for (var i = 0; i < diffs.length; i++)
+          diffs
+                  .sublist(max(0, i - (k - 1)), i + 1)
+                  .reduce((a, b) => a + b) /
+              (i - max(0, i - (k - 1)) + 1)
+      ];
+  final rSm = ma(3), rPhase = ma(4);
+
+  // raw hysteresis energy state, then min-run filtering
+  final deficit = <bool>[];
+  var inDef = false;
+  for (var i = 0; i < rows.length; i++) {
+    if (!inDef && rPhase[i] < -0.2) inDef = true;
+    if (inDef && rPhase[i] > 0.1) inDef = false;
+    deficit.add(inDef);
+  }
+  _mergeShortRuns(deficit, 4);
+  // Detection-lag compensation [assume]: the trailing 4-wk MA + threshold
+  // flags an energy-state change ~2-3 weeks after it happens; shift the
+  // flag left so dep ramps when the state actually changed.
+  for (var i = 0; i < deficit.length; i++) {
+    deficit[i] =
+        deficit[min(deficit.length - 1, i + detectShift)];
+  }
+
+  final dep = <double>[], rust = <double>[], f = <double>[];
+  final e = <double>[], stim = <double>[];
+  final index = <DateTime, int>{};
+  var depS = 0.0, rustS = 0.0, fS = 0.0;
+  for (var i = 0; i < rows.length; i++) {
+    final w = rows[i];
+    index[w.week] = i;
+    dep.add(depS);
+    rust.add(rustS);
+    f.add(fS);
+    final st = w.light ? 0.4 : 1.0;
+    stim.add(st);
+    e.add(effectiveness(fS));
+    // advance to next week's start
+    final k = w.week.isBefore(DateTime(2024, 8, 1)) ? 0.0 : (w.k ?? 0.0);
+    final l = loadL(
+        Dials(dSessions: w.dSess, n: w.n, w: w.w, k: k, r: rSm[i]));
+    final cap = lCap(bw: bws[i], r: rSm[i]);
+    var fNext = 0.7 * fS + max(0.0, l - cap) / cap;
+    if (w.light) fNext *= 0.5;
+    fS = fNext;
+    depS = depNext(depS, inDeficit: deficit[i]);
+    rustS = rustNext(rustS, w.n);
+  }
+  return WeeklySeries(rows, bws, rSm, dep, rust, f, e, stim, deficit, index);
+}
+
+/// Merge runs shorter than [minRun] into the preceding run's state,
+/// repeating until stable.
+void _mergeShortRuns(List<bool> flags, int minRun) {
+  var changed = true;
+  while (changed) {
+    changed = false;
+    var i = 1; // never rewrite the initial state
+    while (i < flags.length) {
+      var j = i;
+      while (j < flags.length && flags[j] == flags[i]) {
+        j++;
+      }
+      if (flags[i] != flags[i - 1] && j - i < minRun) {
+        for (var k = i; k < j; k++) {
+          flags[k] = flags[i - 1];
+        }
+        changed = true;
+      }
+      i = j;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CSV loading
 // ---------------------------------------------------------------------------
 
 class WindowRow {
   final DateTime start;
   final double bw, r, total, dSess, w, n, k;
-  final double? yStart, yAfter; // gain_14wk / 14 (per-week)
+  final double? yStart, yAfter; // 14-wk gains, lb (index basis)
   WindowRow(this.start, this.bw, this.r, this.total, this.dSess, this.w,
       this.n, this.k, this.yStart, this.yAfter);
 }
@@ -345,12 +611,8 @@ List<WindowRow> loadWindows(String path) {
       num('working_sets_wk')!,
       num('near_max_sets_wk_95pct')!,
       num('climb_sessions_wk') ?? 0,
-      num('gain_14wk_from_start') == null
-          ? null
-          : num('gain_14wk_from_start')! / 14,
-      num('gain_14wk_after_window') == null
-          ? null
-          : num('gain_14wk_after_window')! / 14,
+      num('gain_14wk_from_start'),
+      num('gain_14wk_after_window'),
     ));
   }
   return rows;

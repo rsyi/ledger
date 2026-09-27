@@ -1,9 +1,24 @@
 // ignore_for_file: avoid_print
-// sim2_horizon.dart — §8 harness core + §9.3 horizon estimate + §9.4 presets.
-// Minimal tool implementation for wave 1 (full lib/UI is wave 2): all
-// modules §2-§6, light/test-week rules, block calendar from
-// airledger-fitness coach/program.yaml v1 (bulk-2026-27), Monte Carlo
-// with the §7 injury module + weekly noise for P(V8).
+// sim2_horizon.dart — §8 harness core + §9.3 horizon estimate + §9.4 presets,
+// REVISED §2 (two-layer: capacity × expression). All modules §2-§6,
+// light/test-week rules, block calendar from airledger-fitness
+// coach/program.yaml v1 (bulk-2026-27), Monte Carlo with the §7 injury
+// module + weekly noise for P(V8).
+//
+// W1 adaptations KEPT (labeled): VO2 gain ∝ max(0, Z_eff − 1) (see
+// Sim2Params.kV note); P(V8 sent) uses peak C_pot + 0.4 send margin
+// (C=6.6 is defined as "V7 once, V6 regular" → hardest send runs ~0.4
+// above the continuous grade) [log].
+//
+// v2.1: S_cap is seeded from TODAY'S RPE-IMPLIED maxes (§2 anchors: bench
+// 244, squat 331, deadlift 342 → total 917), the spec's preferred S_obs
+// basis; the Epley index (878) sits below through the dep-depressed,
+// attempt-sparse cut (measurement gap ≈ 39 lb that closes as near-max
+// attempts resume — index catch-up, not physiology). The horizon reports
+// TRUE expressed strength (S_cap·E, no index smoothing) and splits every
+// gain into capacity vs expression. §5's deficit μ runs as two branches
+// (μ=0.30 per the §5 rule at r=−0.75, and μ≈0 which is what the spec's
+// own 13%-at-154 anchor implies) pending the Nov DEXA.
 //
 // Run: dart run tool/sim2_horizon.dart
 
@@ -61,32 +76,47 @@ WeekType weekTypeFor(Block b, int weekInBlock) {
   return WeekType.normal;
 }
 
-// --- current state, Sep 26 2026 (spec §0) ------------------------------------
-Sim2State initialState() => Sim2State(
-      s: 878, // per spec §0 (per-lift values below sum 884; total kept at 878)
-      squat: 310, bench: 238, deadlift: 336, press: 138,
-      cSkill: 6.6, // C=6.6 read as skill level; C_pot adds the bw term [assume]
-      vabs: 52 * (163 * 0.45359) / 1000, // 3.85 L/min
-      bw: 163, fm: 29, lm: 134, f: 0.3, m: 2,
-      // the 2025-26 cut so far: model replay loss ~50 through Jul-2026 +
-      // remaining sim-cut loss accrues on top. Seeded via cutStartS: the
-      // §2 rebound returns 0.6·(cut total). Cut-start total 975 [log:
-      // windows total ~978 at 2025-10-20]. [assume]
-      cutStartS: 975,
-      inDeficit: true,
-    );
+// --- current state, Sep 26 2026 ----------------------------------------------
+// S_cap seeded from the RPE-implied readings (§2 anchors) divided by
+// today's per-lift E. Overlay state today: dep = 1 (the 2025-26 deficit
+// never really closed — bw was still falling through mid-Sep [log:
+// calibration_weekly]), rust = 0 on the RPE basis (the readings ARE
+// attempts), F = 0.3 (spec §0).
+const rpeSquat = 331.0, rpeBench = 244.0, rpeDeadlift = 342.0; // [log]
+const rpePress = 138.0 * (244.0 / 238.0); // press follows bench's ratio [assume]
+const dep0 = 1.0, rust0 = 0.0, f0 = 0.3, bw0 = 163.0;
+
+Sim2State initialState(Sim2Params p) {
+  double e0(double scale) =>
+      exprE(p, dep: dep0, bw: bw0, rust: rust0, f: f0, bwScale: scale);
+  final st = Sim2State(
+    sCap: 0,
+    squatCap: rpeSquat / e0(liftBwScale[0]),
+    benchCap: rpeBench / e0(liftBwScale[1]),
+    deadliftCap: rpeDeadlift / e0(liftBwScale[2]),
+    pressCap: rpePress / e0(liftBwScale[1]),
+    cSkill: 6.6, // C=6.6 read as skill level; C_pot adds the bw term [assume]
+    vabs: 52 * (163 * 0.45359) / 1000, // 3.85 L/min
+    bw: bw0, fm: 29, lm: 134,
+    dep: dep0, rust: rust0, f: f0, m: 2,
+  );
+  st.sCap = st.squatCap + st.benchCap + st.deadliftCap;
+  st.refreshObserved(p);
+  return st;
+}
 
 const horizon = '2027-12-05';
 
 class RunResult {
   final Sim2State st;
+  final Sim2State start;
   final int overBudgetWeeks;
   final List<String> redFlagWeeks;
   final double maxCPot;
   final Map<String, Sim2State> blockEnds; // 'B3' -> state copy
   final int injuryWeeks;
-  RunResult(this.st, this.overBudgetWeeks, this.redFlagWeeks, this.maxCPot,
-      this.blockEnds, this.injuryWeeks);
+  RunResult(this.st, this.start, this.overBudgetWeeks, this.redFlagWeeks,
+      this.maxCPot, this.blockEnds, this.injuryWeeks);
 }
 
 RunResult run(Sim2Params p,
@@ -97,8 +127,10 @@ RunResult run(Sim2Params p,
     bool injuries = false,
     bool trace = false,
     double? eOverride,
+    double? muOverride, // §5 deficit lean-loss branch (μ≈0 pending DEXA)
     double zOverrideFromBlock3 = -1}) {
-  final st = initialState();
+  final st = initialState(p);
+  final start = st.copy();
   final d = dials ?? dialsFor;
   var over = 0;
   var injuryWeeks = 0;
@@ -116,6 +148,7 @@ RunResult run(Sim2Params p,
     final weekInBlock = date.difference(b.start).inDays ~/ 7;
     final x = d(b).copy();
     if (zOverrideFromBlock3 >= 0 && b.n >= 3) x.z = zOverrideFromBlock3;
+    if (muOverride != null && x.r < 0) x.muOverride = muOverride;
 
     // §7 injury effects
     if (injAffectedWeeks > 0) {
@@ -135,10 +168,12 @@ RunResult run(Sim2Params p,
     if (trace) {
       print('  ${date.toIso8601String().substring(0, 10)} B${b.n} '
           '${wt.name.padRight(6)} S=${st.s.toStringAsFixed(0)} '
-          'dS=${res.dS.toStringAsFixed(1).padLeft(5)} '
+          'cap=${st.sCap.toStringAsFixed(0)} E=${st.ex.toStringAsFixed(3)} '
+          'dep=${st.dep.toStringAsFixed(2)} '
+          'dCap=${res.dCap.toStringAsFixed(1).padLeft(5)} '
           'F=${st.f.toStringAsFixed(2)} e=${res.e.toStringAsFixed(2)} '
           'L=${res.l.toStringAsFixed(1)}/${res.cap.toStringAsFixed(1)} '
-          'bw=${st.bw.toStringAsFixed(1)} pool=${st.reboundPool.toStringAsFixed(0)}');
+          'bw=${st.bw.toStringAsFixed(1)}');
     }
     if (res.overBudget) {
       over++;
@@ -168,22 +203,41 @@ RunResult run(Sim2Params p,
     }
     date = nextDate;
   }
-  return RunResult(st, over, redFlags, maxCPot, blockEnds, injuryWeeks);
+  return RunResult(st, start, over, redFlags, maxCPot, blockEnds, injuryWeeks);
 }
 
 void main() {
   final p = Sim2Params.fitted();
-  print('params: a=${p.a} b=${p.b} c=${p.c} d=${p.d} (ridge fit; '
-      '§3-§6 modules are priors)');
+  print('params: a=${p.a} b=${p.b} c=${p.c} cCut=${p.cCut} d=${p.d}  '
+      'E(dep=${p.eDep}, bw=${p.eBw}, rust=${p.eRust}, F=${p.eF}) '
+      '(two-pass fit; §3-§6 modules are priors)');
+  final st0 = initialState(p);
+  print('start: expressed ${st0.s.toStringAsFixed(0)} (RPE basis 917; index '
+      '878, gap = attempt-sparse measurement) / capacity '
+      '${st0.sCap.toStringAsFixed(0)} / E ${st0.ex.toStringAsFixed(3)}');
 
   // ---- baseline deterministic ----------------------------------------------
   final base = run(p, trace: const String.fromEnvironment('TRACE') == '1');
-  _report('BASELINE (deterministic, Z=1)', base);
+  _report('BASELINE (deterministic, Z=1, §5 rule μ=0.30 in the cut)', base);
+  _split('E-vs-capacity split of the baseline gain', base);
+
+  // §5 μ≈0 branch (spec's 13%-at-154 anchor; pending Nov DEXA)
+  final mu0 = run(p, muOverride: 0.0);
+  print('\n=== §5 deficit-μ branches (BW path identical; pending Nov DEXA) ===');
+  print('  μ=0.30 (§5 rule at r=-0.75): '
+      'BW ${base.st.bw.toStringAsFixed(1)}, '
+      'LM ${base.st.lm.toStringAsFixed(1)}, FM ${base.st.fm.toStringAsFixed(1)}'
+      ' -> BF ${base.st.bfPct.toStringAsFixed(1)}%');
+  print('  μ≈0   (13%-at-154 anchor):   '
+      'BW ${mu0.st.bw.toStringAsFixed(1)}, '
+      'LM ${mu0.st.lm.toStringAsFixed(1)}, FM ${mu0.st.fm.toStringAsFixed(1)}'
+      ' -> BF ${mu0.st.bfPct.toStringAsFixed(1)}%   [§9.3 expects 15-16%]');
 
   // VO2 at Z=2 from block 3 (the "Cardio up" preset doubles as the §9.3 check)
   final z2 = run(p, zOverrideFromBlock3: 2);
   print('\nVO2 with Z=2 from block 3: ${z2.st.vo2.toStringAsFixed(1)} '
-      '(vs ${base.st.vo2.toStringAsFixed(1)} at Z=1)');
+      '(vs ${base.st.vo2.toStringAsFixed(1)} at Z=1)   '
+      '[§9.3 expects ~52 / ~49]');
 
   // sensitivity: no budget bite (e forced to 1) — quantifies how much of the
   // C and S gaps vs §9.3 come purely from the plan running over L_cap
@@ -194,28 +248,30 @@ void main() {
 
   // ---- Monte Carlo ----------------------------------------------------------
   const paths = 200;
-  final totals = <double>[], cs = <double>[];
+  final totals = <double>[], caps = <double>[], cs = <double>[];
   var v8Touch = 0, v8Sent = 0;
   var injWeeksTotal = 0;
   for (var i = 0; i < paths; i++) {
     final rng = Random(42 + i);
     final r = run(p, rng: rng, sNoise: 1.5, cNoise: 0.05, injuries: true);
     totals.add(r.st.s);
+    caps.add(r.st.sCap);
     cs.add(r.st.c);
     if (r.maxCPot >= 8.0) v8Touch++;
-    // "sent V8" = peak C_pot + 0.4 send margin >= 8.0. Margin from the
-    // spec's own state: C=6.6 is defined as "V7 once, V6 regular", i.e.
-    // hardest send runs ~0.4 above the continuous grade. [log]
+    // "sent V8" = peak C_pot + 0.4 send margin >= 8.0 [log, W1 adaptation]
     if (r.maxCPot + 0.4 >= 8.0) v8Sent++;
     injWeeksTotal += r.injuryWeeks;
   }
   totals.sort();
+  caps.sort();
   cs.sort();
   print('\n=== Monte Carlo ($paths paths: §7 injuries + weekly noise '
-      'σS=1.5 lb, σC=0.05 V [assume]) ===');
-  print('total  median=${totals[paths ~/ 2].toStringAsFixed(0)}  '
+      'σcap=1.5 lb, σC=0.05 V [assume]) ===');
+  print('expressed total  median=${totals[paths ~/ 2].toStringAsFixed(0)}  '
       'p20=${totals[paths ~/ 5].toStringAsFixed(0)}  '
-      'p80=${totals[4 * paths ~/ 5].toStringAsFixed(0)}');
+      'p80=${totals[4 * paths ~/ 5].toStringAsFixed(0)}   '
+      '[§9.3 expects ~1040 (990-1080)]');
+  print('capacity         median=${caps[paths ~/ 2].toStringAsFixed(0)}');
   print('C      median=${cs[paths ~/ 2].toStringAsFixed(1)}   '
       'p20=${cs[paths ~/ 5].toStringAsFixed(1)}');
   print('P(V8 sent: peak C_pot+0.4 send margin >= 8.0) = '
@@ -226,23 +282,19 @@ void main() {
 
   // ---- §9.4 preset sanity ----------------------------------------------------
   print('\n=== §9.4 preset: Climb more (K=4, H=1 all year) ===');
-  final climbMore = run(p, dials: (b) {
+  Dials climbMoreDials(Block b) {
     final x = dialsFor(b);
     x.k = 4;
     x.kLim = 1;
     x.h = 1;
     return x;
-  });
+  }
+
+  final climbMore = run(p, dials: climbMoreDials);
   _presetVsBase('Climb more', climbMore, base);
-  final liftGainBase = _liftingBlockGain(p, base, dialsFor);
-  final liftGainClimb = _liftingBlockGain(p, climbMore, (b) {
-    final x = dialsFor(b);
-    x.k = 4;
-    x.kLim = 1;
-    x.h = 1;
-    return x;
-  });
-  print('  lifting-block strength gain: baseline '
+  final liftGainBase = _liftingBlockGain(base);
+  final liftGainClimb = _liftingBlockGain(climbMore);
+  print('  lifting-block strength gain (expressed): baseline '
       '+${liftGainBase.toStringAsFixed(0)} lb vs climb-more '
       '+${liftGainClimb.toStringAsFixed(0)} lb '
       '-> ${liftGainClimb < liftGainBase ? 'FALLS (expected)' : 'DOES NOT FALL (unexpected)'}');
@@ -261,9 +313,8 @@ void main() {
       '(${fastBulk.st.s <= base.st.s + 8 ? 'no extra strength above r=0.5 (expected)' : 'UNEXPECTED extra strength'})');
 }
 
-double _liftingBlockGain(
-    Sim2Params p, RunResult r, Dials Function(Block) dials) {
-  // sum of S change across lifting blocks (3, 5, 7) from block-end snapshots
+double _liftingBlockGain(RunResult r) {
+  // sum of expressed-S change across lifting blocks (3, 5, 7)
   double gain = 0;
   for (final n in [3, 5, 7]) {
     final endS = r.blockEnds['B$n']?.s;
@@ -281,16 +332,39 @@ void _presetVsBase(String label, RunResult r, RunResult base) {
       'over-budget weeks=${r.overBudgetWeeks} (base ${base.overBudgetWeeks})');
 }
 
+void _split(String label, RunResult r) {
+  // exact midpoint decomposition: ΔS_obs = Ē·ΔS_cap + S̄_cap·ΔE
+  final e0 = r.start.ex, e1 = r.st.ex;
+  final dCap = r.st.sCap - r.start.sCap;
+  final dE = e1 - e0;
+  final eBar = (e0 + e1) / 2, cBar = (r.start.sCap + r.st.sCap) / 2;
+  final gain = r.st.s - r.start.s;
+  print('\n=== $label ===');
+  print('  expressed ${r.start.s.toStringAsFixed(0)} -> '
+      '${r.st.s.toStringAsFixed(0)} (+${gain.toStringAsFixed(0)})'
+      '  =  capacity ${(eBar * dCap).toStringAsFixed(0)}'
+      '  +  expression ${(cBar * dE).toStringAsFixed(0)}'
+      '   (E ${e0.toStringAsFixed(3)} -> ${e1.toStringAsFixed(3)}: dep '
+      '${dep0.toStringAsFixed(1)}->'
+      '${r.st.dep.toStringAsFixed(1)}, bw leverage, F)');
+  print('  vs the app INDEX (878 today): index-basis gain would add the '
+      '~${(r.start.s - 878).toStringAsFixed(0)} lb measurement catch-up '
+      '(attempt-sparse under-read, §2 anchor) on top of the expression '
+      'term — [§9.3\'s "~60 from E" reads on this basis]');
+}
+
 void _report(String label, RunResult r) {
   final st = r.st;
   print('\n=== $label -> $horizon ===');
-  print('total   ${st.s.toStringAsFixed(0)}  '
+  print('expressed total ${st.s.toStringAsFixed(0)}  '
       '(squat ${st.squat.toStringAsFixed(0)}, bench ${st.bench.toStringAsFixed(0)}, '
       'deadlift ${st.deadlift.toStringAsFixed(0)}; press ${st.press.toStringAsFixed(0)})'
-      '   [§9.3 expects 980, 940-1020]');
+      '   [§9.3 expects ~1040, 990-1080]');
+  print('capacity        ${st.sCap.toStringAsFixed(0)}  '
+      '(E at horizon ${st.ex.toStringAsFixed(3)})');
   print('BW      ${st.bw.toStringAsFixed(1)} lb   [expects 169]');
   print('BF%     ${st.bfPct.toStringAsFixed(1)}  (FM ${st.fm.toStringAsFixed(1)}, '
-      'LM ${st.lm.toStringAsFixed(1)})   [expects 15-16%]');
+      'LM ${st.lm.toStringAsFixed(1)})   [expects 15-16%; see μ branches]');
   print('C       ${st.c.toStringAsFixed(2)} (skill ${st.cSkill.toStringAsFixed(2)}, '
       'peak C_pot ${r.maxCPot.toStringAsFixed(2)})   [expects ~7.3]');
   print('VO2     ${st.vo2.toStringAsFixed(1)}   [expects ~49 at Z=1]');
@@ -306,6 +380,7 @@ void _report(String label, RunResult r) {
       print('  ... ${r.redFlagWeeks.length - 12} more');
     }
   }
-  print('block-end totals: ${r.blockEnds.entries.map((e) => '${e.key}='
-      '${e.value.s.toStringAsFixed(0)}/bw${e.value.bw.toStringAsFixed(0)}').join(' ')}');
+  print('block-end expressed/capacity: ${r.blockEnds.entries.map((e) => '${e.key}='
+      '${e.value.s.toStringAsFixed(0)}/${e.value.sCap.toStringAsFixed(0)}'
+      '/bw${e.value.bw.toStringAsFixed(0)}').join(' ')}');
 }

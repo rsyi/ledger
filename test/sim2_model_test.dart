@@ -12,6 +12,8 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:airledger/services/forecast_tab.dart'
+    show forecastTabHeaders, parseForecastTab, sim2ForecastTabRows;
 import 'package:airledger/services/sim2_harness.dart';
 import 'package:airledger/services/sim2_model.dart';
 
@@ -174,6 +176,28 @@ void main() {
           start: start,
           overrides: const Sim2DialOverrides(n: 10));
       expect(n10.end.s, greaterThan(base.end.s + 2));
+    });
+  });
+
+  group('nightly forecast tab (sim2 re-point)', () {
+    test('v1 tab shape kept; values are sim2 baseline', () {
+      final run = sim2Run(
+          params: Sim2Params.fitted(),
+          blocks: sim2DefaultBlocks(),
+          start: DateTime.utc(2026, 9, 28));
+      final rows = sim2ForecastTabRows(run);
+      expect(rows.length, run.weeks.length);
+      // Round-trips through the UNCHANGED v1 parser (the MCP block's
+      // contract): monday/phase/bw/e1rm_*/wilks/grade_p75.
+      final parsed = parseForecastTab([forecastTabHeaders, ...rows]);
+      expect(parsed.length, run.weeks.length);
+      expect(parsed.first.phase, 'cut'); // block emphasis in the column
+      expect(parsed.last.phase, 'lifting');
+      expect(parsed.last.e1rm['squat'], closeTo(run.last.squat, 0.06));
+      expect(parsed.last.e1rm['press'], closeTo(run.last.press, 0.06));
+      expect(parsed.last.bw, closeTo(171.2, 0.3));
+      expect(parsed.last.wilks, greaterThan(200)); // SBD Wilks at 171 lb
+      expect(parsed.last.gradeP75, closeTo(run.last.c, 0.06)); // sim2 C
     });
   });
 

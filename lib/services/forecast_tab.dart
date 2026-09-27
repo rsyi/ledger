@@ -1,17 +1,23 @@
-/// `forecast` tab codec — the nightly sim trajectory as sheet rows
-/// (design doc `airledger/docs/superpowers/specs/2026-09-25-sim-design.md`
-/// §8). One row per simulated week, REPLACE-ALL written by
+/// `forecast` tab codec — the nightly sim trajectory as sheet rows.
+/// One row per simulated week, REPLACE-ALL written by
 /// tool/program_status_update.dart and read by the MCP worker's
 /// get_coach_context `forecast` block.
 ///
-/// The grade column is OFFSET-ANCHORED: the C2 model's validated slope
-/// applied from the CURRENT observed p75 (the model's absolute level
-/// sits below observation — validated slope, honest anchor; see
-/// [gradeAnchorOffset]). Pure Dart — no Flutter, no IO.
+/// RE-POINTED to sim2 v2.1 (2026-09-26 spec): the writer now encodes a
+/// [Sim2Run] via [sim2ForecastTabRows] — SAME headers/shape (the MCP
+/// block keeps parsing unchanged), new values: per-lift columns carry
+/// TRUE expressed strength (RPE basis, capacity × expression), `phase`
+/// carries the block emphasis (cut/reverse/climbing/lifting), and
+/// `grade_p75` carries the sim2 continuous grade C (the §3 module has
+/// its own [log] anchor — the v1 offset-anchoring is retired with the
+/// v1 model; [gradeAnchorOffset] + the [SimResult] encoder remain only
+/// for the superseded v1 path/tests). Pure Dart — no Flutter, no IO.
 library;
 
 import 'sim_core.dart' show SimResult, SimWeek;
 import 'sim_fit.dart' show simLifts;
+import 'sim2_harness.dart' show Sim2Run;
+import 'wilks.dart' show wilksPointsLb;
 
 /// The tab name in the workbook.
 const String forecastTabName = 'forecast';
@@ -57,6 +63,25 @@ List<List<Object?>> forecastTabRows(SimResult result, {double gradeOffset = 0}) 
       ],
   ];
 }
+
+/// Encodes a sim2 [run] as forecast-tab data rows (header not
+/// included) — the v2.1 nightly writer's path. Column mapping per the
+/// library note: true expressed per-lift, Wilks from the SBD expressed
+/// total at the week's bw, C in the grade column.
+List<List<Object?>> sim2ForecastTabRows(Sim2Run run) => [
+      for (final w in run.weeks)
+        [
+          _ymd(w.monday),
+          w.emphasis,
+          _r1(w.bw),
+          _r1(w.squat),
+          _r1(w.bench),
+          _r1(w.deadlift),
+          _r1(w.press),
+          _r1(wilksPointsLb(w.sTrue, w.bw)),
+          _r1(w.c),
+        ],
+    ];
 
 /// One decoded forecast-tab row.
 class ForecastWeekRow {

@@ -6,13 +6,13 @@ import 'dart:io';
 import 'package:airledger/services/forecast_tab.dart';
 import 'package:airledger/services/program_current.dart';
 import 'package:airledger/services/program_metrics.dart';
-import 'package:airledger/services/sim_core.dart';
 import 'package:airledger/services/sim_fit.dart'
     show buildWeeklySeries, climbsFromTab;
-import 'package:airledger/services/sim_program.dart';
+import 'package:airledger/services/sim_program.dart' show simInitialFromSeries;
+import 'package:airledger/services/sim2_harness.dart';
+import 'package:airledger/services/sim2_model.dart' show Sim2Params;
 import 'package:airledger/services/wm_tabs.dart';
 import 'package:airledger/services/working_max.dart';
-import 'package:airledger/services/world_model.dart';
 import 'package:googleapis/sheets/v4.dart' as gsheets;
 import 'package:googleapis_auth/auth_io.dart';
 import 'package:yaml/yaml.dart';
@@ -489,49 +489,51 @@ Future<void> main(List<String> args) async {
   }
 
   // -------------------------------------------------------------------------
-  // Program-sim forecast (design §8): default-lever sim from the current
-  // observed state with the DECLARED world-model coefficients; the whole
-  // trajectory REPLACE-ALL lands in the `forecast` tab (grade column
-  // offset-anchored to the observed p75). Missing config/history degrades
-  // to "skipped" — never blocks the status write.
+  // Program-sim forecast — sim2 v2.1 baseline (2026-09-26 spec §8/§9.3):
+  // baseline dials on the program.yaml block calendar from the current
+  // Monday, capacity seeded from the Sep-2026 RPE readings [log], with
+  // the observed bw + app Epley index refreshed from workbook history
+  // when present. Tab SHAPE is unchanged from v1 (the MCP forecast
+  // block keeps parsing): per-lift columns now carry TRUE expressed
+  // strength, `phase` = block emphasis, `grade_p75` = sim2 continuous C.
+  // Missing config degrades to "skipped" — never blocks the status write.
   // -------------------------------------------------------------------------
   List<List<Object?>>? forecastRows;
   try {
-    final wmFile = File('$home/repos/airledger-fitness/app/world_model.yaml');
-    final worldModel =
-        wmFile.existsSync() ? parseWorldModel(wmFile.readAsStringSync()) : null;
-    final simProgram = simProgramFromDocs(
-      program: programYaml,
-      phase: phaseYaml,
-      rules: worldModel?.sim ?? const SimRules(),
-    );
-    if (worldModel == null || simProgram == null) {
-      print('forecast: skipped (world_model.yaml or program docs missing)');
+    final s2Blocks = sim2BlocksFromProgramDocs(programYaml);
+    if (s2Blocks == null) {
+      print('forecast: skipped (program docs missing)');
     } else {
+      double? observedBw;
+      double? observedIndexTotal;
       final series = buildWeeklySeries(
         strengthRows: strengthRows,
         weightRows: weightRows,
         climbs: climbsFromTab(climbTab),
       );
       final initial = simInitialFromSeries(series);
-      if (initial == null) {
-        print('forecast: skipped (no t0 state — empty history)');
-      } else {
-        final result = simulate(
-          initial: initial,
-          coefficients: worldModel.toCoefficients(),
-          rules: worldModel.sim,
-          program: simProgram,
-        );
-        forecastRows = forecastTabRows(
-          result,
-          gradeOffset: gradeAnchorOffset(
-            observedP75: initial.gradeP75,
-            modelP75:
-                result.weeks.isEmpty ? null : result.weeks.first.gradeP75,
-          ),
-        );
+      if (initial != null) {
+        observedBw = initial.bw;
+        final e = initial.e1rm;
+        if (e.containsKey('squat') &&
+            e.containsKey('bench') &&
+            e.containsKey('deadlift')) {
+          observedIndexTotal = e['squat']! + e['bench']! + e['deadlift']!;
+        }
       }
+      final run = sim2Run(
+        params: Sim2Params.fitted(),
+        blocks: s2Blocks,
+        start: sim2StartMonday(DateTime.now()),
+        observedBw: observedBw,
+        observedIndexTotal: observedIndexTotal,
+      );
+      forecastRows = sim2ForecastTabRows(run);
+      print('forecast: sim2 baseline — horizon expressed '
+          '${run.last.sTrue.toStringAsFixed(0)} '
+          '(index ${run.last.sIdx.toStringAsFixed(0)}) at '
+          '${ymd(run.weeks.last.monday)}, C ${run.last.c.toStringAsFixed(1)}, '
+          'over-budget ${run.overBudgetWeeks} wks');
     }
   } catch (e) {
     print('forecast: skipped ($e)');

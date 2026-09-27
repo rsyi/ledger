@@ -187,7 +187,7 @@ class WeekResult {
 /// press follows bench at 0.55×. Baseline shares squat/bench .375 each,
 /// deadlift .25 [assume from the weekly template]; freq 1.0/1.0/0.6.
 WeekResult stepWeek(Sim2Params p, Sim2State st, Dials x, WeekType wk,
-    {Random? rng, double sNoise = 0, double cNoise = 0}) {
+    {Random? rng, double sNoise = 0, double cNoise = 0, double? eOverride}) {
   final dials = x.copy();
   double stim = 1.0;
   if (wk == WeekType.light) {
@@ -202,7 +202,7 @@ WeekResult stepWeek(Sim2Params p, Sim2State st, Dials x, WeekType wk,
 
   final l = loadL(dials);
   final cap = lCap(bw: st.bw, r: dials.r);
-  final e = effectiveness(st.f); // e from start-of-week F
+  final e = eOverride ?? effectiveness(st.f); // e from start-of-week F
   final over = max(0.0, l - cap) / cap;
   var fNext = p.fDecay * st.f + over;
   if (wk == WeekType.light) fNext *= 0.5;

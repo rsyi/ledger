@@ -1,7 +1,9 @@
-// Widget tests for lib/ui/widgets/forecast_section.dart (W3): levers
-// re-run the sim and change the plotted series + summary, the reset
-// chip restores program defaults, the climbing forecast is
-// offset-anchored, and the section reflows at 360dp.
+// Widget tests for lib/ui/widgets/forecast_section.dart (sim2, wave 3):
+// the dials row re-runs the sim and changes the outputs, §8 presets
+// apply (with the baseline-vs-scenario table), over-budget weeks render
+// as red flags, both strength lines (app index + true expressed) are
+// plotted, the §5 μ branch toggles, the §9.5 parameter sheet edits
+// re-run the horizon, and the section reflows at 360dp.
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,99 +11,45 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/services/program_metrics.dart' show WeightRow;
 import 'package:airledger/services/program_observed.dart'
     show observedWeightStats;
-import 'package:airledger/services/sim_core.dart';
-import 'package:airledger/services/sim_fit.dart';
-import 'package:airledger/services/world_model.dart' show SimRules;
+import 'package:airledger/services/sim2_harness.dart';
 import 'package:airledger/ui/widgets/forecast_section.dart';
 
-/// The v7 program shape (sim_core_test fixture).
-SimProgram v7Program() => SimProgram(
-      cutTargetLb: 154,
-      cutEndDate: DateTime(2026, 12, 13),
-      blocks: [
-        SimBlock(
-            n: 1,
-            start: DateTime(2026, 12, 14),
-            end: DateTime(2027, 1, 3),
-            emphasis: 'reverse'),
-        SimBlock(
-            n: 2,
-            start: DateTime(2027, 1, 4),
-            end: DateTime(2027, 2, 28),
-            emphasis: 'climbing',
-            rate: 0.4),
-        SimBlock(
-            n: 3,
-            start: DateTime(2027, 3, 1),
-            end: DateTime(2027, 4, 25),
-            emphasis: 'lifting',
-            rate: 0.4),
-        SimBlock(
-            n: 7,
-            start: DateTime(2027, 10, 11),
-            end: DateTime(2027, 12, 5),
-            emphasis: 'lifting',
-            rate: 0.2),
-      ],
-    );
-
-SimInitialState currentState() => SimInitialState(
-      monday: DateTime(2026, 9, 21),
-      bw: 160.6,
-      e1rm: const {
-        'squat': 311.7,
-        'bench': 247.5,
-        'deadlift': 351.8,
-        'press': 144.0,
-      },
-      gradeP75: 5.0,
-      actualMaxSbdTotalLbs: 275.0 + 225.0 + 315.0,
-    );
-
-SimCoefficients shippedCoefficients() => const SimCoefficients(
-      strength: {
-        'squat': LiftResponse(a: -0.280, bBw: 2.295),
-        'bench': LiftResponse(a: -0.099, bBw: 0.919),
-        'deadlift': LiftResponse(a: 0.775, bBw: 0.795),
-        'press': LiftResponse(a: -0.143, bBw: 0.352),
-      },
-      pooled: null,
-      climbC0: 8.56,
-      climbCBw: -0.0288,
-      climbBf: 0.0032,
-    );
+final _today = DateTime(2026, 9, 26);
 
 List<WeightRow> observedDaily() => [
       for (var i = 90; i >= 0; i--)
         WeightRow(
-          date: DateTime(2026, 9, 25).subtract(Duration(days: i)),
-          // Gentle downtrend + a little scatter.
-          weightLbs: 160.6 + i * 0.08 + (i % 3 - 1) * 0.4,
+          date: _today.subtract(Duration(days: i)),
+          // Gentle downtrend + a little scatter around the seed bw.
+          weightLbs: 163.0 + i * 0.08 + (i % 3 - 1) * 0.4,
         ),
     ];
 
-ForecastInputs inputs({List<String> drifted = const []}) => ForecastInputs(
-      initial: currentState(),
-      program: v7Program(),
-      coefficients: shippedCoefficients(),
-      rules: const SimRules(),
-      drifted: drifted,
-      strengthMaeLb: const {
-        'squat': 20.0,
-        'bench': 15.6,
-        'deadlift': 22.4,
-        'press': 8.7,
-      },
-      gradeMaeV: 0.54,
+ForecastInputs inputs() => ForecastInputs(
+      blocks: sim2DefaultBlocks(),
       observedDaily: observedDaily(),
-      stats: observedWeightStats(observedDaily(), DateTime(2026, 9, 25)),
-      observedP75: 5.0,
+      stats: observedWeightStats(observedDaily(), _today),
+      observedBw: 163.0,
+      observedIndexTotal: 878.0,
+    );
+
+/// Synchronous-ish MC runner (few paths, no isolate) so tests stay
+/// deterministic and fast; the production default is Isolate.run.
+Future<Sim2McSummary> testMcRunner(Sim2McJob j) async => sim2MonteCarlo(
+      params: j.params,
+      blocks: j.blocks,
+      start: j.start,
+      presetId: j.presetId,
+      overrides: j.overrides,
+      muDeficit: j.muDeficit,
+      observedBw: j.observedBw,
+      observedIndexTotal: j.observedIndexTotal,
+      paths: 40,
     );
 
 Future<void> pumpSection(
   WidgetTester tester, {
-  Size surface = const Size(800, 2600),
-  List<String> drifted = const [],
+  Size surface = const Size(800, 5200),
 }) async {
   tester.view.physicalSize = surface;
   tester.view.devicePixelRatio = 1.0;
@@ -110,12 +58,14 @@ Future<void> pumpSection(
     home: Scaffold(
       body: SingleChildScrollView(
         child: ForecastSection(
-          inputs: inputs(drifted: drifted),
-          today: DateTime(2026, 9, 25),
+          inputs: inputs(),
+          today: _today,
+          mcRunner: testMcRunner,
         ),
       ),
     ),
   ));
+  await tester.pump(); // let the MC futures land
   await tester.pump();
 }
 
@@ -130,119 +80,191 @@ LineChartData chartData(WidgetTester tester, String key) {
 }
 
 String summaryText(WidgetTester tester) {
-  final text = tester.widget<Text>(
+  final texts = tester.widgetList<Text>(
     find.descendant(
-      of: find.byKey(const ValueKey('forecast-summary')),
+      of: find.byKey(const ValueKey('sim2-summary')),
       matching: find.byType(Text),
     ),
   );
-  return text.data!;
+  return texts.map((t) => t.data).join(' | ');
+}
+
+Future<void> scrollTo(WidgetTester tester, Finder finder) async {
+  await tester.scrollUntilVisible(finder, 400,
+      scrollable: find.byType(Scrollable).first);
+  await tester.pump();
 }
 
 void main() {
-  testWidgets('default levers: summary shows cut end, Wilks, deadlift',
+  testWidgets('baseline renders: summary, both strength lines, P(V8)',
       (tester) async {
     await pumpSection(tester);
     final summary = summaryText(tester);
-    // Study trajectory: cut target trips 2026-11-16, Wilks ~329,
-    // deadlift 400+ on the default 3y horizon.
-    expect(summary, contains('154 by Nov 16'));
-    expect(summary, contains('Wilks'));
-    expect(summary, contains('deadlift 4'));
-    // All three charts render.
-    expect(find.byKey(const ValueKey('forecast-bw-chart')), findsOneWidget);
-    expect(
-        find.byKey(const ValueKey('forecast-strength-chart')), findsOneWidget);
-    expect(find.byKey(const ValueKey('forecast-climb-chart')), findsOneWidget);
-    // No reset chip while at program defaults.
-    expect(find.byKey(const ValueKey('forecast-reset')), findsNothing);
-    // Climbing anchor caption: observed 5.0 vs raw model level.
-    expect(find.textContaining('anchored to observed p75 V5.0'),
-        findsOneWidget);
+    expect(summary, contains('Baseline'));
+    expect(summary, contains("Dec 5 '27"));
+    // MC landed (injected runner): the summary carries P(V8).
+    expect(summary, contains('P(V8)'));
+
+    // Expressed chart: index line AND true line (baseline hidden, no
+    // capacity toggle → exactly 2 line series).
+    final expressed = chartData(tester, 'sim2-expressed-chart');
+    expect(expressed.lineBarsData.length, 2);
+    final idxLine = expressed.lineBarsData[0]; // dashed index first
+    final trueLine = expressed.lineBarsData[1];
+    expect(idxLine.dashArray, isNotNull);
+    expect(trueLine.dashArray, isNull);
+    // The attempt-gate lag: index starts below true (the cut's N=3 is
+    // an attempt week, so most of the 39 lb under-read closes fast —
+    // ~11 lb left after week 1), converging by the horizon.
+    expect(idxLine.spots.first.y, lessThan(trueLine.spots.first.y - 4));
+    expect((idxLine.spots.last.y - trueLine.spots.last.y).abs(), lessThan(8));
+
+    // The P(V8) caption is a real number, not the computing fallback.
+    expect(find.textContaining('P(V8 sent'), findsOneWidget);
+    // No compare card while at baseline.
+    expect(find.byKey(const ValueKey('sim2-compare')), findsNothing);
   });
 
-  testWidgets('horizon lever re-sims: chart window + milestones change',
-      (tester) async {
+  testWidgets('capacity toggle adds the capacity line', (tester) async {
     await pumpSection(tester);
-    final maxX3y = chartData(tester, 'forecast-bw-chart').maxX;
-
-    await tester.tap(find.byKey(const ValueKey('forecast-horizon-1')));
+    await tester.tap(find.byKey(const ValueKey('sim2-capacity-toggle')));
     await tester.pump();
-    final maxX1y = chartData(tester, 'forecast-bw-chart').maxX;
-    expect(maxX1y, lessThan(maxX3y));
-    // Strength chart re-windows too (same result object).
-    expect(chartData(tester, 'forecast-strength-chart').maxX, maxX1y);
-
-    await tester.tap(find.byKey(const ValueKey('forecast-horizon-5')));
-    await tester.pump();
-    expect(chartData(tester, 'forecast-bw-chart').maxX, greaterThan(maxX3y));
+    expect(chartData(tester, 'sim2-expressed-chart').lineBarsData.length, 3);
   });
 
-  testWidgets('cut-rate slider changes the plotted forecast + summary; '
-      'reset chip restores program defaults', (tester) async {
+  testWidgets('dials change outputs: N override re-runs the sim',
+      (tester) async {
     await pumpSection(tester);
     final before = summaryText(tester);
-    final bwBefore = chartData(tester, 'forecast-bw-chart')
-        .lineBarsData
-        .last // the dashed forecast line
-        .spots
-        .map((s) => s.y)
-        .toList();
+    final yBefore =
+        chartData(tester, 'sim2-expressed-chart').lineBarsData.last.spots.last.y;
 
-    // Drag the cut slider hard left (toward -1.6 lb/wk): the cut target
-    // trips earlier.
     await tester.drag(
-      find.byKey(const ValueKey('forecast-cut-slider')),
-      const Offset(-300, 0),
-    );
+        find.byKey(const ValueKey('sim2-dial-n')), const Offset(300, 0));
     await tester.pump();
-    final after = summaryText(tester);
-    expect(after, isNot(before));
-    final bwAfter = chartData(tester, 'forecast-bw-chart')
-        .lineBarsData
-        .last
-        .spots
-        .map((s) => s.y)
-        .toList();
-    expect(bwAfter, isNot(bwBefore));
+    await tester.pump(); // MC future
 
-    // Reset restores the program-default trajectory.
-    final reset = find.byKey(const ValueKey('forecast-reset'));
-    expect(reset, findsOneWidget);
-    await tester.tap(reset);
+    expect(summaryText(tester), isNot(before));
+    final yAfter =
+        chartData(tester, 'sim2-expressed-chart').lineBarsData.last.spots.last.y;
+    expect(yAfter, isNot(yBefore));
+    // An override makes it a scenario: compare card + baseline line.
+    expect(find.byKey(const ValueKey('sim2-compare')), findsOneWidget);
+
+    // Reset restores the baseline.
+    await tester.tap(find.byKey(const ValueKey('sim2-dials-reset')));
+    await tester.pump();
     await tester.pump();
     expect(summaryText(tester), before);
-    expect(find.byKey(const ValueKey('forecast-reset')), findsNothing);
+    expect(find.byKey(const ValueKey('sim2-compare')), findsNothing);
   });
 
-  testWidgets('series chips toggle strength lines; press caveat follows',
+  testWidgets('preset application: Climb more shows the budget bite',
       (tester) async {
     await pumpSection(tester);
-    final barsAll = chartData(tester, 'forecast-strength-chart')
-        .lineBarsData
-        .length;
-    expect(find.textContaining('press: the current cut shows a decline'),
-        findsOneWidget);
+    final baseSummary = summaryText(tester);
+    final baseTotal =
+        chartData(tester, 'sim2-expressed-chart').lineBarsData.last.spots.last.y;
 
-    await tester.tap(find.byKey(const ValueKey('forecast-series-press')));
+    await tester.tap(find.byKey(const ValueKey('sim2-preset-climb_more')));
     await tester.pump();
-    final barsFewer =
-        chartData(tester, 'forecast-strength-chart').lineBarsData.length;
-    expect(barsFewer, lessThan(barsAll));
-    // Press deselected → its caveat leaves with it.
-    expect(find.textContaining('press: the current cut shows a decline'),
-        findsNothing);
+    await tester.pump(); // MC futures
+
+    final summary = summaryText(tester);
+    expect(summary, isNot(baseSummary));
+    expect(summary, contains('Climb more'));
+    expect(summary, contains('baseline:')); // §8: baseline reported next to it
+
+    // Strength falls (report: 968 vs 1023) and the scenario chart now
+    // carries the baseline line too (grey + index + true).
+    final expressed = chartData(tester, 'sim2-expressed-chart');
+    expect(expressed.lineBarsData.length, 3);
+    expect(expressed.lineBarsData.last.spots.last.y, lessThan(baseTotal - 30));
+
+    // Compare card present with over-budget row.
+    await scrollTo(tester, find.byKey(const ValueKey('sim2-compare')));
+    expect(find.byKey(const ValueKey('sim2-compare')), findsOneWidget);
+    expect(find.textContaining('over-budget wks'), findsOneWidget);
+
+    // Back to baseline.
+    await tester.tap(find.byKey(const ValueKey('sim2-preset-baseline')));
+    await tester.pump();
+    await tester.pump();
+    expect(summaryText(tester), baseSummary);
   });
 
-  testWidgets('drift tag renders when the guard tripped', (tester) async {
-    await pumpSection(tester, drifted: ['squat.b_bw']);
-    expect(find.textContaining('model drift: squat.b_bw'), findsOneWidget);
+  testWidgets('red flags: over-budget weeks render as red spans on F',
+      (tester) async {
+    await pumpSection(tester);
+    await scrollTo(tester, find.byKey(const ValueKey('sim2-f-chart')));
+    final f = chartData(tester, 'sim2-f-chart');
+    final annotations = f.rangeAnnotations.verticalRangeAnnotations;
+    // Block bands + red spans; the red ones carry the stronger alpha.
+    final red = [
+      for (final a in annotations)
+        if ((a.color?.a ?? 0) > 0.12) a,
+    ];
+    expect(red, isNotEmpty,
+        reason: 'the baseline cut runs L=6.9 > 6.0 → red spans');
+    // The §8 confidence-collapse caption with the week count.
+    expect(find.textContaining('over-budget weeks: 56'), findsOneWidget);
+    expect(find.textContaining('confidence'), findsOneWidget);
+  });
+
+  testWidgets('§5 μ branch toggle moves BF%', (tester) async {
+    await pumpSection(tester);
+    await scrollTo(tester, find.byKey(const ValueKey('sim2-mu-zero')));
+    final before = find
+        .textContaining('horizon BF')
+        .evaluate()
+        .single
+        .widget as Text;
+    await tester.tap(find.byKey(const ValueKey('sim2-mu-zero')));
+    await tester.pump();
+    await tester.pump();
+    final after = find
+        .textContaining('horizon BF')
+        .evaluate()
+        .single
+        .widget as Text;
+    expect(after.data, isNot(before.data)); // 17.6% → 16.1%
+    expect(find.textContaining('Nov DEXA'), findsOneWidget);
+  });
+
+  testWidgets('§9.5 parameter sheet: provenance tags + edit re-runs',
+      (tester) async {
+    await pumpSection(tester);
+    await scrollTo(tester, find.byKey(const ValueKey('sim2-params-tile')));
+    await tester.tap(find.byKey(const ValueKey('sim2-params-tile')));
+    await tester.pumpAndSettle();
+
+    // Every §9.5 def renders a row; the eDep caveat is in the footer.
+    await scrollTo(tester, find.byKey(const ValueKey('sim2-param-e_dep')));
+    expect(find.textContaining('replay checkpoints, NOT the window fit'),
+        findsOneWidget);
+
+    final before = summaryText(tester);
+    await tester.tap(find.byKey(const ValueKey('sim2-param-a')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '5.0');
+    await tester.tap(find.text('Apply'));
+    await tester.pump();
+    await tester.pump();
+    expect(summaryText(tester), isNot(before));
+    expect(find.textContaining('EDITED'), findsOneWidget);
+
+    // Reset to fitted restores the baseline horizon.
+    await scrollTo(tester, find.byKey(const ValueKey('sim2-params-reset')));
+    await tester.tap(find.byKey(const ValueKey('sim2-params-reset')));
+    await tester.pump();
+    await tester.pump();
+    expect(summaryText(tester), before);
   });
 
   testWidgets('reflows without overflow at 360dp', (tester) async {
-    await pumpSection(tester, surface: const Size(360, 3200));
-    expect(find.byKey(const ValueKey('forecast-bw-chart')), findsOneWidget);
-    expect(find.textContaining('MILESTONES'), findsOneWidget);
+    await pumpSection(tester, surface: const Size(360, 6500));
+    expect(find.byKey(const ValueKey('sim2-expressed-chart')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-f-chart')), findsOneWidget);
     // Reaching here without a RenderFlex overflow report = pass.
   });
 }

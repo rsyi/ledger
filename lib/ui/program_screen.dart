@@ -10,17 +10,18 @@
 ///     `working_max` tab via WmStore): per-lift value/variant/source,
 ///     Confirm on pending seeds, manual "Set working max…". The one
 ///     part of this screen that writes (appends) anywhere.
-///  3. FORECAST — the program simulation (ForecastSection): the
-///     observed weigh-in series anchors a dashed simulated bw
-///     trajectory (phase bands + ±daily-scatter band), then the
-///     strength e1RM/Wilks forecast, the offset-anchored climbing p75,
-///     the lever row (bulk/cut rates, climb frequency, horizon —
-///     instant synchronous re-sim), and the phase-boundary milestones.
-///     Coefficients: world_model.yaml (SchemaSync-delivered, 1 h doc
-///     cache) refit against local history with the ±50% drift guard;
-///     pull-to-refresh busts the cache and refits. This section
-///     REPLACED the old OBSERVED weight chart + Wilks block (Home's
-///     hero is the progress surface; Program owns intent + forecast).
+///  3. FORECAST — the training simulator v2.1 (ForecastSection; spec
+///     `airledger/docs/superpowers/specs/2026-09-26-training-simulator-spec.md`
+///     §8/§9.5): block calendar from program.yaml, §8 preset chips +
+///     the global dials row (instant synchronous re-sim), expressed
+///     strength as BOTH the app-index line and the true expressed line,
+///     body comp with the §5 μ branch toggle, climbing C with P(V8)
+///     from the off-thread Monte Carlo, VO2, fatigue with over-budget
+///     weeks red-flagged, baseline-vs-scenario table, and the §9.5
+///     editable parameter sheet. Model layer: lib/services/sim2_model +
+///     sim2_harness (the fitted two-layer core); v1's world_model.yaml
+///     refit path is retired from this screen. Local history only
+///     refreshes the starting bw + the app-index anchor.
 ///  4. VERDICT — PHASE_MISMATCH semantics: green (agree), amber
 ///     (drifting), red (three consecutive mismatch weeks — the flag
 ///     would fire).
@@ -31,18 +32,17 @@ import 'package:intl/intl.dart';
 
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
-import '../services/doc_cache.dart';
 import '../services/home_synthesis.dart' show strengthRowFromRecord;
 import '../services/program_current.dart';
 import '../services/program_metrics.dart' show StrengthRow, WeightRow;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/sim_fit.dart' show ClimbAscent, buildWeeklySeries;
-import '../services/sim_program.dart';
+import '../services/sim_program.dart' show simInitialFromSeries;
+import '../services/sim2_harness.dart' show sim2BlocksFromProgramDocs;
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
 import '../services/wm_store.dart';
-import '../services/world_model.dart';
 import 'app_text.dart';
 import 'widgets/forecast_section.dart';
 import 'widgets/working_max_card.dart';
@@ -202,51 +202,46 @@ class _ProgramScreenState extends State<ProgramScreen> {
     );
   }
 
-  /// Assembles [ForecastInputs]: world_model.yaml (same DocCache path
-  /// as dashboards.yaml), SimProgram from the intent docs, the weekly
-  /// series + t0 state from local history, and the drift-guarded refit.
-  /// Any missing piece → null (placeholder card).
+  /// Assembles [ForecastInputs] for the sim2 section: the block
+  /// calendar from program.yaml (required — null → placeholder card)
+  /// plus optional local-history anchors (observed bw + the app's
+  /// Epley-index total; missing history degrades to the [log] seeds,
+  /// it never blocks the forecast).
   Future<ForecastInputs?> _buildForecast(
     IntentDocs docs,
     List<WeightRow> daily,
     List<StrengthRow> strengthRows,
     List<ClimbAscent> climbs,
   ) async {
+    final blocks = sim2BlocksFromProgramDocs(docs.program);
+    if (blocks == null) return null;
+    double? observedBw;
+    double? observedIndexTotal;
     try {
-      final raw = await DocCache.fetch(kWorldModelPath, widget.provider.fetchDoc);
-      final wm = parseWorldModel(raw);
-      if (wm == null) return null;
-      final program = simProgramFromDocs(
-        program: docs.program,
-        phase: docs.phase,
-        rules: wm.sim,
-      );
-      if (program == null || strengthRows.isEmpty || daily.isEmpty) {
-        return null;
+      if (strengthRows.isNotEmpty && daily.isNotEmpty) {
+        final series = buildWeeklySeries(
+          strengthRows: strengthRows,
+          weightRows: daily,
+          climbs: climbs,
+        );
+        final initial = simInitialFromSeries(series);
+        observedBw = initial?.bw;
+        final e = initial?.e1rm;
+        if (e != null &&
+            e.containsKey('squat') &&
+            e.containsKey('bench') &&
+            e.containsKey('deadlift')) {
+          observedIndexTotal = e['squat']! + e['bench']! + e['deadlift']!;
+        }
       }
-      final series = buildWeeklySeries(
-        strengthRows: strengthRows,
-        weightRows: daily,
-        climbs: climbs,
-      );
-      final initial = simInitialFromSeries(series);
-      if (initial == null) return null;
-      final refit = guardedRefit(model: wm, series: series);
-      return ForecastInputs(
-        initial: initial,
-        program: program,
-        coefficients: refit.coefficients,
-        rules: wm.sim,
-        drifted: refit.drifted,
-        strengthMaeLb: strengthMaeFromModel(wm),
-        gradeMaeV: gradeMaeFromModel(wm),
-        observedDaily: daily,
-        stats: observedWeightStats(daily, _today),
-        observedP75: initial.gradeP75,
-      );
-    } catch (_) {
-      return null;
-    }
+    } catch (_) {} // history anchors are optional
+    return ForecastInputs(
+      blocks: blocks,
+      observedDaily: daily,
+      stats: observedWeightStats(daily, _today),
+      observedBw: observedBw,
+      observedIndexTotal: observedIndexTotal,
+    );
   }
 
   @override
@@ -363,9 +358,9 @@ class _ProgramView extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: Text(
                 data.observedError ??
-                    'Forecast unavailable — needs world_model.yaml, the '
-                        'program docs, and local weigh-in + strength '
-                        'history (pull to refresh once online).',
+                    'Forecast unavailable — needs the program block '
+                        'calendar (coach/program.yaml; pull to refresh '
+                        'once online).',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),

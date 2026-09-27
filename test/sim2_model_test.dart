@@ -1,12 +1,21 @@
 // Unit gates for the lifted sim2 core + harness (training simulator
-// v2.1, wave 3). Two pinned acceptance surfaces from the fit report
-// (2026-09-26-sim-v21-fit-report.md):
-//   • §9.2 replay: 4/5 checkpoints pass from the 2024-01-01 anchor
-//     (checkpoint 1 carries the documented Bulk-C data-basis anomaly,
-//     err ≈ −47); median level |err| 31 lb over 68 obs points.
-//   • §9.3 horizon: deterministic expressed total 1023 (pin 1022±1) on
-//     the default (fixture) calendar from 2026-09-28; over-budget 56;
-//     MC median 1022 with P(V8 sent) 0.45.
+// v2.1, wave 3). Two pinned acceptance surfaces:
+//   • §9.2 replay (fit report 2026-09-26-sim-v21-fit-report.md): 4/5
+//     checkpoints pass from the 2024-01-01 anchor (checkpoint 1
+//     carries the documented Bulk-C data-basis anomaly, err ≈ −47);
+//     median level |err| 31 lb over 68 obs points. HISTORY — these
+//     pins never move with plan changes.
+//   • §9.3 horizon, RECOMP BASELINE (program.yaml v8, 2026-09-26):
+//     blocks 2-7 at r=0.075 / P=1.05 — deterministic expressed total
+//     ~982 on the default (fixture) calendar from 2026-09-28; BW ends
+//     ~158.8 (inside the recomp hold 158-161, under the 165 cap);
+//     over-budget 56; MC median ~980 with P(V8 sent) 0.78. The
+//     superseded bulk trajectory lives behind the 'Bulk plan
+//     (inactive)' preset and still reproduces the ORIGINAL fit-report
+//     pins (1023 deterministic / MC 1022 / P(V8) 0.45) — gap ≈ 42 lb
+//     SBD by Dec 2027 (the doc's own estimate was ~25 lb, most of it
+//     leverage; the model splits it ~18 lb capacity + ~24 lb
+//     bw-leverage expression).
 // Fixtures: tool/calibration/*.csv (tests run from the package root).
 import 'dart:math';
 
@@ -90,15 +99,17 @@ void main() {
     final blocks = sim2DefaultBlocks();
     final start = DateTime.utc(2026, 9, 28);
 
-    test('deterministic expressed total pins at 1022±1 (=1023)', () {
+    test('recomp baseline: deterministic expressed total ~982, BW holds '
+        '~158.8 inside the recomp band', () {
       final run = sim2Run(params: p, blocks: blocks, start: start);
-      expect(run.end.s, closeTo(1022, 1.5)); // 1023 per the report
-      expect(run.end.sCap, closeTo(1014, 2));
-      expect(run.overBudgetWeeks, 56);
-      expect(run.end.bw, closeTo(171.2, 0.3));
-      expect(run.end.vo2, closeTo(49.6, 0.3));
-      expect(run.end.bfPct, closeTo(17.6, 0.3)); // §5 rule μ=0.30 branch
-      expect(run.end.c, closeTo(6.97, 0.1));
+      expect(run.end.s, closeTo(981.6, 1.5));
+      expect(run.end.sCap, closeTo(996, 2));
+      expect(run.overBudgetWeeks, 56); // same budget shape as the bulk
+      expect(run.end.bw, closeTo(158.8, 0.3)); // hold band 158-161
+      expect(run.end.bw, lessThan(165)); // recomp hard cap
+      expect(run.end.vo2, closeTo(53.4, 0.3)); // lighter year helps VO2
+      expect(run.end.bfPct, closeTo(15.6, 0.3)); // §5 rule μ=0.30 branch
+      expect(run.end.c, closeTo(7.69, 0.1)); // and the climbing
       // start state: RPE basis 917, capacity 968, E 0.947
       expect(run.start.s, closeTo(917, 1));
       expect(run.start.sCap, closeTo(968, 1));
@@ -107,27 +118,54 @@ void main() {
       expect(run.last.sIdx, closeTo(run.last.sTrue, 6));
     });
 
-    test('μ≈0 deficit branch lands BF 16.1 (13%-at-154 anchor)', () {
+    test('μ≈0 deficit branch lands BF 14.0 (13%-at-154 anchor)', () {
       final run =
           sim2Run(params: p, blocks: blocks, start: start, muDeficit: 0.0);
-      expect(run.end.bfPct, closeTo(16.1, 0.3));
-      expect(run.end.bw, closeTo(171.2, 0.3)); // BW path identical
+      expect(run.end.bfPct, closeTo(14.0, 0.3));
+      expect(run.end.bw, closeTo(158.8, 0.3)); // BW path identical
     });
 
-    test('Monte Carlo median 1022, P(V8 sent) 0.45, injuries ~2.2', () {
+    test("'Bulk plan (inactive)' preset reproduces the ORIGINAL fit-report "
+        'pins; recomp gap ≈ 42 lb SBD', () {
+      final bulk = sim2Run(
+          params: p, blocks: blocks, start: start, presetId: 'bulk_plan');
+      expect(bulk.end.s, closeTo(1022, 1.5)); // 1023 per the report
+      expect(bulk.end.sCap, closeTo(1014, 2));
+      expect(bulk.end.bw, closeTo(171.2, 0.3));
+      expect(bulk.end.vo2, closeTo(49.6, 0.3));
+      expect(bulk.end.bfPct, closeTo(17.6, 0.3));
+      expect(bulk.end.c, closeTo(6.97, 0.1));
+      // The recomp cost on the SBD total (doc's own estimate ~25 lb;
+      // the model reads ~42 — ~18 capacity + ~24 bw-leverage).
+      final base = sim2Run(params: p, blocks: blocks, start: start);
+      expect(bulk.end.s - base.end.s, closeTo(42, 3));
+      // μ≈0 branch of the bulk plan keeps its old pin too.
+      final bulkMu0 = sim2Run(
+          params: p, blocks: blocks, start: start, presetId: 'bulk_plan',
+          muDeficit: 0.0);
+      expect(bulkMu0.end.bfPct, closeTo(16.1, 0.3));
+    });
+
+    test('Monte Carlo (recomp baseline) median ~980, P(V8 sent) 0.78, '
+        'injuries ~2.2; bulk preset keeps median 1022 / 0.45', () {
       final mc = sim2MonteCarlo(params: p, blocks: blocks, start: start);
-      expect(mc.medianTotal, closeTo(1022, 2));
-      expect(mc.p20Total, closeTo(1013, 3));
-      expect(mc.p80Total, closeTo(1030, 3));
-      expect(mc.pV8Sent, closeTo(0.45, 0.03));
-      expect(mc.pV8Touch, closeTo(0.02, 0.02));
+      expect(mc.medianTotal, closeTo(980, 2));
+      expect(mc.p20Total, closeTo(972, 3));
+      expect(mc.p80Total, closeTo(988, 3));
+      expect(mc.pV8Sent, closeTo(0.78, 0.04));
+      expect(mc.pV8Touch, closeTo(0.35, 0.05));
       expect(mc.injuryWeeksMean, closeTo(2.2, 0.5));
+      final bulkMc = sim2MonteCarlo(
+          params: p, blocks: blocks, start: start, presetId: 'bulk_plan');
+      expect(bulkMc.medianTotal, closeTo(1022, 2));
+      expect(bulkMc.pV8Sent, closeTo(0.45, 0.03));
     });
 
-    test('Cardio up holds VO2 ~52; Cardio off drops it toward ~46', () {
+    test('Cardio up pushes VO2 toward ~55; Cardio off drops it toward ~46',
+        () {
       final up = sim2Run(
           params: p, blocks: blocks, start: start, presetId: 'cardio_up');
-      expect(up.end.vo2, closeTo(52.0, 0.4));
+      expect(up.end.vo2, closeTo(54.9, 0.4));
       final off = sim2Run(
           params: p, blocks: blocks, start: start, presetId: 'cardio_off');
       expect(off.end.vo2, lessThan(48));
@@ -154,13 +192,17 @@ void main() {
     });
 
     test('Fast bulk: more fat, no extra strength above r=0.5 (§9.4)', () {
-      final base = sim2Run(params: p, blocks: blocks, start: start);
+      // The r-saturation claim compares against the BULK plan (r=0.4)
+      // — the recomp baseline (r=0.075) is fed less, so fast_bulk does
+      // beat IT; the point is that r=0.9 buys nothing over r=0.4.
+      final bulk = sim2Run(
+          params: p, blocks: blocks, start: start, presetId: 'bulk_plan');
       final fast = sim2Run(
           params: p, blocks: blocks, start: start, presetId: 'fast_bulk');
       expect(fast.end.fm - sim2SeedFm,
-          greaterThan(base.end.fm - sim2SeedFm + 8)); // +14.8 vs +1.1
-      expect(fast.end.s, lessThanOrEqualTo(base.end.s + 8));
-      expect(fast.end.bw, closeTo(187, 1.5));
+          greaterThan(bulk.end.fm - sim2SeedFm + 8)); // +14.1 vs +1.1
+      expect(fast.end.s, lessThanOrEqualTo(bulk.end.s + 8));
+      expect(fast.end.bw, closeTo(185, 1.5)); // blocks 6-7 recomp-based
     });
 
     test('Drop calisthenics decays M; dial overrides move the horizon', () {
@@ -195,7 +237,7 @@ void main() {
       expect(parsed.last.phase, 'lifting');
       expect(parsed.last.e1rm['squat'], closeTo(run.last.squat, 0.06));
       expect(parsed.last.e1rm['press'], closeTo(run.last.press, 0.06));
-      expect(parsed.last.bw, closeTo(171.2, 0.3));
+      expect(parsed.last.bw, closeTo(158.8, 0.3)); // recomp baseline
       expect(parsed.last.wilks, greaterThan(200)); // SBD Wilks at 171 lb
       expect(parsed.last.gradeP75, closeTo(run.last.c, 0.06)); // sim2 C
     });

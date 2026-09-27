@@ -665,7 +665,17 @@ class HomeDashboardState extends State<HomeDashboard> {
     if (byPhase == null) return null;
     final docs = await _docs;
     final phase = currentVersion(docs?.phase)?['value']?.toString();
-    final configs = phase == null ? null : byPhase[phase];
+    // Program-variant selection (v8): recomposition redirects a
+    // declared bulk phase to the recomp driver set when one exists.
+    final phaseKey = phase == null
+        ? null
+        : effectivePhaseKey(
+            phase,
+            variant:
+                currentVersion(docs?.program)?['variant']?.toString(),
+            available: byPhase.keys,
+          );
+    final configs = phaseKey == null ? null : byPhase[phaseKey];
     if (configs == null || configs.isEmpty) return null;
     final rows = await _strengthRows;
     final daily = (await _weights)?.daily ?? const <WeightRow>[];
@@ -699,8 +709,17 @@ class HomeDashboardState extends State<HomeDashboard> {
     if (phases == null) return null;
     final docs = await _docs;
     final phaseVersion = currentVersion(docs?.phase);
-    final phase = phaseVersion?['value']?.toString();
-    if (phase == null) return null;
+    final declaredPhase = phaseVersion?['value']?.toString();
+    if (declaredPhase == null) return null;
+    // Program-variant selection (v8): recomposition redirects a
+    // declared bulk phase to the recomp eigenvector set when one
+    // exists (dashboards.yaml `recomp:`); the bulk set stays defined
+    // but unselected while the variant is active.
+    final phase = effectivePhaseKey(
+      declaredPhase,
+      variant: currentVersion(docs?.program)?['variant']?.toString(),
+      available: phases.keys,
+    );
     final daily = (await _weights)?.daily ?? const <WeightRow>[];
     final rows = await _strengthRows;
     final wsDay = await _weekStartDay();

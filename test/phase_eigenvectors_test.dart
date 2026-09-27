@@ -86,6 +86,38 @@ phases:
     });
   });
 
+  group('effectivePhaseKey (program.yaml v8 variant selection)', () {
+    const keys = ['cut', 'bulk', 'recomp', 'maintain', 'reverse'];
+
+    test('recomposition variant redirects bulk → recomp', () {
+      expect(
+        effectivePhaseKey('bulk', variant: 'recomposition', available: keys),
+        'recomp',
+      );
+    });
+
+    test('non-bulk phases pass through under the variant', () {
+      for (final p in ['cut', 'reverse', 'maintain', 'recomp']) {
+        expect(
+          effectivePhaseKey(p, variant: 'recomposition', available: keys),
+          p,
+        );
+      }
+    });
+
+    test('no variant / unknown variant / no recomp set → unchanged', () {
+      expect(
+          effectivePhaseKey('bulk', variant: null, available: keys), 'bulk');
+      expect(
+          effectivePhaseKey('bulk', variant: 'bulk', available: keys), 'bulk');
+      expect(
+        effectivePhaseKey('bulk',
+            variant: 'recomposition', available: const ['cut', 'bulk']),
+        'bulk',
+      );
+    });
+  });
+
   group('rateBandVerdict', () {
     const band = [-1.0, -0.5];
 

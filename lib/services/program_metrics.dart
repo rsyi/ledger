@@ -653,6 +653,20 @@ class FlagHit {
 /// With no targets (pre-program history / backtest §6 windows) the legacy
 /// bulk-calibrated thresholds hold unchanged: near_max < 5, working < 20,
 /// bench_days < 2.
+///
+/// Recomposition variant (program.yaml v8, 2026-09-26) — the weight
+/// rules read their thresholds from the targets in force too:
+///   • WEIGHT_FAST fires above `gain_rate_alarm_lb_wk` two consecutive
+///     weeks (recomp blocks: 0.3; block-0 cut keeps 0.6 via
+///     targets_block_0; no numeric target → legacy 0.6);
+///   • WEIGHT_CAP fires above `hard_cap_lb` (recomp: 165; block-0 cut
+///     keeps 172; no numeric target → legacy 172);
+///   • WEIGHT_FLAT is RETIRED under recomp — a flat scale is the PLAN
+///     ("a scale that barely moves"); when the week's targets carry
+///     `variant: recomposition` the rule never fires (inform-only —
+///     the stall response is the DEXA-based stall_rule, not the
+///     scale). Bulk-phase weeks without the variant keep the
+///     flat-three-weeks-add-100 rule unchanged.
 Map<DateTime, List<FlagHit>> evaluateFlags(
   List<WeeklyMetrics> weeks, {
   String? Function(DateTime weekMonday)? phaseOf,
@@ -733,22 +747,40 @@ Map<DateTime, List<FlagHit>> evaluateFlags(
     final prev = i >= 1 ? weeks[i - 1] : null;
     final prev2 = i >= 2 ? weeks[i - 2] : null;
 
-    // WEIGHT_FAST — rate > 0.6 two consecutive weeks.
+    // Weight thresholds in force this week (see doc comment): the
+    // recomp alarm/cap when the program's targets carry them, else the
+    // legacy bulk-calibrated numbers.
+    final weekTargets = targetsOf?.call(w.weekStart);
+    final variant = weekTargets?['variant']?.toString();
+    final fastAlarm =
+        (weekTargets?['gain_rate_alarm_lb_wk'] as num?)?.toDouble() ?? 0.6;
+    final hardCap = (weekTargets?['hard_cap_lb'] as num?)?.toDouble() ?? 172;
+
+    // WEIGHT_FAST — rate > the alarm in force (recomp 0.3, cut/legacy
+    // 0.6) two consecutive weeks.
     if (w.bwRateLbWk != null &&
-        w.bwRateLbWk! > 0.6 &&
+        w.bwRateLbWk! > fastAlarm &&
         prev?.bwRateLbWk != null &&
-        prev!.bwRateLbWk! > 0.6) {
+        prev!.bwRateLbWk! > fastAlarm) {
       fire(
         'WEIGHT_FAST',
-        {'bw_rate_lb_wk': w.bwRateLbWk, 'prev_rate': prev.bwRateLbWk},
+        {
+          'bw_rate_lb_wk': w.bwRateLbWk,
+          'prev_rate': prev.bwRateLbWk,
+          'alarm': fastAlarm,
+        },
         "Take 100 kcal/day out now; don't wait for the three-week check.",
       );
     }
 
     final phase = phaseOf?.call(w.weekStart);
 
-    // WEIGHT_FLAT — bulk and abs(3wk change) < 0.3.
-    if (phase == 'bulk' &&
+    // WEIGHT_FLAT — bulk and abs(3wk change) < 0.3. RETIRED under the
+    // recomposition variant (v8): a flat scale is the plan there; the
+    // stall response is DEXA-based (program stall_rule), never kcal on
+    // scale-flatness.
+    if (variant != 'recomposition' &&
+        phase == 'bulk' &&
         w.bw3wkChange != null &&
         w.bw3wkChange!.abs() < 0.3) {
       fire(
@@ -758,11 +790,12 @@ Map<DateTime, List<FlagHit>> evaluateFlags(
       );
     }
 
-    // WEIGHT_CAP — bw_7d_avg > 172.
-    if (w.bw7dAvg != null && w.bw7dAvg! > 172) {
+    // WEIGHT_CAP — bw_7d_avg above the hard cap in force (recomp 165,
+    // cut/legacy 172).
+    if (w.bw7dAvg != null && w.bw7dAvg! > hardCap) {
       fire(
         'WEIGHT_CAP',
-        {'bw_7d_avg': w.bw7dAvg},
+        {'bw_7d_avg': w.bw7dAvg, 'cap': hardCap},
         'Hold at maintenance until the next block starts, whatever the '
             'block was for.',
       );
@@ -803,7 +836,7 @@ Map<DateTime, List<FlagHit>> evaluateFlags(
 
     // Targets in force for this week (null pre-program → legacy
     // bulk-calibrated thresholds; see doc comment).
-    final targets = targetsOf?.call(w.weekStart);
+    final targets = weekTargets;
     num? threshold(String key, num legacy) {
       if (targets == null) return legacy;
       final t = targets[key];

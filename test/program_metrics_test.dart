@@ -433,6 +433,54 @@ void main() {
       expect(ids(flags, '2025-01-06'), contains('WEIGHT_CAP'));
     });
 
+    group('recomposition variant thresholds (program.yaml v8)', () {
+      // Recomp-block targets_in_force subset (blocks >= 1 from Dec 14).
+      Map<String, Object?> recompTargets(DateTime _) => const {
+            'gain_rate_alarm_lb_wk': 0.3,
+            'hard_cap_lb': 165,
+            'variant': 'recomposition',
+          };
+
+      test('WEIGHT_FAST alarm drops to 0.3 two consecutive weeks', () {
+        final weeks = [
+          wk('2027-01-04', bwRateLbWk: 0.4),
+          wk('2027-01-11', bwRateLbWk: 0.4),
+        ];
+        // Legacy (no targets): 0.4 < 0.6 → silent.
+        expect(ids(evaluateFlags(weeks), '2027-01-11'),
+            isNot(contains('WEIGHT_FAST')));
+        // Recomp targets in force: 0.4 > 0.3 both weeks → fires.
+        final flags = evaluateFlags(weeks, targetsOf: recompTargets);
+        expect(ids(flags, '2027-01-04'), isNot(contains('WEIGHT_FAST')));
+        expect(ids(flags, '2027-01-11'), contains('WEIGHT_FAST'));
+      });
+
+      test('WEIGHT_CAP cap drops to 165', () {
+        final weeks = [wk('2027-01-04', bw7dAvg: 166.0)];
+        expect(ids(evaluateFlags(weeks), '2027-01-04'),
+            isNot(contains('WEIGHT_CAP'))); // legacy cap 172
+        expect(ids(evaluateFlags(weeks, targetsOf: recompTargets),
+                '2027-01-04'),
+            contains('WEIGHT_CAP'));
+      });
+
+      test('WEIGHT_FLAT is retired under recomp (flat scale is the plan)',
+          () {
+        String phase(DateTime _) => 'bulk';
+        final weeks = [wk('2027-01-04', bw3wkChange: 0.1)];
+        // Bulk without the variant: fires as before.
+        expect(ids(evaluateFlags(weeks, phaseOf: phase), '2027-01-04'),
+            contains('WEIGHT_FLAT'));
+        // Bulk phase + recomp variant: never fires.
+        expect(
+            ids(
+                evaluateFlags(weeks,
+                    phaseOf: phase, targetsOf: recompTargets),
+                '2027-01-04'),
+            isNot(contains('WEIGHT_FLAT')));
+      });
+    });
+
     test('PHASE_MISMATCH needs three consecutive weeks', () {
       String phase(DateTime _) => 'bulk';
       final flags = evaluateFlags([

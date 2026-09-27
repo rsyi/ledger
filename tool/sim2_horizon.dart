@@ -48,9 +48,16 @@ final blocks = [
 
 // --- baseline dials per block type ------------------------------------------
 // [log/assume] cut dials from current logged weeks (D~3.5, W~14, N~2-3,
-// K=2 with the Tuesday limit session); bulk-block dials from spec §0 +
-// program targets. Climbing-block N=3 [assume]: top-set RPE cap 8 kills
-// most sets that count as near-max (RPE 8.5+).
+// K=2 with the Tuesday limit session); training dials for blocks 2-7
+// from spec §0 + program targets. Climbing-block N=3 [assume]: top-set
+// RPE cap 8 kills most sets that count as near-max (RPE 8.5+).
+//
+// RECOMP BASELINE (2026-09-26, program.yaml v8): blocks 2-7 run the
+// recomposition variant — r = 0.075 (the 0..0.15 band's midpoint,
+// replacing the calendar's superseded bulk rates kept in `blocks`
+// above) and p = 1.05 (protein 1.0-1.1 g/lb). Matches the shipped
+// harness (lib/services/sim2_harness.dart sim2BaselineDials); the old
+// bulk trajectory is the harness's 'Bulk plan (inactive)' preset.
 Dials dialsFor(Block b) {
   switch (b.emphasis) {
     case 'cut':
@@ -61,10 +68,12 @@ Dials dialsFor(Block b) {
           dSessions: 4, n: 3, w: 20, k: 2, kLim: 1, z: 1, q: 1, r: b.r);
     case 'climbing':
       return Dials(
-          dSessions: 4, n: 3, w: 28, k: 3, kLim: 1, h: 1, z: 1, q: 1, r: b.r);
+          dSessions: 4, n: 3, w: 28, k: 3, kLim: 1, h: 1, z: 1, q: 1,
+          r: 0.075, p: 1.05);
     default: // lifting
       return Dials(
-          dSessions: 4, n: 6, w: 28, k: 2, kLim: 0, z: 1, q: 1, r: b.r);
+          dSessions: 4, n: 6, w: 28, k: 2, kLim: 0, z: 1, q: 1,
+          r: 0.075, p: 1.05);
   }
 }
 

@@ -31,11 +31,19 @@ class Sim2Block {
   const Sim2Block(this.n, this.start, this.end, this.emphasis, this.r);
 }
 
-/// The pinned bulk-2026-27 calendar (coach/program.yaml v1) — the fixture
-/// the §9.3 horizon numbers (1022 MC / 1023 deterministic) are pinned on.
-/// Reverse r = 0.15 [assume: ~150 kcal/day ramp averages under the naive
-/// weight-endpoint slope]; the doc-derived calendar (below) uses the
-/// endpoints instead.
+/// The pinned bulk-2026-27 calendar (coach/program.yaml v1 blocks — v8
+/// keeps them verbatim) — the fixture the §9.3 horizon numbers are
+/// pinned on. Reverse r = 0.15 [assume: ~150 kcal/day ramp averages
+/// under the naive weight-endpoint slope]; the doc-derived calendar
+/// (below) uses the endpoints instead.
+///
+/// RECOMP NOTE (2026-09-26, program.yaml v8): the per-block r values
+/// for blocks 2-7 are the SUPERSEDED bulk rates — kept so the
+/// 'Bulk plan (inactive)' preset can restore them. The BASELINE dials
+/// override them with the recomp rate ([sim2RecompR], the 0..0.15
+/// band's midpoint); the recomp weight band/cap in force is
+/// 152-162 / hold 158-161 / hard cap 165 (v8), which the baseline
+/// trajectory stays inside by construction (~154 → ~158).
 List<Sim2Block> sim2DefaultBlocks() => [
       Sim2Block(0, DateTime.utc(2026, 9, 21), DateTime.utc(2026, 12, 13),
           'cut', -0.75),
@@ -95,10 +103,26 @@ List<Sim2Block>? sim2BlocksFromProgramDocs(Map<Object?, Object?>? program) {
 // Baseline dials per block type + week types (from tool/sim2_horizon.dart)
 // ---------------------------------------------------------------------------
 
+/// Recomposition-variant baseline rate for blocks 2-7 (program.yaml v8,
+/// 2026-09-26): the 0..+0.15 lb/wk band's midpoint. [log]
+const double sim2RecompR = 0.075;
+
+/// Recomp protein baseline, g/lb: the 1.0-1.1 target's midpoint. [log]
+const double sim2RecompProtein = 1.05;
+
 /// [log/assume] cut dials from current logged weeks (D~3.5, W~14, N~2-3,
-/// K=2 with the Tuesday limit session); bulk-block dials from spec §0 +
-/// program targets. Climbing-block N=3 [assume]: top-set RPE cap 8 kills
-/// most sets that count as near-max (RPE 8.5+).
+/// K=2 with the Tuesday limit session); training dials for blocks 2-7
+/// from spec §0 + program targets. Climbing-block N=3 [assume]: top-set
+/// RPE cap 8 kills most sets that count as near-max (RPE 8.5+).
+///
+/// RECOMP BASELINE (2026-09-26, program.yaml v8): blocks 2-7 run the
+/// recomposition variant — r = [sim2RecompR] (0..0.15 band midpoint,
+/// replacing the calendar's superseded bulk rates 0.4/0.2) and
+/// p = [sim2RecompProtein] (1.0-1.1 g/lb). The cut (block 0) and the
+/// reverse diet (block 1) are outside the variant and keep the
+/// calendar r. The old bulk trajectory is reachable via the
+/// 'Bulk plan (inactive)' preset, which restores r = block rate and
+/// the bulk-era protein.
 Dials sim2BaselineDials(Sim2Block b) {
   switch (b.emphasis) {
     case 'cut':
@@ -109,10 +133,12 @@ Dials sim2BaselineDials(Sim2Block b) {
           dSessions: 4, n: 3, w: 20, k: 2, kLim: 1, z: 1, q: 1, r: b.r);
     case 'climbing':
       return Dials(
-          dSessions: 4, n: 3, w: 28, k: 3, kLim: 1, h: 1, z: 1, q: 1, r: b.r);
+          dSessions: 4, n: 3, w: 28, k: 3, kLim: 1, h: 1, z: 1, q: 1,
+          r: sim2RecompR, p: sim2RecompProtein);
     default: // lifting
       return Dials(
-          dSessions: 4, n: 6, w: 28, k: 2, kLim: 0, z: 1, q: 1, r: b.r);
+          dSessions: 4, n: 6, w: 28, k: 2, kLim: 0, z: 1, q: 1,
+          r: sim2RecompR, p: sim2RecompProtein);
   }
 }
 
@@ -247,6 +273,19 @@ class Sim2Preset {
 
 final List<Sim2Preset> sim2Presets = [
   Sim2Preset('baseline', 'Baseline', 'the declared plan', (b, d, st) {}),
+  // The superseded bulk trajectory (program.yaml v8
+  // inactive_bulk_variant): restores the calendar's block rates
+  // (0.4 blocks 2-5, 0.2 blocks 6-7 — b.r carries them verbatim) and
+  // the bulk-era 0.8-1.0 protein for blocks 2-7. Blocks 0-1 were never
+  // under the variant, so their dials are already the bulk ones.
+  Sim2Preset('bulk_plan', 'Bulk plan (inactive)',
+      'the superseded 154→170 bulk — old rates, old protein',
+      (b, d, st) {
+    if (b.n >= 2) {
+      d.r = b.r;
+      d.p = 0.9;
+    }
+  }),
   Sim2Preset('climb_more', 'Climb more', 'K=4, H=1 all year — the budget bites lifting',
       (b, d, st) {
     d.k = 4;

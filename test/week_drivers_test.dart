@@ -674,8 +674,11 @@ phases:
         return;
       }
       final byPhase = parseWeeklyDrivers(file.readAsStringSync())!;
+      // 2026-09-26: + recomp — the recomposition-variant driver set,
+      // selected over bulk while program.yaml v8 carries
+      // `variant: recomposition` (effectivePhaseKey).
       expect(byPhase.keys.toSet(),
-          {'cut', 'bulk', 'maintain', 'reverse'});
+          {'cut', 'bulk', 'recomp', 'maintain', 'reverse'});
       final cut = byPhase['cut']!;
       expect(cut.map((d) => d.id).toList(), [
         'top_single_per_lift',
@@ -693,6 +696,18 @@ phases:
           ['lift_frequency', 'near_max_exposure', 'protein_floor']);
       expect(bulk[0].perLiftTargets['deadlift'], 1);
       expect(bulk[1].target, 6);
+      final recomp = byPhase['recomp']!;
+      expect(recomp.map((d) => d.id).toList(), [
+        'lift_frequency',
+        'near_max_exposure',
+        'protein_floor',
+        'bike_4x4',
+      ]);
+      // Recomp protein floor is 1.0 g/lb (targets 1.0-1.1, four
+      // feedings); training-input drivers match the bulk (the variant
+      // keeps the whole training week).
+      expect(recomp[2].floorGPerLb, 1.0);
+      expect(recomp[1].target, 6);
       // The ship gate: every driver names the outcome it drives and
       // carries its causal story.
       for (final drivers in byPhase.values) {

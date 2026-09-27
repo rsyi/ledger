@@ -381,3 +381,28 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   ~/repos/airledger-fitness. The sheet columns + backfilled data are
   ALREADY live (harmless to the old app — unknown columns are
   ignored).
+- **Recomposition year (2026-09-26, program.yaml v8)**: the 2026-27
+  year runs the RECOMP variant from Dec 14, not the bulk — maintenance
+  food, band 152-162 (hold 158-161, cap 165), rate 0..+0.15 (alarm 0.3
+  ×2wk), protein 1.0-1.1 ×4 feedings; blocks/training week/loads
+  unchanged; WEIGHT_FLAT retired (flat scale is the plan); bulk
+  numbers preserved under `inactive_bulk_variant` + the sim's "Bulk
+  plan (inactive)" preset. Source doc:
+  airledger-fitness/coach/program-2026-27-source.md. Follow-ups from
+  it:
+  - User: book a DEXA for the week of Nov 2-8 (at ~157 lb); repeat
+    every 16 weeks (late Apr / mid Aug / early Dec 2027).
+  - Daily-note gap: the one-line daily note (fingers, elbows, back,
+    sleep) is the doc's fifth tracked number and daily_notes is
+    still mostly empty — start it during the cut.
+  - Waist tracking gap: the recomp fat gauge is a weekly navel-waist
+    7-day average and NO data source exists (no view/field). The app
+    surfaces "waist gauge: not tracked yet" via program.yaml v8
+    gauges + the dashboards recomp comment; needs a waist view or a
+    weight-view field, then a real eigenvector.
+  - User: confirm hangboard access at Belmont, or get one for home
+    (20mm edge, add/remove load) — needed from block 2 (Jan 2027).
+  - User: ask Glo to screen shoulders + elbows before block 2 (early
+    January).
+  - User: decide the outdoor trip or comp that closes block 4
+    (June 2027).

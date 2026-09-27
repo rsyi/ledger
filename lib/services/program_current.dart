@@ -199,9 +199,20 @@ ProgramSlice? programCurrent(
       (block0Targets != null && block0Targets.containsKey(key))
           ? block0Targets[key]
           : targets[key];
+  // Gain-rate target. Rated blocks (2-7) normally carry the block's own
+  // `rate`; under `variant: recomposition` (program.yaml v8) the bulk
+  // block rates are superseded by the variant's flat band —
+  // targets.gain_rate_lb_wk.blocks_2_7 ([0.0, 0.15]) — while the block
+  // list itself stays untouched (structure/history). Blocks 0-1 are
+  // outside the variant (the cut and the reverse diet are unchanged).
+  final variant = version['variant']?.toString();
+  final gainRateTarget = targets['gain_rate_lb_wk'];
   final Object? gainRate;
   if (block.containsKey('rate')) {
-    gainRate = block['rate'];
+    final recompBand = (variant == 'recomposition' && gainRateTarget is Map)
+        ? gainRateTarget['blocks_2_7']
+        : null;
+    gainRate = recompBand ?? block['rate'];
   } else if (emphasis == 'cut') {
     gainRate = cutRateLbWk;
   } else {
@@ -215,6 +226,14 @@ ProgramSlice? programCurrent(
           ? climbingRaw['climbing_block']
           : climbingRaw['lifting_block'])
       : climbingRaw;
+  // WEIGHT_FAST alarm rate in force: block-0 override key first
+  // (program.yaml v8 pins the cut-era 0.6 there), then the base
+  // targets' gain_rate_lb_wk map (`alarm`: bulk 0.6, recomp 0.3).
+  // Null pre-v6 targets → flag evaluators keep their legacy threshold.
+  final Object? gainRateAlarm = (block0Targets != null &&
+          block0Targets.containsKey('gain_rate_alarm_lb_wk'))
+      ? block0Targets['gain_rate_alarm_lb_wk']
+      : (gainRateTarget is Map ? gainRateTarget['alarm'] : null);
   final targetsInForce = <String, Object?>{
     'near_max_sets': target('near_max_sets_wk'),
     'working_sets': target('working_sets_wk'),
@@ -227,9 +246,20 @@ ProgramSlice? programCurrent(
     'bike_4x4': target('bike_4x4_wk'),
     'muscle_up_sessions': target('muscle_up_sessions_wk'),
     'gain_rate_lb_wk': gainRate,
-    'bodyweight_band_lb': (targets['bodyweight_lb'] as Map?)?['band'],
-    'hard_cap_lb': version['hard_cap_lb'],
+    'gain_rate_alarm_lb_wk': gainRateAlarm,
+    // Band + cap honor targets_block_0 overrides (v8: block 0 keeps
+    // the cut-era [154,172]/172 while the recomp year runs
+    // [152,162]/165 from Dec 14).
+    'bodyweight_band_lb': (target('bodyweight_lb') as Map?)?['band'],
+    'hard_cap_lb': (block0Targets != null &&
+            block0Targets.containsKey('hard_cap_lb'))
+        ? block0Targets['hard_cap_lb']
+        : version['hard_cap_lb'],
     'protein_g_per_lb': target('protein_g_per_lb'),
+    // The program variant (v8: 'recomposition') rides along so flag
+    // evaluators / dashboards can select variant-specific behavior
+    // (WEIGHT_FLAT off, recomp eigenvector set). Null pre-v8.
+    'variant': variant,
   };
 
   final rules = (version['rules'] as List? ?? const [])

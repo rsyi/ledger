@@ -56,7 +56,7 @@ void main() {
     final v = currentVersion(program);
     expect(v, isNotNull);
     expect(v!['id'], 'bulk-2026-27');
-    expect(v['version'], 7);
+    expect(v['version'], 8);
     // A trailing pending entry must be skipped.
     final withPending = {
       'versions': [
@@ -64,7 +64,7 @@ void main() {
         {'version': 99, 'pending': true, 'id': 'draft'},
       ],
     };
-    expect(currentVersion(withPending)!['version'], 7);
+    expect(currentVersion(withPending)!['version'], 8);
   });
 
   for (final c in cases) {
@@ -117,7 +117,7 @@ void main() {
       // Slice invariants beyond the fixture subset.
       expect(slice.id, 'bulk-2026-27');
       expect(slice.rulesInForce, contains('NEAR_MAX_LOW'));
-      expect(slice.rulesInForce.length, 16);
+      expect(slice.rulesInForce.length, 15); // v8: WEIGHT_FLAT retired under recomp
       final wd = slice.todayTemplate['weekday'];
       expect(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], contains(wd));
     });

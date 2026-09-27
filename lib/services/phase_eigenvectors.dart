@@ -83,6 +83,26 @@ class EigenvectorConfig {
   });
 }
 
+/// The dashboards.yaml `phases:` key the app should render for a
+/// declared [phase] under a program [variant] (program.yaml v8):
+/// `variant: recomposition` redirects a declared `bulk` phase to the
+/// `recomp` set when [available] carries one — the recomp year replaces
+/// the bulk's gain-rate eigenvector with weight-hold; the bulk set
+/// stays defined-but-unselected (flip the variant off and it returns).
+/// Every other combination passes [phase] through unchanged, so a
+/// dashboards.yaml without a recomp set (or a pre-v8 program) behaves
+/// exactly as before.
+String effectivePhaseKey(
+  String phase, {
+  String? variant,
+  required Iterable<String> available,
+}) =>
+    (variant == 'recomposition' &&
+            phase == 'bulk' &&
+            available.contains('recomp'))
+        ? 'recomp'
+        : phase;
+
 /// Parses the `phases:` section of dashboards.yaml: phase value →
 /// eigenvector list. Null when [raw] is missing/malformed OR has no
 /// usable `phases:` map — the caller keeps the pre-hero dashboard.

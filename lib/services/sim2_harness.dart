@@ -200,10 +200,30 @@ const double sim2PostCutWClimb = 38;
 /// [log]
 const double sim2PostCutWReverse = 50;
 
-/// [log/assume] cut dials from current logged weeks (D~3.5, W~14, N~2-3,
-/// K=2 with the Tuesday limit session); post-cut training dials from
-/// the v10 template ([sim2PostCutN]/[sim2PostCutW] + the per-emphasis
-/// W variants).
+/// CUT dials (program.yaml v11, approved cut-training revision
+/// 2026-09-28 — supersedes the logged-weeks estimate D~3.5/N~3/W~14):
+/// N = 4 (one wave top per lift per week, 5/4/3/deload @ RPE 7-8);
+/// W counted from the v11 block-0 planned lists — Mon 13 (top + BSS 3
+/// + bench 4 + laterals 3 + triceps 2) / Wed 13 (top + bench 3 +
+/// squat 3 + OHP 3 + pull-ups 3) / Thu 6 (dips 3 + curls 3; muscle-up
+/// skill rides Q) / Fri 8 (top + DL 2 + RDL 2 + bench 3) / Sat 15
+/// (top + OHP 3 + row 3 + pull-ups 3 + laterals 3 + face pulls 2;
+/// "easy" external rotations excluded, v10 convention) = 55 on normal
+/// weeks; the sim has no block-0 week types, so W carries the
+/// 4-week-wave AVERAGE with the deload's halved non-top volume
+/// ((3×55 + 30)/4 ≈ 49). D = 4.5 lifting sessions (4 full days + the
+/// short Thu arms/skill day) [assume]. K=2 with Tue now the HARD
+/// session (kLim=1 unchanged); Z=1 (Tue AM 4x4) + Q=1. The Tue
+/// AM-4x4 + PM-hard-climb double session plus 4.5 lifting days runs
+/// L ≈ 7.9 vs the deficit cap 6.0 — every cut week is over budget by
+/// construction; the fatigue term (not the calendar) is where that
+/// honesty lands. [log: counted]
+const double sim2CutN = 4;
+const double sim2CutW = 49;
+const double sim2CutD = 4.5;
+
+/// Post-cut training dials from the v10 template
+/// ([sim2PostCutN]/[sim2PostCutW] + the per-emphasis W variants).
 ///
 /// RECOMP BASELINE (v10, 2026-09-27): blocks 1-7 run the final
 /// post-cut template — N=4 heavy exposures (wave 5/3/1 tops), W per
@@ -218,7 +238,8 @@ Dials sim2BaselineDials(Sim2Block b) {
   switch (b.emphasis) {
     case 'cut':
       return Dials(
-          dSessions: 3.5, n: 3, w: 14, k: 2, kLim: 1, z: 1, q: 1, r: b.r);
+          dSessions: sim2CutD, n: sim2CutN, w: sim2CutW, k: 2, kLim: 1,
+          z: 1, q: 1, r: b.r);
     case 'reverse':
       return Dials(
           dSessions: 4, n: 3, w: sim2PostCutWReverse, k: 2, kLim: 1, z: 1,

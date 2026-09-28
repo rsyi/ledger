@@ -483,14 +483,14 @@ void main() {
     });
 
     test('week 5 resumes at week 3\'s number', () {
-      // Week 3 (lifting_block): rpe 8 raise -> 325.
+      // Week 3 (lifting_block): rpe 7 raise -> 325 (v9 raise trigger).
       final d3 = evaluate(
         lift: 'squat',
         policy: liftingBlock,
         workingMax: 320,
         date: _d('2027-03-15'),
         reading:
-            heavy(date: '2027-03-15', lift: 'squat', weight: 300, rpe: 8),
+            heavy(date: '2027-03-15', lift: 'squat', weight: 300, rpe: 7),
       );
       expect(d3.action, 'raise');
       expect(d3.wmAfter, 325);
@@ -715,16 +715,25 @@ void main() {
       expect(d3.action, 'hold', reason: 'streak restarted after the drop');
     });
 
-    test('lifting_block raises on a single rpe<=8 reading', () {
+    test('lifting_block raises on a single rpe<=7 reading (v9: post-cut '
+        'heavy = RPE 7-8, raise at <= 7; rpe 8 holds)', () {
       final d = evaluate(
         lift: 'squat',
         policy: liftingBlock,
         workingMax: 320,
         date: _d('2027-03-08'),
-        reading: heavy(date: '2027-03-08', lift: 'squat', weight: 300, rpe: 8),
+        reading: heavy(date: '2027-03-08', lift: 'squat', weight: 300, rpe: 7),
       );
       expect(d.action, 'raise');
       expect(d.wmAfter, 325);
+      final hold = evaluate(
+        lift: 'squat',
+        policy: liftingBlock,
+        workingMax: 320,
+        date: _d('2027-03-08'),
+        reading: heavy(date: '2027-03-08', lift: 'squat', weight: 305, rpe: 8),
+      );
+      expect(hold.action, 'hold');
     });
 
     test('grinder and missed drop even below the rpe threshold', () {

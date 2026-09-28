@@ -234,6 +234,17 @@ ProgramSlice? programCurrent(
           block0Targets.containsKey('gain_rate_alarm_lb_wk'))
       ? block0Targets['gain_rate_alarm_lb_wk']
       : (gainRateTarget is Map ? gainRateTarget['alarm'] : null);
+  // Bodyweight target (v9): the post-cut band is a SOFT ADVISORY band
+  // (`soft_band` + `advisory: true` — coach/post-cut-recomp-spec.md:
+  // the hard band is de-emphasized; crossing it prompts the conditioned
+  // weight_rules review, nothing automatic). `band` (v6-v8 / block-0
+  // override) still wins when present.
+  final bodyweightTarget = target('bodyweight_lb');
+  final Object? bodyweightBand = bodyweightTarget is Map
+      ? (bodyweightTarget['band'] ?? bodyweightTarget['soft_band'])
+      : null;
+  final Object? bodyweightAdvisory =
+      bodyweightTarget is Map ? bodyweightTarget['advisory'] : null;
   final targetsInForce = <String, Object?>{
     'near_max_sets': target('near_max_sets_wk'),
     'working_sets': target('working_sets_wk'),
@@ -247,15 +258,24 @@ ProgramSlice? programCurrent(
     'muscle_up_sessions': target('muscle_up_sessions_wk'),
     'gain_rate_lb_wk': gainRate,
     'gain_rate_alarm_lb_wk': gainRateAlarm,
-    // Band + cap honor targets_block_0 overrides (v8: block 0 keeps
-    // the cut-era [154,172]/172 while the recomp year runs
-    // [152,162]/165 from Dec 14).
-    'bodyweight_band_lb': (target('bodyweight_lb') as Map?)?['band'],
+    // Band + cap honor targets_block_0 overrides (block 0 keeps the
+    // cut-era [154,172]/172 for the whole cut). v9: the post-cut band
+    // is soft/advisory ([154,165]) and the 165 cap is an advisory
+    // tripwire (weight_rules), no longer an automatic hold.
+    'bodyweight_band_lb': bodyweightBand,
+    'bodyweight_band_advisory': bodyweightAdvisory,
     'hard_cap_lb': (block0Targets != null &&
             block0Targets.containsKey('hard_cap_lb'))
         ? block0Targets['hard_cap_lb']
         : version['hard_cap_lb'],
     'protein_g_per_lb': target('protein_g_per_lb'),
+    // v9 absolute nutrition targets (post-cut; block 0 pins them null).
+    'protein_g_day': target('protein_g_day'),
+    'fat_g_day_min': target('fat_g_day_min'),
+    'carbs_g_day': target('carbs_g_day'),
+    // v9 hypertrophy dose band (8-12 sets/muscle/wk, overlap-counted
+    // via the version's exercise_muscle_map; null for block 0).
+    'hypertrophy_sets_per_muscle': target('hypertrophy_sets_per_muscle_wk'),
     // The program variant (v8: 'recomposition') rides along so flag
     // evaluators / dashboards can select variant-specific behavior
     // (WEIGHT_FLAT off, recomp eigenvector set). Null pre-v8.

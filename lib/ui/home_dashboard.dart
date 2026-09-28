@@ -128,9 +128,11 @@ import '../services/program_metrics.dart'
         WeightRow,
         anchorMondayOf,
         gradeSets,
+        mondayOf,
         weekStartOf;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
+import '../services/recomp_review.dart';
 import '../services/warehouse_connector.dart';
 import '../services/week_drivers.dart';
 import '../services/weight_series.dart';
@@ -188,6 +190,16 @@ class HomeDashboard extends StatefulWidget {
   final ViewSchema? cardioView;
   final WarehouseConnector? cardioRepo;
 
+  /// calisthenics view + ledger connector — feeds the recomp SKILLS
+  /// row (sessions + bests). Null → honest "no data".
+  final ViewSchema? calisthenicsView;
+  final WarehouseConnector? calisthenicsRepo;
+
+  /// daily_notes view + ledger connector — feeds the recomp RECOVERY
+  /// row (sleep/fatigue/soreness/pain subjectives, 2026-09-27 schema).
+  final ViewSchema? notesView;
+  final WarehouseConnector? notesRepo;
+
   /// dashboards.yaml provider (shared 1 h cache) — feeds the hero's
   /// `phases:` eigenvector config. Null → no hero, legacy grid.
   final DomainConfigProvider? dashboards;
@@ -220,6 +232,10 @@ class HomeDashboard extends StatefulWidget {
     this.mealsRepo,
     this.cardioView,
     this.cardioRepo,
+    this.calisthenicsView,
+    this.calisthenicsRepo,
+    this.notesView,
+    this.notesRepo,
     this.dashboards,
     this.onOpenProgram,
     this.onOpenWeekPlan,
@@ -324,6 +340,16 @@ class _StrengthData {
   bool get isEmpty => recent.isEmpty && best.isEmpty && lastBulk.isEmpty;
 }
 
+/// Recomp one-screen status data: the live weekly review + the latest
+/// scale body-fat reading (display context for the BODY row until a
+/// DEXA source exists).
+class _RecompData {
+  final WeeklyReview review;
+  final double? latestBfPct;
+
+  const _RecompData({required this.review, this.latestBfPct});
+}
+
 class HomeDashboardState extends State<HomeDashboard> {
   late final DateTime _today;
 
@@ -360,6 +386,12 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// Null → no drivers declared for the phase; the old quota strip
   /// renders unchanged.
   late Future<List<DriverEval>?> _drivers;
+
+  /// Recomp one-screen status (tracking spec 2026-09-27): the weekly
+  /// review computed live from local rows for the current Mon-Sun week.
+  /// Non-null ONLY when the effective phase is recomp — every other
+  /// phase keeps the driver checklist strip untouched.
+  late Future<_RecompData?> _recomp;
 
   // Derived per-card futures.
   late Future<PhaseHeroData?> _hero;
@@ -407,6 +439,7 @@ class HomeDashboardState extends State<HomeDashboard> {
     _climbDates = _loadClimbDates();
     _live = _computeLive();
     _drivers = _computeDrivers();
+    _recomp = _guard(_computeRecomp);
     _hero = _computeHero();
     _body = _computeBody();
     _strength = _computeStrength();
@@ -421,7 +454,7 @@ class HomeDashboardState extends State<HomeDashboard> {
   Future<void> reload() async {
     setState(() => _startLoad(force: true));
     await Future.wait([
-      _hero, _body, _strength, _exec, _engine, _live, _drivers, //
+      _hero, _body, _strength, _exec, _engine, _live, _drivers, _recomp, //
     ]);
   }
 
@@ -705,6 +738,184 @@ class HomeDashboardState extends State<HomeDashboard> {
       today: _today,
       weekStartDay: await _weekStartDay(),
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Recomp one-screen status (tracking spec 2026-09-27)
+  // -------------------------------------------------------------------------
+
+  static DateTime? _recDate(Object? raw) => raw is DateTime
+      ? raw
+      : DateTime.tryParse(raw?.toString() ?? '') ??
+          DateTime.tryParse((raw?.toString() ?? '').split(' ').first);
+
+  static String? _recText(Object? raw) {
+    final s = raw?.toString().trim() ?? '';
+    return s.isEmpty ? null : s;
+  }
+
+  /// The recomp weekly review, live from local rows, for the CURRENT
+  /// Mon-Sun week (the review's own week shape — recomp_review.dart
+  /// documents why it differs from the Saturday accounting week). Null
+  /// unless the effective phase is recomp; every load degrades to
+  /// empty → honest "no data" rows, never fabricated zeros.
+  Future<_RecompData?> _computeRecomp() async {
+    final docs = await _docs;
+    final phase = currentVersion(docs?.phase)?['value']?.toString();
+    if (phase == null) return null;
+    final version = currentVersion(docs?.program);
+    final key = effectivePhaseKey(
+      phase,
+      variant: version?['variant']?.toString(),
+      available: const ['recomp'],
+    );
+    if (key != 'recomp') return null;
+
+    Future<List<Map<String, Object?>>> rows(
+      WarehouseConnector? repo,
+      ViewSchema? view,
+    ) async {
+      if (repo == null || view == null) return const [];
+      try {
+        return await repo.list(view);
+      } catch (_) {
+        return const [];
+      }
+    }
+
+    final meals = [
+      for (final r in await rows(widget.mealsRepo, widget.mealsView))
+        if (_recDate(r['eaten_at']) case final d?)
+          MealRow(
+            eatenAt: d,
+            calories: asNum(r['calories'])?.toDouble(),
+            proteinG: asNum(r['protein_g'])?.toDouble(),
+            carbsG: asNum(r['carbs_g'])?.toDouble(),
+            fatG: asNum(r['fat_g'])?.toDouble(),
+          ),
+    ];
+
+    // Raw strength records (not _strengthRows): the review needs the
+    // set_type tag StrengthRow doesn't carry.
+    final strength = [
+      for (final r
+          in await rows(widget.strengthRepo, widget.strengthView))
+        if (_recDate(r['date']) case final d?)
+          if (_recText(r['exercise']) case final ex?)
+            ReviewSet(
+              date: d,
+              exercise: ex,
+              reps: asNum(r['reps'])?.round() ?? 0,
+              weight: asNum(r['weight'])?.toDouble() ?? 0,
+              rpe: asNum(r['rpe'])?.toDouble(),
+              setType: _recText(r['set_type']),
+            ),
+    ];
+
+    final climbs = [
+      for (final r
+          in await rows(widget.climbingRepo, widget.climbingView))
+        if (_recDate(r['date']) case final d?)
+          ClimbRow(
+            date: d,
+            grade: _recText(r['grade']) ?? '',
+            ascentType: _recText(r['ascent_type']) ?? '',
+          ),
+    ];
+
+    final cali = [
+      for (final r in await rows(
+        widget.calisthenicsRepo,
+        widget.calisthenicsView,
+      ))
+        if (_recDate(r['date']) case final d?)
+          if (_recText(r['skill']) case final skill?)
+            CalisthenicsRow(
+              date: d,
+              skill: skill,
+              variation: _recText(r['variation']),
+              sets: asNum(r['sets'])?.round(),
+              reps: asNum(r['reps'])?.round(),
+              holdSeconds: asNum(r['hold_seconds'])?.toDouble(),
+              clean: r['clean'] is bool ? r['clean'] as bool : null,
+              rpe: asNum(r['rpe'])?.toDouble(),
+            ),
+    ];
+
+    const fourByFourTypes = {'treadmill', 'bike', 'stairmaster'};
+    final cardio = <Cardio4x4Row>[];
+    for (final r in await rows(widget.cardioRepo, widget.cardioView)) {
+      final type = r['type']?.toString().trim().toLowerCase() ?? '';
+      if (type.isNotEmpty && !fourByFourTypes.contains(type)) continue;
+      final d = _recDate(r['date']);
+      if (d == null) continue;
+      cardio.add(Cardio4x4Row(
+        date: d,
+        speed: (asNum(r['treadmill_speed']) ??
+                asNum(r['stairmaster_speed']))
+            ?.toDouble(),
+        incline: asNum(r['incline'])?.toDouble(),
+        maxHr: asNum(r['max_hr'])?.toDouble(),
+        completedIntervals: asNum(r['completed_intervals'])?.toDouble(),
+      ));
+    }
+
+    final recovery = [
+      for (final r in await rows(widget.notesRepo, widget.notesView))
+        if (_recDate(r['date']) case final d?)
+          RecoveryRow(
+            date: d,
+            sleepHours: asNum(r['sleep_hours'])?.toDouble(),
+            sleepQuality: asNum(r['sleep_quality'])?.toDouble(),
+            fatigue: asNum(r['fatigue'])?.toDouble(),
+            soreness: asNum(r['soreness'])?.toDouble(),
+            readiness: asNum(r['readiness'])?.toDouble(),
+            pain: _recText(r['pain']),
+            note: _recText(r['note']),
+          ),
+    ];
+
+    final body = <BodyRow>[];
+    double? latestBf;
+    DateTime? latestBfDate;
+    for (final r in await rows(widget.weightRepo, widget.weightView)) {
+      final d = _recDate(r['date']);
+      if (d == null) continue;
+      body.add(BodyRow(
+        date: d,
+        weightLbs: asNum(r['weight_lbs'])?.toDouble(),
+        waistIn: asNum(r['waist_in'])?.toDouble(),
+      ));
+      final bf = (asNum(r['body_fat_withing']) ??
+              asNum(r['body_fat_omron']) ??
+              asNum(r['body_fat_caliper']))
+          ?.toDouble();
+      if (bf != null && (latestBfDate == null || d.isAfter(latestBfDate))) {
+        latestBf = bf;
+        latestBfDate = d;
+      }
+    }
+
+    final slice = _slice(docs);
+    final review = buildWeeklyReview(
+      weekStart: mondayOf(_today),
+      inputs: RecompInputs(
+        meals: meals,
+        strengthSets: strength,
+        readings: await _loadTopSetReadings() ?? const [],
+        climbs: climbs,
+        calisthenics: cali,
+        cardio: cardio,
+        recovery: recovery,
+        body: body,
+      ),
+      targets: recompTargetsFromProgram(
+        version,
+        parseExerciseMuscleMap(version),
+        targetsInForce: slice?.targetsInForce,
+      ),
+    );
+    return _RecompData(review: review, latestBfPct: latestBf);
   }
 
   /// PHASE hero: dashboards.yaml `phases:` config + declared phase +
@@ -1590,6 +1801,11 @@ class HomeDashboardState extends State<HomeDashboard> {
   // -------------------------------------------------------------------------
 
   Future<void> _openWeekSheet() async {
+    final recomp = await _recomp;
+    if (recomp != null) {
+      await _openRecompSheet(recomp);
+      return;
+    }
     final d = await _exec;
     final e = await _engine;
     final drivers = await _drivers;
@@ -1776,13 +1992,22 @@ class HomeDashboardState extends State<HomeDashboard> {
       label: 'This week',
       onTap: _openWeekSheet,
       child: FutureBuilder<List<Object?>>(
-        future: Future.wait<Object?>([_exec, _engine, _drivers]),
+        future: Future.wait<Object?>([_exec, _engine, _drivers, _recomp]),
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
             return const _Dim('…');
           }
           final d = snap.data?[0] as _ExecData?;
           final e = snap.data?[1] as _EngineData?;
+          // RECOMP ONE-SCREEN STATUS (tracking spec 2026-09-27): in the
+          // recomp phase the strip becomes the spec's compact
+          // BODY/NUTRITION/HYPERTROPHY/STRENGTH/SKILLS/CARDIO/RECOVERY
+          // rows (live weekly review) — the driver checklist's content
+          // is subsumed; every other phase is untouched.
+          final recomp = snap.data?[3] as _RecompData?;
+          if (recomp != null) {
+            return _recompSection(context, recomp, e?.templateLine);
+          }
           // DRIVER CHECKLIST (output>>input redesign 2026-09-22): when
           // the phase declares weekly_drivers, the strip renders the
           // causal inputs — activity tallies (sets / near-max) are
@@ -1901,6 +2126,247 @@ class HomeDashboardState extends State<HomeDashboard> {
           ),
         ],
       ],
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Recomp one-screen rows (tracking spec 2026-09-27). Compact label +
+  // value per spec section; graceful placeholders until waist / DEXA /
+  // recovery / calisthenics data flows; the detail sheet carries the
+  // spec's closing question.
+  // -------------------------------------------------------------------------
+
+  static String _n1(double v) => v.toStringAsFixed(1);
+  static String _n0(double v) => v.round().toString();
+  static String _sgn(double v) => '${v >= 0 ? '+' : ''}${_n1(v)}';
+
+  /// The seven row values, shared by the strip and the detail sheet.
+  static List<({String label, String value, String explain})> _recompRows(
+    _RecompData data,
+  ) {
+    final r = data.review;
+    final b = r.body;
+    final n = r.nutrition;
+
+    final bodyBits = <String>[
+      b.avg7d == null ? 'no weigh-ins' : '${_n1(b.avg7d!)} lb 7d',
+      if (b.change7d != null) '${_sgn(b.change7d!)}/wk',
+      b.waistIn != null ? 'waist ${_n1(b.waistIn!)}"' : 'waist —',
+      data.latestBfPct != null
+          ? 'bf ${_n1(data.latestBfPct!)}% scale'
+          : 'DEXA —',
+    ];
+
+    final inBand = r.muscleSets.entries
+        .where(
+          (e) => e.value >= r.hypBand[0] && e.value <= r.hypBand[1],
+        )
+        .length;
+    final over = [
+      for (final e in r.muscleSets.entries)
+        if (e.value > r.hypBand[1]) e.key,
+    ];
+    final under = [
+      for (final e in r.muscleSets.entries)
+        if (e.value < r.hypBand[0]) e.key,
+    ];
+
+    final heavyDone =
+        r.heavyExposures.values.where((v) => v > 0).length;
+    String liftTick(String lift) =>
+        '${lift[0].toUpperCase()}${(r.heavyExposures[lift] ?? 0) > 0 ? '✓' : '·'}';
+
+    final cal = r.calisthenics;
+    final skillsBits = <String>[
+      'climb ${r.climbing.sessions}'
+          '${r.climbing.newV5PlusSends > 0 ? ' (V5+ ×${r.climbing.newV5PlusSends})' : ''}',
+      cal.sessions > 0 ? 'cali ${cal.sessions}' : 'cali —',
+    ];
+
+    final cw = r.cardio;
+    final cardioBits = <String>[
+      '4x4 ${cw.sessions}/1',
+      if (cw.completedAllFour == false) 'incomplete',
+      if (cw.workloadTrendPct != null)
+        '${cw.workloadTrendPct! >= 0 ? '+' : ''}${_n1(cw.workloadTrendPct!)}% workload',
+    ];
+
+    final rec = r.recovery;
+    final recBits = rec.daysReported == 0 && rec.painDays.isEmpty
+        ? <String>['log sleep/fatigue in daily notes']
+        : <String>[
+            if (rec.avgSleepHours != null)
+              'sleep ${_n1(rec.avgSleepHours!)}h',
+            if (rec.avgFatigue != null)
+              'fatigue ${_n1(rec.avgFatigue!)}/5',
+            if (rec.avgSoreness != null)
+              'sore ${_n1(rec.avgSoreness!)}/5',
+            if (rec.painDays.isNotEmpty)
+              'PAIN ×${rec.painDays.length}',
+          ];
+
+    return [
+      (
+        label: 'BODY',
+        value: bodyBits.join(' · '),
+        explain:
+            '7-day average weight + weekly change (never react to a '
+            'single day), the weekly navel waist measurement, and the '
+            'latest body-fat reading (scale until a DEXA lands — '
+            'periodic DEXA every 3-4 months is the spec cadence).',
+      ),
+      (
+        label: 'NUTRITION',
+        value: n == null
+            ? 'no meals logged this week'
+            : '${_n0(n.avgKcal)} kcal · P ${_n0(n.avgProteinG)} · '
+                'C ${_n0(n.avgCarbsG)} · F ${_n0(n.avgFatG)}'
+                '${n.proteinDaysMet != null ? ' · protein ${n.proteinDaysMet}/${n.daysLogged}' : ''}',
+        explain:
+            'Daily averages over logged days + protein-target adherence '
+            '(160-175 g/day once the recomp targets are in force). '
+            'Calories vs maintenance appears after block 1 records the '
+            'maintenance estimate.',
+      ),
+      (
+        label: 'HYPERTROPHY',
+        value: r.muscleSets.isEmpty
+            ? 'no muscle map in program'
+            : '$inBand/${r.muscleSets.length} muscles in band'
+                '${r.avgRir != null ? ' · ~${_n1(r.avgRir!)} RIR' : ''}'
+                '${over.isNotEmpty ? ' · over: ${over.join(', ')}' : ''}',
+        explain:
+            'Productive sets per muscle group vs the 8-12 band, '
+            'overlap-counted (climbing sessions credit back/biceps/'
+            'forearms via the program map; warmup/skill/rehab set_type '
+            'excluded; untagged legacy rows effort-inferred). RIR = '
+            '10 - RPE — proximity to failure on productive sets.'
+            '${under.isNotEmpty ? ' Under band: ${under.join(', ')}.' : ''}',
+      ),
+      (
+        label: 'STRENGTH',
+        value:
+            'heavy $heavyDone/4 · ${['squat', 'bench', 'deadlift', 'press'].map(liftTick).join(' ')}',
+        explain:
+            'One heavy top-set exposure per main lift per week (the '
+            'working-max controller\'s readings are the ground truth). '
+            'Trends live in the hero\'s strength row and the Program '
+            'screen — one missing session is not strength loss.',
+      ),
+      (
+        label: 'SKILLS',
+        value: skillsBits.join(' · '),
+        explain:
+            'Climbing sessions (kaya snapshot — freshness bounded by '
+            'the last import) with first-time V5+ sends, and '
+            'calisthenics skill sessions (log them in the calisthenics '
+            'view: skill quality over fatigue).',
+      ),
+      (
+        label: 'CARDIO',
+        value: cardioBits.join(' · '),
+        explain:
+            'The weekly 4x4 — never dropped. Progress = more EXTERNAL '
+            'workload (speed × incline) at comparable heart rate, not '
+            'a higher HR; the trend compares against the last session '
+            'within ±5 bpm.',
+      ),
+      (
+        label: 'RECOVERY',
+        value: recBits.join(' · '),
+        explain:
+            'Daily subjectives from daily notes (sleep hours, fatigue, '
+            'soreness, readiness 1-5). PAIN OUTRANKS every numeric '
+            'target — any pain flag turns this row red and leads the '
+            'weekly coaching decision.',
+      ),
+    ];
+  }
+
+  /// The one-screen strip: seven compact label+value rows.
+  Widget _recompSection(
+    BuildContext context,
+    _RecompData data,
+    String? templateLine,
+  ) {
+    final rows = _recompRows(data);
+    final pain = data.review.recovery.painDays.isNotEmpty;
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final row in rows)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 1.5),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 96,
+                  child: Text(row.label, style: AppText.tag(context)),
+                ),
+                Expanded(
+                  child: Text(
+                    row.value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.micro(context)?.copyWith(
+                      color: row.label == 'RECOVERY' && pain
+                          ? scheme.error
+                          : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (templateLine != null) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Today: $templateLine',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: AppText.tag(
+              context,
+            )?.copyWith(fontStyle: FontStyle.italic),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Recomp detail sheet: each row explained + the spec's closing
+  /// question as the anchor entry.
+  Future<void> _openRecompSheet(_RecompData data) async {
+    final e = await _engine;
+    await _showDetailSheet(
+      title: 'This week — recomp',
+      entries: [
+        for (final row in _recompRows(data))
+          _DetailEntry(
+            label: row.label.toLowerCase(),
+            value: row.value,
+            explain: row.explain,
+          ),
+        _DetailEntry(
+          label: 'Today',
+          value: e?.templateLine ?? 'rest / no program',
+          explain:
+              'Today\'s session from the program\'s weekly template.',
+        ),
+        const _DetailEntry(
+          label: 'The question',
+          value: 'stimulus · nutrition · recovery',
+          explain:
+              'Am I consistently providing the stimulus, nutrition, and '
+              'recovery required to gain muscle and strength while '
+              'remaining ~13% body fat? That is the only thing this '
+              'screen answers — the Sunday weekly review (coach chat / '
+              'get_weekly_review) carries the full 10-question decision.',
+        ),
+      ],
+      actionLabel: widget.onOpenStatus == null ? null : 'Open status ledger',
+      onAction: widget.onOpenStatus,
     );
   }
 }

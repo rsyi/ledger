@@ -1011,4 +1011,174 @@ last_bulk:
     expect(find.text('ENGINE'), findsOneWidget);
     expect(find.text('THIS WEEK'), findsNothing);
   });
+
+  testWidgets('recomp phase → THIS WEEK renders the one-screen recomp '
+      'rows (tracking spec 2026-09-27) and replaces the driver strip',
+      (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestWeightCache();
+    DomainConfigProvider.clearCache();
+    const recompPhaseYaml = '''
+versions:
+  - version: 1
+    value: bulk
+    effective_from: "2026-12-14"
+''';
+    const recompProgramYaml = '''
+versions:
+  - version: 1
+    effective_from: "2026-12-14"
+    id: bulk-2026-27
+    variant: recomposition
+    blocks:
+      - { n: 1, dates: ["2026-12-14", "2027-01-03"], emphasis: reverse, weight: [154, 155] }
+    targets:
+      protein_g_day: [160, 175]
+      fat_g_day_min: [55, 65]
+      carbs_g_day: [225, 300]
+      bike_4x4_wk: 1
+    hypertrophy_targets:
+      sets_per_muscle_wk: [8, 12]
+      muscle_groups: [chest]
+    exercise_muscle_map:
+      exercises:
+        "Flat Barbell Bench Press": { chest: 1.0 }
+''';
+    const recompDashYaml = '''
+domains:
+  - name: strength
+    views: [strength]
+phases:
+  recomp:
+    eigenvectors:
+      - id: weight_hold
+        label: weight
+        rate_band: [-0.1, 0.25]
+    weekly_drivers:
+      - id: bike_4x4
+        label: 4x4
+        target: 1
+        outcome: "VO2"
+        why: "never dropped"
+''';
+    Future<String?> recompFetcher(String path) async => switch (path) {
+          'coach/phase.yaml' => recompPhaseYaml,
+          'coach/program.yaml' => recompProgramYaml,
+          'app/dashboards.yaml' => recompDashYaml,
+          _ => null,
+        };
+    // Tue Dec 15 2026 — review week Mon 12/14 .. Sun 12/20.
+    final today = DateTime(2026, 12, 15);
+    final strengthRepo = _FakeStatusRepo([
+      for (var i = 0; i < 8; i++)
+        {
+          'date': DateTime(2026, 12, 14),
+          'exercise': 'Flat Barbell Bench Press',
+          'weight': 185,
+          'reps': 6,
+          'rpe': 8,
+          'set_type': 'hypertrophy',
+        },
+      {
+        'date': DateTime(2026, 12, 14),
+        'exercise': 'Flat Barbell Bench Press',
+        'weight': 95,
+        'reps': 5,
+        'rpe': 3,
+        'set_type': 'warmup', // excluded from productive counting
+      },
+    ]);
+    final mealsRepo = _FakeStatusRepo([
+      {
+        'eaten_at': DateTime(2026, 12, 14, 12),
+        'calories': 2500,
+        'protein_g': 170,
+        'carbs_g': 260,
+        'fat_g': 60,
+      },
+    ]);
+    final mealsView = ViewSchema(
+      name: 'meals',
+      datasource: 'gsheets',
+      table: 'meals',
+      entities: const [],
+      measures: const [],
+      dimensions: [
+        Dimension(
+            name: 'eaten_at', type: DimensionType.date, expr: 'eaten_at'),
+      ],
+    );
+    final notesRepo = _FakeStatusRepo([
+      {
+        'date': DateTime(2026, 12, 14),
+        'sleep_hours': 7.5,
+        'fatigue': 2,
+        'pain': 'left elbow twinge',
+      },
+    ]);
+    final notesView = ViewSchema(
+      name: 'daily_notes',
+      datasource: 'gsheets',
+      table: 'daily_notes',
+      entities: const [],
+      measures: const [],
+      dimensions: [
+        Dimension(name: 'date', type: DimensionType.date, expr: 'date'),
+      ],
+    );
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(recompFetcher),
+      dashboards: DomainConfigProvider(recompFetcher),
+      strengthView: _strengthView,
+      strengthRepo: strengthRepo,
+      mealsView: mealsView,
+      mealsRepo: mealsRepo,
+      notesView: notesView,
+      notesRepo: notesRepo,
+      today: today,
+    )));
+    await tester.pumpAndSettle();
+
+    expect(find.text('THIS WEEK'), findsOneWidget);
+    // The spec's seven rows (STRENGTH also labels the strength card →
+    // at least one).
+    for (final label in [
+      'BODY', 'NUTRITION', 'HYPERTROPHY', 'STRENGTH', 'SKILLS',
+      'CARDIO', 'RECOVERY',
+    ]) {
+      expect(find.text(label), findsAtLeastNWidgets(1), reason: label);
+    }
+    // Nutrition averages + protein adherence from the logged day.
+    expect(
+      find.textContaining('2500 kcal', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('protein 1/1', findRichText: true),
+      findsOneWidget,
+    );
+    // Hypertrophy: 8 productive bench sets (warmup excluded) — chest in
+    // band; RIR 2 from RPE 8.
+    expect(
+      find.textContaining('1/1 muscles in band', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('2.0 RIR', findRichText: true),
+      findsOneWidget,
+    );
+    // Recovery: pain flag surfaces (and outranks the numbers).
+    expect(
+      find.textContaining('PAIN', findRichText: true),
+      findsOneWidget,
+    );
+    // Graceful placeholders: waist + DEXA not yet flowing.
+    expect(
+      find.textContaining('DEXA —', findRichText: true),
+      findsOneWidget,
+    );
+    // The recomp rows REPLACE the driver checklist (its 4x4 pill would
+    // say "4x4 0/1"; the CARDIO row carries that content instead).
+    expect(find.text('4x4'), findsNothing);
+  });
 }

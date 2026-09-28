@@ -557,6 +557,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ViewSchema? dashClimbingView;
               ViewSchema? dashMealsView;
               ViewSchema? dashCardioView;
+              ViewSchema? dashCalisthenicsView;
+              ViewSchema? dashNotesView;
               for (final v in data.views) {
                 if (v.name == 'weight') weightView = v;
                 if (v.name == 'program_status') statusView = v;
@@ -566,6 +568,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 // Driver checklist sources: protein floor + 4x4.
                 if (v.name == 'meals') dashMealsView = v;
                 if (v.name == 'cardio') dashCardioView = v;
+                // Recomp one-screen rows (2026-09-27): SKILLS +
+                // RECOVERY sources.
+                if (v.name == 'calisthenics') dashCalisthenicsView = v;
+                if (v.name == 'daily_notes') dashNotesView = v;
               }
               final programProvider = github == null
                   ? null
@@ -788,6 +794,18 @@ class _HomeScreenState extends State<HomeScreen> {
                         cardioView: dashCardioView,
                         cardioRepo: dashboardRepoFor(
                           dashCardioView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
+                        calisthenicsView: dashCalisthenicsView,
+                        calisthenicsRepo: dashboardRepoFor(
+                          dashCalisthenicsView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
+                        notesView: dashNotesView,
+                        notesRepo: dashboardRepoFor(
+                          dashNotesView,
                           readOnlyRepo: data.readOnlyRepo,
                           forView: data.registry.forView,
                         ),

@@ -6,6 +6,9 @@ import 'dart:io';
 import 'package:airledger/services/forecast_tab.dart';
 import 'package:airledger/services/program_current.dart';
 import 'package:airledger/services/program_metrics.dart';
+import 'package:airledger/services/recomp_review.dart';
+import 'package:airledger/services/week_drivers.dart'
+    show TopSetReading, parseExerciseMuscleMap;
 import 'package:airledger/services/sim_fit.dart'
     show buildWeeklySeries, climbsFromTab;
 import 'package:airledger/services/sim_program.dart' show simInitialFromSeries;
@@ -40,6 +43,16 @@ import 'package:yaml/yaml.dart';
 ///   dart run tool/program_status_update.dart --brief   # print top-3 rows + open
 ///                                                        flags as markdown, no write
 ///   dart run tool/program_status_update.dart --dry-run # compute but no write
+///   dart run tool/program_status_update.dart --weekly-brief
+///     # print THIS Mon-Sun week's recomp weekly review markdown
+///     # (recomp_review.dart), no writes — coach_nightly.sh injects it
+///     # into the Sunday briefing prompt.
+///   --weekly  # force the weekly_review tab write on a non-Sunday
+///
+/// Weekly review (recomp tracking spec 2026-09-27): full runs on
+/// SUNDAYS (or --weekly) also rewrite the `weekly_review` tab — one row
+/// per Mon-Sun week (last 8, newest first) with the generated markdown.
+/// The MCP get_weekly_review tool and the coach read that tab.
 ///
 /// Wire into coach_nightly.sh BEFORE the briefing prompt is assembled.
 
@@ -53,6 +66,8 @@ final coachDir = '$home/repos/airledger-fitness/coach';
 
 Future<void> main(List<String> args) async {
   final brief = args.contains('--brief');
+  final weeklyBrief = args.contains('--weekly-brief');
+  final forceWeekly = args.contains('--weekly');
   final dryRun = args.contains('--dry-run') || args.contains('--dry');
 
   final config = readConfig();
@@ -71,13 +86,19 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  if (!brief) print('reading tabs ...');
+  if (!brief && !weeklyBrief) print('reading tabs ...');
 
   final strengthTab = await tab('strength');
   final weightTab = await tab('weight');
   final cardioTab = await tab('4x4');
   final climbTab = await tab('kaya_ascents');
   final notesTab = await tab('daily_notes');
+  // Recomp weekly review sources (tracking spec 2026-09-27). Both may
+  // be missing/empty (calisthenics tab appears on the app's first sync
+  // after the schema lands) — tab() returns [] and the review says
+  // "no data" honestly.
+  final mealsTab = await tab('meals');
+  final calisthenicsTab = await tab('calisthenics');
 
   // -------------------------------------------------------------------------
   // Map sheet rows → metrics inputs
@@ -173,7 +194,7 @@ Future<void> main(List<String> args) async {
         date: date, cause: cause, note: text.isEmpty ? null : text));
   }
 
-  if (!brief) {
+  if (!brief && !weeklyBrief) {
     print('  ${strengthRows.length} strength rows, ${weightRows.length} '
         'weigh-ins, ${fourByFours.length} 4x4 rows, '
         '${climbingDates.length} climb ascents, ${noteRows.length} notes');
@@ -251,6 +272,182 @@ Future<void> main(List<String> args) async {
       final ver = currentVersion(phaseYaml!);
       return ver?['value']?.toString();
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Recomp weekly review inputs (tracking spec 2026-09-27). Assembled
+  // once from the tabs above; Mon-Sun weeks — recomp_review.dart's
+  // header documents why this is NOT the Saturday accounting week.
+  // -------------------------------------------------------------------------
+  DateTime? parseSheetDateTime(String s) =>
+      s.isEmpty ? null : (DateTime.tryParse(s) ?? parseSheetDate(s));
+
+  final mHead = headerIndex(mealsTab);
+  final mealRows = <MealRow>[];
+  for (final r in mealsTab.skip(1)) {
+    final dt = parseSheetDateTime(cell(r, mHead['eaten_at']));
+    if (dt == null) continue;
+    mealRows.add(MealRow(
+      eatenAt: dt,
+      calories: double.tryParse(cell(r, mHead['calories'])),
+      proteinG: double.tryParse(cell(r, mHead['protein_g'])),
+      carbsG: double.tryParse(cell(r, mHead['carbs_g'])),
+      fatG: double.tryParse(cell(r, mHead['fat_g'])),
+    ));
+  }
+
+  final reviewSets = <ReviewSet>[];
+  for (final r in strengthTab.skip(1)) {
+    final date = parseSheetDate(cell(r, sHead['Date']));
+    final exercise = cell(r, sHead['Exercise']);
+    if (date == null || exercise.isEmpty) continue;
+    final st = cell(r, sHead['Set Type']);
+    reviewSets.add(ReviewSet(
+      date: date,
+      exercise: exercise,
+      reps: double.tryParse(cell(r, sHead['Reps']))?.round() ?? 0,
+      weight: double.tryParse(cell(r, sHead['Weight'])) ?? 0,
+      rpe: double.tryParse(cell(r, sHead['RPE'])),
+      setType: st.isEmpty ? null : st,
+    ));
+  }
+
+  final caHead = headerIndex(calisthenicsTab);
+  final caliRows = <CalisthenicsRow>[];
+  for (final r in calisthenicsTab.skip(1)) {
+    final date = parseSheetDate(cell(r, caHead['date']));
+    final skill = cell(r, caHead['skill']);
+    if (date == null || skill.isEmpty) continue;
+    caliRows.add(CalisthenicsRow(
+      date: date,
+      skill: skill,
+      variation: cell(r, caHead['variation']).isEmpty
+          ? null
+          : cell(r, caHead['variation']),
+      sets: double.tryParse(cell(r, caHead['sets']))?.round(),
+      reps: double.tryParse(cell(r, caHead['reps']))?.round(),
+      holdSeconds: double.tryParse(cell(r, caHead['hold_seconds'])),
+      clean: boolCell(cell(r, caHead['clean'])),
+      rpe: double.tryParse(cell(r, caHead['rpe'])),
+    ));
+  }
+
+  final reviewClimbs = <ClimbRow>[];
+  for (final r in climbTab.skip(1)) {
+    final date = parseSheetDate(cell(r, kHead['date']));
+    if (date == null) continue;
+    reviewClimbs.add(ClimbRow(
+      date: date,
+      grade: cell(r, kHead['grade']),
+      ascentType: cell(r, kHead['ascent_type']),
+    ));
+  }
+
+  final review4x4s = <Cardio4x4Row>[];
+  for (final r in cardioTab.skip(1)) {
+    final date = parseSheetDate(cell(r, cHead['Date']));
+    if (date == null) continue;
+    final type = cell(r, cHead['Type']).toLowerCase();
+    if (type.isNotEmpty &&
+        !const {'treadmill', 'bike', 'stairmaster'}.contains(type)) {
+      continue; // same 4x4 filter as the rollup above
+    }
+    review4x4s.add(Cardio4x4Row(
+      date: date,
+      speed: double.tryParse(cell(r, cHead['Treadmill Speed'])) ??
+          double.tryParse(cell(r, cHead['Stairmaster Speed'])),
+      incline: double.tryParse(cell(r, cHead['Treadmill Incline'])),
+      maxHr: double.tryParse(cell(r, cHead['Max Heart Rate'])),
+      completedIntervals:
+          double.tryParse(cell(r, cHead['Completed Intervals'])),
+    ));
+  }
+
+  final recoveryRows = <RecoveryRow>[];
+  for (final r in notesTab.skip(1)) {
+    final date = parseSheetDate(cell(r, nHead['date']));
+    if (date == null) continue;
+    final pain = cell(r, nHead['pain']);
+    recoveryRows.add(RecoveryRow(
+      date: date,
+      sleepHours: double.tryParse(cell(r, nHead['sleep_hours'])),
+      sleepQuality: double.tryParse(cell(r, nHead['sleep_quality'])),
+      fatigue: double.tryParse(cell(r, nHead['fatigue'])),
+      soreness: double.tryParse(cell(r, nHead['soreness'])),
+      readiness: double.tryParse(cell(r, nHead['readiness'])),
+      pain: pain.isEmpty ? null : pain,
+      note: cell(r, nHead['note']).isEmpty ? null : cell(r, nHead['note']),
+    ));
+  }
+
+  final bodyRows = <BodyRow>[];
+  for (final r in weightTab.skip(1)) {
+    final date = parseSheetDate(cell(r, wHead['date']));
+    if (date == null) continue;
+    bodyRows.add(BodyRow(
+      date: date,
+      weightLbs: double.tryParse(cell(r, wHead['weight_lbs'])),
+      waistIn: double.tryParse(cell(r, wHead['waist_in'])),
+    ));
+  }
+
+  final pyForReview = programYaml;
+  WeeklyReview reviewFor(DateTime monday, List<ReadingRow> readingRows) {
+    final version = pyForReview == null ? null : currentVersion(pyForReview);
+    // Targets-in-force for the week (block-0 cut weeks null the
+    // absolute nutrition keys → honest "no target in force" answers).
+    final slice = pyForReview == null
+        ? null
+        : programCurrent(pyForReview, phaseYaml, monday);
+    final targets = recompTargetsFromProgram(
+      version,
+      parseExerciseMuscleMap(version),
+      targetsInForce: slice?.targetsInForce,
+    );
+    return buildWeeklyReview(
+      weekStart: monday,
+      inputs: RecompInputs(
+        meals: mealRows,
+        strengthSets: reviewSets,
+        readings: [
+          for (final r in readingRows)
+            TopSetReading(
+              date: r.date,
+              lift: r.lift,
+              kind: r.kind,
+              reps: r.reps,
+              rpe: r.rpe,
+            ),
+        ],
+        climbs: reviewClimbs,
+        calisthenics: caliRows,
+        cardio: review4x4s,
+        recovery: recoveryRows,
+        body: bodyRows,
+      ),
+      targets: targets,
+    );
+  }
+
+  // --weekly-brief: print THIS Mon-Sun week's review markdown, no writes
+  // (coach_nightly.sh injects it into the Sunday briefing prompt).
+  // --week=YYYY-MM-DD reviews the week containing that date instead
+  // (sampling / backfills).
+  if (weeklyBrief) {
+    var monday = mondayOf(DateTime.now());
+    for (final a in args) {
+      if (a.startsWith('--week=')) {
+        final d = DateTime.tryParse(a.substring('--week='.length));
+        if (d != null) monday = mondayOf(d);
+      }
+    }
+    final readingValues = await tab(readingsTabName);
+    final rdHead = headerIndex(readingValues);
+    final readings = <ReadingRow>[
+      for (final r in readingValues.skip(1)) ?ReadingRow.fromCells(rdHead, r),
+    ];
+    print(renderWeeklyReviewMarkdown(reviewFor(monday, readings)));
+    return;
   }
 
   // -------------------------------------------------------------------------
@@ -539,10 +736,37 @@ Future<void> main(List<String> args) async {
     print('forecast: skipped ($e)');
   }
 
+  // -------------------------------------------------------------------------
+  // Weekly review rows (Sundays or --weekly): last 8 Mon-Sun weeks,
+  // newest first, generated against the full history + ALL readings
+  // (tab + this run's new ones).
+  // -------------------------------------------------------------------------
+  final isSunday = DateTime.now().weekday == DateTime.sunday;
+  List<List<Object?>>? weeklyReviewRows;
+  if (isSunday || forceWeekly) {
+    final thisMonday = mondayOf(DateTime.now());
+    weeklyReviewRows = [
+      for (var w = 0; w < 8; w++)
+        () {
+          final monday = thisMonday.subtract(Duration(days: 7 * w));
+          final review = reviewFor(monday, allReadings);
+          return <Object?>[
+            ymd(review.weekStart),
+            ymd(review.weekEnd),
+            DateTime.now().toIso8601String(),
+            renderWeeklyReviewMarkdown(review),
+          ];
+        }(),
+    ];
+  }
+
   if (dryRun) {
     print('--dry-run: skipping writes');
     print('program_status: ${psRows.length} rows');
     print('coach_flags: ${cfRows.length} rows');
+    if (weeklyReviewRows != null) {
+      print('weekly_review: would write ${weeklyReviewRows.length} rows');
+    }
     print('working_max: would append '
         '${seeds.length + chain.newWorkingMaxRows.length} rows');
     print('readings: would append ${chain.newReadings.length} rows');
@@ -608,6 +832,20 @@ Future<void> main(List<String> args) async {
     rows: cfRows,
   );
   print('wrote coach_flags: ${cfRows.length} flag rows');
+
+  // -------------------------------------------------------------------------
+  // REPLACE-ALL write weekly_review (Sundays / --weekly only)
+  // -------------------------------------------------------------------------
+  if (weeklyReviewRows != null) {
+    await _replaceTab(
+      api: api,
+      spreadsheetId: config.spreadsheetId,
+      tabName: 'weekly_review',
+      headers: const ['week_start', 'week_end', 'generated_at', 'markdown'],
+      rows: weeklyReviewRows,
+    );
+    print('wrote weekly_review: ${weeklyReviewRows.length} weekly rows');
+  }
 
   // -------------------------------------------------------------------------
   // REPLACE-ALL write forecast (weekly sim rows; nothing else appended)

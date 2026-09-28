@@ -34,6 +34,14 @@ PROGRAM_SLICE="$(cd "$APP" && dart run tool/program_slice.dart --date "$TARGET" 
 
 PROGRAM_STATUS_BRIEF="$(cd "$APP" && dart run tool/program_status_update.dart --brief 2>/dev/null)" || true
 
+# Sunday: the recomp weekly review (recomp_review.dart) for the Mon-Sun
+# week just finishing — the full update above also rewrote the
+# weekly_review tab.
+WEEKLY_REVIEW=""
+if [ "$(date +%u)" = "7" ]; then
+  WEEKLY_REVIEW="$(cd "$APP" && dart run tool/program_status_update.dart --weekly-brief 2>/dev/null)" || true
+fi
+
 PROMPT="$(
   printf 'MODE: BRIEFING\n\n'
   cat "$FIT/coach/PROMPT.md"
@@ -41,6 +49,9 @@ PROMPT="$(
   printf '\n\n# program_slice\n\n%s\n' "$PROGRAM_SLICE"
   if [ -n "$PROGRAM_STATUS_BRIEF" ]; then
     printf '\n\n# program_status\n\n%s\n' "$PROGRAM_STATUS_BRIEF"
+  fi
+  if [ -n "$WEEKLY_REVIEW" ]; then
+    printf '\n\n# weekly_review (generated tonight)\n\n%s\n' "$WEEKLY_REVIEW"
   fi
   printf '\n\n# metrics.md\n\n'; cat "$FIT/coach/metrics.md"
   printf '\n\n# Templates\n\n'

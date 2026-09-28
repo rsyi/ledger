@@ -26,6 +26,7 @@ class IconResolver {
     'medal': LucideIcons.medal,
     'trophy': LucideIcons.trophy,
     'footprints': LucideIcons.footprints,
+    'person-standing': LucideIcons.personStanding,
     'mountain': LucideIcons.mountain,
     'mountain-snow': LucideIcons.mountainSnow,
     'scale': LucideIcons.scale,

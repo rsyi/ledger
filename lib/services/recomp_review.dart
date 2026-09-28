@@ -36,6 +36,7 @@
 ///     uses; the two answer different questions.
 library;
 
+import 'program_metrics.dart' show mainLiftByExercise;
 import 'week_drivers.dart' show MuscleMap, TopSetReading;
 
 // ---------------------------------------------------------------------------
@@ -364,6 +365,104 @@ double? avgRirOfProductiveSets(List<ReviewSet> sets) {
     n++;
   }
   return n == 0 ? null : sum / n;
+}
+
+// ---------------------------------------------------------------------------
+// Fatigue-match (backoff_rule) compliance — program.yaml v11
+// ---------------------------------------------------------------------------
+
+/// One flagged pair: a main-lift set logged above the drift threshold
+/// whose NEXT set of the same exercise that day held (or raised) the
+/// load — the backoff_rule says drop 2.5-5% instead.
+class BackoffFinding {
+  final DateTime date;
+  final String exercise;
+  final double rpe;
+  final double weight;
+  final double nextWeight;
+
+  const BackoffFinding({
+    required this.date,
+    required this.exercise,
+    required this.rpe,
+    required this.weight,
+    required this.nextWeight,
+  });
+}
+
+/// Weekly fatigue-match readout against the structured `backoff_rule`
+/// (v11: target RPE 8, hold while <= 8, drop 2.5-5% above — "prevent
+/// RPE drift, not normal fatigue").
+class BackoffCompliance {
+  /// Consecutive same-day same-exercise set PAIRS examined (main lifts,
+  /// warmups excluded).
+  final int pairs;
+
+  /// Pairs whose leading set had NO RPE — compliance unknowable there,
+  /// deliberately not counted either way.
+  final int unknown;
+
+  /// RPE > [driftRpe] followed by a held/raised load.
+  final List<BackoffFinding> findings;
+
+  final double driftRpe;
+
+  const BackoffCompliance({
+    required this.pairs,
+    required this.unknown,
+    required this.findings,
+    required this.driftRpe,
+  });
+}
+
+/// Evaluates the backoff_rule over one week's logged strength sets:
+/// per (day, main-lift exercise) sequence IN LOG ORDER (the input
+/// list's order — sheet append order), each consecutive pair is
+/// checked: leading RPE > [driftRpe] (the rule's hold ceiling 8 plus a
+/// half-point of grace) and the next set's load not lower → flagged.
+/// Missing RPE on the leading set → unknown (never guessed). Warmups
+/// (set_type or effort-inferred, [countsAsProductive]) are excluded;
+/// only within-day sequences are judged — the day's LAST set has no
+/// next set to check.
+BackoffCompliance backoffComplianceOf(
+  List<ReviewSet> sets, {
+  double driftRpe = 8.5,
+}) {
+  final byDayExercise = <String, List<ReviewSet>>{};
+  for (final s in sets) {
+    if (mainLiftByExercise[s.exercise] == null) continue;
+    if (!countsAsProductive(s)) continue; // warmups don't participate
+    final key = '${_day(s.date).toIso8601String()}|${s.exercise}';
+    byDayExercise.putIfAbsent(key, () => []).add(s);
+  }
+  var pairs = 0;
+  var unknown = 0;
+  final findings = <BackoffFinding>[];
+  for (final seq in byDayExercise.values) {
+    for (var i = 0; i + 1 < seq.length; i++) {
+      pairs++;
+      final cur = seq[i];
+      if (cur.rpe == null) {
+        unknown++;
+        continue;
+      }
+      if (cur.rpe! > driftRpe && seq[i + 1].weight >= cur.weight) {
+        findings.add(BackoffFinding(
+          date: _day(cur.date),
+          exercise: cur.exercise,
+          rpe: cur.rpe!,
+          weight: cur.weight,
+          nextWeight: seq[i + 1].weight,
+        ));
+      }
+    }
+  }
+  return BackoffCompliance(
+    pairs: pairs,
+    unknown: unknown,
+    findings: findings,
+    driftRpe: driftRpe,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -769,6 +868,9 @@ class WeeklyReview {
 
   /// Heavy top-set exposures per main lift (readings-based).
   final Map<String, int> heavyExposures;
+
+  /// Fatigue-match compliance vs the structured backoff_rule (v11).
+  final BackoffCompliance backoff;
   final ClimbingWeek climbing;
   final CalisthenicsWeek calisthenics;
   final CardioWeek cardio;
@@ -784,6 +886,7 @@ class WeeklyReview {
     required this.hypBand,
     required this.avgRir,
     required this.heavyExposures,
+    required this.backoff,
     required this.climbing,
     required this.calisthenics,
     required this.cardio,
@@ -861,6 +964,7 @@ WeeklyReview buildWeeklyReview({
     if (!_inWeek(r.date, ws) || r.kind == 'light_week') continue;
     if (heavy.containsKey(r.lift)) heavy[r.lift] = heavy[r.lift]! + 1;
   }
+  final backoff = backoffComplianceOf(weekSets);
 
   final cal =
       calisthenicsWeekOf(rows: inputs.calisthenics, weekStart: ws);
@@ -889,6 +993,7 @@ WeeklyReview buildWeeklyReview({
     hypBand: targets.hypBand,
     avgRir: avgRir,
     heavyExposures: heavy,
+    backoff: backoff,
     climbing: climbing,
     calisthenics: cal,
     cardio: cardio,
@@ -1250,6 +1355,21 @@ String renderWeeklyReviewMarkdown(WeeklyReview r) {
   b.writeln('Heavy top-set exposures (working-max controller readings):');
   for (final e in r.heavyExposures.entries) {
     b.writeln('- ${e.key}: ${e.value}');
+  }
+  final bo = r.backoff;
+  if (bo.pairs == 0) {
+    b.writeln('- Fatigue-match (backoff_rule): no main-lift back-off '
+        'sequences logged this week.');
+  } else {
+    b.writeln('- Fatigue-match (backoff_rule: hold while RPE ≤ 8, drop '
+        '2.5-5% if above): ${bo.pairs} set pairs checked — '
+        '${bo.findings.isEmpty ? 'no drift violations' : '${bo.findings.length} flagged'}'
+        '${bo.unknown > 0 ? '; ${bo.unknown} unknown (no RPE logged)' : ''}');
+    for (final f in bo.findings) {
+      b.writeln('  - ${_ymd(f.date)} ${f.exercise}: RPE ${_f1(f.rpe)} at '
+          '${_f0(f.weight)} lb, next set held ${_f0(f.nextWeight)} lb — '
+          'drop 2.5-5% when RPE drifts past ${_f1(bo.driftRpe)}');
+    }
   }
   b.writeln();
 

@@ -311,6 +311,61 @@ void main() {
       expect(md, contains('RIR')); // the RIR = 10 - RPE convention note
     });
 
+    test('backoff compliance: RPE > 8.5 with a held load flags; missing '
+        'RPE is unknown; warmups + non-mains excluded', () {
+      ReviewSet set0(int day, String ex, double w, int reps,
+              {double? rpe, String? type}) =>
+          ReviewSet(date: d(day), exercise: ex, reps: reps, weight: w,
+              rpe: rpe, setType: type);
+      final c = backoffComplianceOf([
+        // Warmup never participates (tagged or effort-inferred).
+        set0(0, 'Barbell Squat', 135, 5, rpe: 4),
+        // Top 9 RPE → next set HELD the load → flagged.
+        set0(0, 'Barbell Squat', 260, 5, rpe: 9),
+        set0(0, 'Barbell Squat', 260, 5, rpe: 9),
+        // ...then a proper drop → the 260→250 pair is compliant.
+        set0(0, 'Barbell Squat', 250, 5, rpe: 8),
+        // Missing RPE on the leading set → unknown, not judged.
+        set0(2, 'Flat Barbell Bench Press', 175, 6),
+        set0(2, 'Flat Barbell Bench Press', 175, 6, rpe: 8),
+        // RPE 8 exactly = hold territory, no flag.
+        set0(2, 'Flat Barbell Bench Press', 175, 6, rpe: 8),
+        // Non-main exercises never checked.
+        set0(2, 'Lateral Dumbbell Raise', 20, 15, rpe: 9.5),
+        set0(2, 'Lateral Dumbbell Raise', 20, 15, rpe: 9.5),
+      ]);
+      expect(c.pairs, 4); // 2 squat pairs + 2 bench pairs
+      expect(c.unknown, 1);
+      expect(c.findings, hasLength(1));
+      expect(c.findings.single.exercise, 'Barbell Squat');
+      expect(c.findings.single.rpe, 9);
+      expect(c.findings.single.nextWeight, 260);
+    });
+
+    test('backoff readout renders in the Strength markdown section', () {
+      final r = buildWeeklyReview(
+        weekStart: wk,
+        inputs: RecompInputs(
+          strengthSets: [
+            ReviewSet(date: d(0), exercise: 'Barbell Squat', reps: 5,
+                weight: 260, rpe: 9),
+            ReviewSet(date: d(0), exercise: 'Barbell Squat', reps: 5,
+                weight: 260, rpe: 8.5),
+          ],
+        ),
+        targets: targets(),
+      );
+      expect(r.backoff.findings, hasLength(1));
+      final md = renderWeeklyReviewMarkdown(r);
+      expect(md, contains('Fatigue-match (backoff_rule'));
+      expect(md, contains('1 flagged'));
+      // No sequences → the honest no-data line.
+      final empty = buildWeeklyReview(
+          weekStart: wk, inputs: const RecompInputs(), targets: targets());
+      expect(renderWeeklyReviewMarkdown(empty),
+          contains('no main-lift back-off sequences'));
+    });
+
     test('pain outranks: decision Q8 leads with pain when flagged', () {
       final r = buildWeeklyReview(
         weekStart: wk,

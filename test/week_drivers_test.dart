@@ -930,17 +930,28 @@ phases:
       expect(byPhase.keys.toSet(),
           {'cut', 'bulk', 'recomp', 'maintain', 'reverse'});
       final cut = byPhase['cut']!;
+      // v11 cut-training revision (2026-09-28): dual_exposure +
+      // hypertrophy_volume go ACTIVE for the cut; bench moves to 3
+      // days; the heavy-single recency rule + alternation tags are
+      // retired (the wave tops weekly at 3-5 reps).
       expect(cut.map((d) => d.id).toList(), [
         'top_single_per_lift',
+        'dual_exposure',
+        'hypertrophy_volume',
         'bench_frequency',
         'protein_floor',
         'climbing_cap',
         'bike_4x4',
       ]);
-      expect(cut[3].cap, 2); // climbing CAP, program targets_block_0
-      expect(cut[2].floorGPerLb, 0.8);
-      // The every-two-weeks heavy-single rule (2026-09-25).
-      expect(cut[0].heavySingleMaxDays, 14);
+      expect(cut[5].cap, 2); // climbing CAP, program targets_block_0
+      // Protein floor stays the CUT-ERA relative 0.8 g/lb until Dec 14.
+      expect(cut[4].floorGPerLb, 0.8);
+      expect(cut[4].floorG, isNull);
+      expect(cut[0].heavySingleMaxDays, isNull); // retired with the wave
+      expect(cut[1].hypSetsMin, 2); // deadlift's planned 2x4-6
+      expect(cut[1].hypReps, [4, 12]);
+      expect(cut[2].band, [8, 12]);
+      expect(cut[3].target, 3); // bench 3 days (Mon/Wed/Fri exposures)
       final bulk = byPhase['bulk']!;
       expect(bulk.map((d) => d.id).toList(),
           ['lift_frequency', 'near_max_exposure', 'protein_floor']);

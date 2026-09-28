@@ -159,6 +159,71 @@ int? strengthWaveTopReps(
   return repsAt(waveWeek) ?? repsAt(1);
 }
 
+/// One cut-wave week's prescription (program.yaml v11
+/// `strength_wave_cut`, approved cut-training revision 2026-09-28):
+/// the top set's reps + the fraction of the working max it is priced
+/// at, and whether the week is the deload (halved non-top volume).
+class CutWaveWeekSpec {
+  /// 1..cycle (4).
+  final int week;
+  final int reps;
+
+  /// Fraction of the working max — weeks 1-3 ARE chart[8][reps]
+  /// (0.811 / 0.837 / 0.863); the deload's 0.70 deliberately is not.
+  final double pct;
+  final bool deload;
+
+  const CutWaveWeekSpec({
+    required this.week,
+    required this.reps,
+    required this.pct,
+    required this.deload,
+  });
+}
+
+/// The cut wave's prescription for [day] (program.yaml v11
+/// `strength_wave_cut`). Unlike the post-cut `strength_wave` (block-
+/// anchored), the cut wave is CALENDAR-anchored: wave week = ((whole
+/// weeks between `anchor_monday` and the day's Monday) mod cycle) + 1.
+/// Null when the version declares no cut wave, [blockN] is outside
+/// `applies_to_blocks`, the day's Monday precedes the anchor, or the
+/// declared week entry is malformed — callers must skip the top set
+/// rather than invent one.
+CutWaveWeekSpec? strengthWaveCutFor(
+  Map<Object?, Object?>? version, {
+  required int? blockN,
+  required DateTime day,
+}) {
+  final wave = version?['strength_wave_cut'];
+  if (wave is! Map || blockN == null) return null;
+  final applies = wave['applies_to_blocks'];
+  if (applies is! List || !applies.contains(blockN)) return null;
+  final rawAnchor = wave['anchor_monday'];
+  final weeks = wave['weeks'];
+  if (rawAnchor == null || weeks is! Map || weeks.isEmpty) return null;
+  final DateTime anchor;
+  try {
+    anchor = _parseDay(rawAnchor);
+  } catch (_) {
+    return null;
+  }
+  final d = DateTime.utc(day.year, day.month, day.day);
+  final monday = d.subtract(Duration(days: d.weekday - 1));
+  if (monday.isBefore(anchor)) return null;
+  final week = (monday.difference(anchor).inDays ~/ 7) % weeks.length + 1;
+  final entry = weeks['$week'] ?? weeks[week];
+  if (entry is! Map) return null;
+  final reps = entry['reps'];
+  final pct = entry['pct'];
+  if (reps is! num || pct is! num) return null;
+  return CutWaveWeekSpec(
+    week: week,
+    reps: reps.toInt(),
+    pct: pct.toDouble(),
+    deload: entry['deload'] == true,
+  );
+}
+
 /// Resolve the program slice for [date]. Returns null when [date] falls
 /// outside every block of the current program version (e.g. pre-program)
 /// or when no non-pending version exists.

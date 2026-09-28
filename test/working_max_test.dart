@@ -924,6 +924,40 @@ void main() {
           ]);
     });
 
+    test('cut wave topPct prices the single option; caps still undercut '
+        '(program.yaml v11 strength_wave_cut)', () {
+      // Week-1 five: pct 0.811 == chart[8][5] at cut_early's target 8.
+      final p = buildPrescription(
+        lift: 'squat',
+        policy: cutEarly,
+        workingMax: 320,
+        topReps: 5,
+        topPct: 0.811,
+      );
+      expect(p.topSetOptions.keys.toList(), [5]);
+      expect(p.topSetOptions[5], 260); // 320 × 0.811 = 259.5 → 260
+      // Deload 0.70 undercuts the chart price.
+      final deload = buildPrescription(
+        lift: 'squat',
+        policy: cutEarly,
+        workingMax: 320,
+        topReps: 5,
+        topPct: 0.70,
+      );
+      expect(deload.topSetOptions[5], 225); // 320 × 0.70 = 224 → 225
+      // An active RPE cap (pain cap 7) wins over the wave pct:
+      // min(0.811, chart[7][5] = 0.786) → 330 × 0.786 = 259.4 → 260.
+      final capped = buildPrescription(
+        lift: 'deadlift',
+        policy: cutEarly,
+        workingMax: 330,
+        topReps: 5,
+        topPct: 0.811,
+        activeCapRpe: 7,
+      );
+      expect(capped.topSetOptions[5], 260);
+    });
+
     test('microplates round bench/press to 2.5', () {
       final p = buildPrescription(
         lift: 'bench',

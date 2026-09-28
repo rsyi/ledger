@@ -56,7 +56,7 @@ void main() {
     final v = currentVersion(program);
     expect(v, isNotNull);
     expect(v!['id'], 'bulk-2026-27');
-    expect(v['version'], 10);
+    expect(v['version'], 11);
     // A trailing pending entry must be skipped.
     final withPending = {
       'versions': [
@@ -64,7 +64,7 @@ void main() {
         {'version': 99, 'pending': true, 'id': 'draft'},
       ],
     };
-    expect(currentVersion(withPending)!['version'], 10);
+    expect(currentVersion(withPending)!['version'], 11);
   });
 
   for (final c in cases) {
@@ -165,8 +165,54 @@ void main() {
   test('block 0 slice uses weekly_template_block_0 and carries block_0_loads note', () {
     final slice =
         programCurrent(program, phase, DateTime.parse('2026-09-21'))!;
-    expect(slice.todayTemplate['morning'], contains('one hard single at RPE 8'));
-    expect(slice.todayTemplate['block_note'], contains('Maintenance'));
+    // v11 cut-training revision: Monday = squat wave top + volume work.
+    expect(slice.todayTemplate['morning'],
+        contains('wave top per strength_wave_cut'));
+    expect(slice.todayTemplate['block_note'],
+        contains('Cut-training revision'));
+  });
+
+  group('cut wave (program.yaml v11 strength_wave_cut)', () {
+    final version = currentVersion(program);
+
+    CutWaveWeekSpec? at(String day) => strengthWaveCutFor(version,
+        blockN: 0, day: DateTime.parse(day));
+
+    test('calendar-anchored 4-week cycle from 2026-09-28', () {
+      // Week of Sep 28 = wave week 1 (5 @ 0.811 = chart[8][5]).
+      final w1 = at('2026-09-28')!;
+      expect((w1.week, w1.reps, w1.pct, w1.deload), (1, 5, 0.811, false));
+      // Any day of the week resolves via its Monday.
+      expect(at('2026-10-02')!.week, 1); // the Friday
+      final w2 = at('2026-10-05')!;
+      expect((w2.reps, w2.pct), (4, 0.837)); // chart[8][4]
+      final w3 = at('2026-10-12')!;
+      expect((w3.reps, w3.pct), (3, 0.863)); // chart[8][3]
+      final w4 = at('2026-10-19')!;
+      expect((w4.reps, w4.pct, w4.deload), (5, 0.70, true));
+      // Cycle repeats.
+      expect(at('2026-10-26')!.week, 1);
+      // Sat Oct 3 belongs to the week of Sep 28 (its Monday) → week 1,
+      // even though the ACCOUNTING window starting Sat Oct 3 mostly
+      // holds wave week 2 — the wave keys off each day's Monday.
+      expect(at('2026-10-03')!.week, 1);
+    });
+
+    test('pre-anchor days, non-cut blocks and null block → null', () {
+      expect(at('2026-09-21'), isNull); // the pre-revision cut week
+      expect(at('2026-09-26'), isNull); // Sat before the anchor
+      expect(
+          strengthWaveCutFor(version,
+              blockN: 1, day: DateTime.parse('2026-12-14')),
+          isNull); // post-cut blocks use strength_wave instead
+      expect(
+          strengthWaveCutFor(version,
+              blockN: null, day: DateTime.parse('2026-10-05')),
+          isNull);
+      expect(
+          strengthWaveCutFor({}, blockN: 0, day: DateTime.parse('2026-10-05')),
+          isNull);
+    });
   });
 
   group('weekStartDayOf (v7 week_start)', () {

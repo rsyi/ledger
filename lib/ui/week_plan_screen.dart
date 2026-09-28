@@ -151,9 +151,15 @@ class _LiftRx {
   final String variant;
   final bool unconfirmed;
 
-  /// Wave-prescribed top reps (program.yaml v10 strength_wave) — null
-  /// pre-wave (block 0 / older programs), where the 1/2/3 options show.
+  /// Wave-prescribed top reps (program.yaml v10 strength_wave, or the
+  /// v11 cut wave on block-0 days) — null pre-wave (older programs),
+  /// where the 1/2/3 options show.
   final int? waveTopReps;
+
+  /// Back-off annotation for wave days — built from the program's
+  /// structured `backoff_rule` (v11) when declared, else the v10
+  /// planned-rows text.
+  final String? backoffNote;
 
   /// Last readings for the lift (up to three, newest last).
   final List<ReadingRow> readings;
@@ -164,6 +170,7 @@ class _LiftRx {
     required this.unconfirmed,
     required this.readings,
     this.waveTopReps,
+    this.backoffNote,
   });
 }
 
@@ -271,19 +278,43 @@ class _WeekView extends StatelessWidget {
       (heavy[e['date'] as DateTime] ??= {}).add(lift);
     }
 
+    // v11 backoff_rule → one shared annotation for wave-day Rx blocks.
+    String? backoffNote;
+    final br = version['backoff_rule'];
+    if (br is Map) {
+      final drop = br['drop_pct'];
+      final dropStr = drop is List ? drop.join('–') : '$drop';
+      backoffNote = 'Back-offs/volume per planned rows — hold while '
+          'RPE ≤ ${br['hold_if_rpe_lte']}; drop $dropStr% next set if '
+          'above (${br['purpose']})';
+    }
+
     final out = <DateTime, List<_LiftRx>>{};
     heavy.forEach((day, lifts) {
       final slice = sliceByDay[day];
       final policy = policyOn(day, slice);
       if (policy == null) return;
-      // Wave-prescribed top reps for this week (null pre-wave / block 0
-      // — the 1/2/3 options remain).
-      final waveReps = strengthWaveTopReps(
+      // Wave-prescribed top reps for this week: post-cut wave first,
+      // then the v11 cut wave on block-0 days (which also carries the
+      // pricing pct). Null pre-wave — the 1/2/3 options remain.
+      var waveReps = strengthWaveTopReps(
         version,
         blockN: slice?.block['number'] as int?,
         weekInBlock: slice?.weekInBlock ?? 0,
         weekType: slice?.weekType,
       );
+      double? wavePct;
+      if (waveReps == null) {
+        final cut = strengthWaveCutFor(
+          version,
+          blockN: slice?.block['number'] as int?,
+          day: day,
+        );
+        if (cut != null) {
+          waveReps = cut.reps;
+          wavePct = cut.pct;
+        }
+      }
       for (final lift in lifts) {
         final max = maxes[lift];
         if (max == null) continue;
@@ -299,8 +330,10 @@ class _WeekView extends StatelessWidget {
             warmupProtocol: version['warmup_protocol'],
             activeCapRpe: caps[lift],
             topReps: waveReps,
+            topPct: wavePct,
           ),
           waveTopReps: waveReps,
+          backoffNote: backoffNote,
           variant: currentWorkingMax(wm.workingMax, lift)?.variant ??
               defaultVariantByLift[lift] ??
               '',
@@ -635,12 +668,13 @@ class _RxBlock extends StatelessWidget {
             style: small,
           ),
           Text(
-            // Wave weeks (program v10): back-offs live in the planned
-            // rows (3-4×5-8 @ 1-3 RIR; deadlift 2×4-6) — the bulk-era
-            // 4×3 @ 82% line would be wrong.
+            // Wave weeks: back-offs live in the planned rows; the v11
+            // backoff_rule annotation (drift guard) wins when declared
+            // — the bulk-era 4×3 @ 82% line would be wrong.
             rx.waveTopReps != null
-                ? 'Back-offs: per planned rows (3-4×5-8 @ 1-3 RIR; '
-                    'deadlift 2×4-6)'
+                ? (rx.backoffNote ??
+                    'Back-offs: per planned rows (3-4×5-8 @ 1-3 RIR; '
+                        'deadlift 2×4-6)')
                 : 'Back-offs: ${p.backOffSets}×${p.backOffReps} @ '
                     '${_n(p.backOffWeight)}'
                     '${p.saturdaySingle != null ? ' · Sat single '

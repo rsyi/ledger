@@ -28,7 +28,12 @@ import '../models/planned_entry.dart';
 import '../models/view_schema.dart';
 import 'plan_store.dart';
 import 'program_current.dart'
-    show currentVersion, programCurrent, strengthWaveTopReps, weekStartDayOf;
+    show
+        currentVersion,
+        programCurrent,
+        strengthWaveCutFor,
+        strengthWaveTopReps,
+        weekStartDayOf;
 import 'program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
 import 'program_provider.dart';
@@ -134,6 +139,19 @@ num _roundTo(num x, num step) {
 ///     outside the four main lifts) keyed to whole weeks since its
 ///     anchor_monday: the post-cut weeks 1-2 ease-in.
 ///
+/// Cut wave (program.yaml v11 `strength_wave_cut`, approved cut-
+/// training revision 2026-09-28, plan_v5): on block-0 days the wave is
+/// CALENDAR-anchored ([strengthWaveCutFor]); `reps: top` resolves to
+/// the wave week's reps (5/4/3; deload 5) and the top's weight is the
+/// working max × the wave's DECLARED pct (weeks 1-3 = chart[8][reps],
+/// deload 0.70) — undercut by any active RPE cap via min(pct,
+/// chart[cap target][reps]). Deload weeks scale NON-top rows by the
+/// wave's `deload_volume_multiplier` (halved, min 1 set). Planned
+/// items may also carry an explicit `pct` (the v11 %TM volume slots,
+/// e.g. bench 4x8 @ 0.68): those price at working max × pct (same cap
+/// undercut) and NEVER fall back to the reference-e1rm path — a %-of-
+/// TM row without a TM is honestly weightless.
+///
 /// Weeks that fall outside every block (pre-program) and days without a
 /// `planned` key produce nothing. Malformed structures are skipped, never
 /// thrown on.
@@ -189,25 +207,43 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
 
   /// Working weight for one planned set, or null (never guessed).
   /// [policy] is the day's load policy — non-null only on the v3 path.
-  num? workingWeight(String exercise, num reps, LoadPolicy? policy) {
+  /// [pct] (plan_v5) is an explicit fraction of the working max (%TM
+  /// volume slots + cut-wave tops): priced wm × min(pct, chart[policy
+  /// target after caps][reps]) — caps always undercut — and NEVER
+  /// falls back to the reference path (a %TM row without a TM stays
+  /// weightless).
+  num? workingWeight(String exercise, num reps, LoadPolicy? policy,
+      {num? pct}) {
     final lift = mainLiftByExercise[exercise];
     // v3: the working max is the weight authority when present.
     final wm = lift == null ? null : workingMaxes[lift];
-    if (wm != null && policy != null) {
-      var target = policy.targetRpeHigh;
-      if (policy.capRpe != null && policy.capRpe! < target) {
-        target = policy.capRpe!;
+    if (wm != null && (policy != null || pct != null)) {
+      double? target;
+      if (policy != null) {
+        target = policy.targetRpeHigh;
+        if (policy.capRpe != null && policy.capRpe! < target) {
+          target = policy.capRpe!;
+        }
       }
       final cap = capRpeByLift[lift];
-      if (cap != null && cap < target) target = cap;
-      return _roundTo(wm * rpePct(target, reps.toInt()), fillRounding);
+      if (cap != null && (target == null || cap < target)) target = cap;
+      if (pct != null) {
+        var frac = pct.toDouble();
+        if (target != null) {
+          final capFrac = rpePct(target, reps.toInt());
+          if (capFrac < frac) frac = capFrac;
+        }
+        return _roundTo(wm * frac, fillRounding);
+      }
+      return _roundTo(wm * rpePct(target!, reps.toInt()), fillRounding);
     }
+    if (pct != null) return null; // %TM without a TM: never guess
     // v2 fallback: reference e1rm × pct_by_reps.
     final ref = lift == null ? null : references[lift];
     if (ref == null) return null;
-    final pct = pctByReps[reps] ?? pctByReps[reps.toInt()];
-    if (pct is! num) return null;
-    return _roundTo(ref * pct, fillRounding);
+    final p = pctByReps[reps] ?? pctByReps[reps.toInt()];
+    if (p is! num) return null;
+    return _roundTo(ref * p, fillRounding);
   }
 
   /// Warm-up rows for [exercise] on [day], ramping to [top] (the day's
@@ -272,13 +308,22 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
       );
     }
 
+    // Cut wave (v11, block 0): calendar-anchored top reps + pct.
+    final cutWave = strengthWaveCutFor(version, blockN: blockNInt, day: day);
+
     // Non-top volume multipliers for this day (v10; all default 1.0 —
-    // pre-v10 programs and block 0 are untouched).
+    // pre-v10 programs untouched). v11: the cut wave's deload week
+    // halves non-top volume the same way.
     final waveApplies = wave is Map &&
         (wave['applies_to_blocks'] as List?)?.contains(blockNInt) == true;
     var nonTopMult = 1.0;
     if (waveApplies && (weekType == 'light' || weekType == 'test')) {
       nonTopMult *= midOf(wave['deload_volume_multiplier']) ?? 1.0;
+    }
+    if (cutWave?.deload == true) {
+      final cw = version['strength_wave_cut'];
+      nonTopMult *=
+          midOf(cw is Map ? cw['deload_volume_multiplier'] : null) ?? 0.5;
     }
     if (block['emphasis']?.toString() == 'climbing') {
       final ev = version['emphasis_volume'];
@@ -305,12 +350,16 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
       if (item is! Map) continue;
       final exercise = item['exercise'];
       final rawReps = item['reps'];
+      final rawPct = item['pct'];
       num? reps;
+      num? pct = rawPct is num ? rawPct : null;
       var isTop = false;
       if (rawReps is num) {
         reps = rawReps;
       } else if (rawReps?.toString() == 'top') {
-        // Wave-prescribed top reps; no wave in force → skip, never guess.
+        // Wave-prescribed top reps; no wave in force → skip, never
+        // guess. Post-cut wave first (block-anchored), then the cut
+        // wave (calendar-anchored; carries its own pricing pct).
         isTop = true;
         reps = strengthWaveTopReps(
           version,
@@ -318,6 +367,10 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
           weekInBlock: weekInBlock,
           weekType: weekType,
         );
+        if (reps == null && cutWave != null) {
+          reps = cutWave.reps;
+          pct = cutWave.pct;
+        }
       }
       if (exercise is! String || exercise.isEmpty || reps == null) continue;
       final rawSets = item['sets'];
@@ -329,7 +382,7 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
         if (mainLiftByExercise[exercise] == null) m *= accessoryRampMult;
         if (m != 1.0) sets = max(1, (sets * m).round());
       }
-      final weight = workingWeight(exercise, reps, dayPolicy);
+      final weight = workingWeight(exercise, reps, dayPolicy, pct: pct);
       for (var s = 0; s < sets; s++) {
         // ONLY exercise + reps + optional weight (+ date). Never
         // rpe/notes — those describe what happened, and nothing has
@@ -382,8 +435,9 @@ class WeekPlanner {
   /// row shape changes and existing weeks should be upgraded in place
   /// (v3: working-max weight math replaced the reference-e1rm fill;
   /// v4: strength-wave top reps + planned accessories + volume
-  /// multipliers, program.yaml v10).
-  static const planVersion = 'plan_v4';
+  /// multipliers, program.yaml v10; v5: cut wave `strength_wave_cut` +
+  /// %TM `pct` rows + cut deload halving, program.yaml v11).
+  static const planVersion = 'plan_v5';
 
   /// Ledger meta key the runner writes the last swallowed error into.
   static const metaErrorKey = 'week_planner_error';

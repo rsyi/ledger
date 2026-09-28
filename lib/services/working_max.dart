@@ -932,6 +932,14 @@ List<({num weight, num reps})> warmupRamp(
 /// prescribes exactly ONE top-set rep count (the wave's 5/3/1) —
 /// topSetOptions carries only that entry, priced off the same chart at
 /// the same policy target, and the warm-up ramps toward it.
+///
+/// Cut wave (program.yaml v11 `strength_wave_cut`): [topPct] prices the
+/// single [topReps] option DIRECTLY at working max × min(topPct,
+/// chart[target][reps]) — the declared wave pcts for weeks 1-3 equal
+/// chart[8][reps] (0.811/0.837/0.863, cut_early's upper target), the
+/// deload's 0.70 undercuts it, and any active RPE cap (pain cap /
+/// post-drop / cut_late's 7) still wins via the min. Ignored without
+/// [topReps].
 Prescription buildPrescription({
   required String lift,
   required LoadPolicy policy,
@@ -940,6 +948,7 @@ Prescription buildPrescription({
   double? activeCapRpe,
   bool microplates = false,
   int? topReps,
+  double? topPct,
   List<WmDecision> recentDecisions = const [],
 }) {
   final rounding =
@@ -950,10 +959,16 @@ Prescription buildPrescription({
     target = policy.capRpe!;
   }
 
+  double fracFor(int reps) {
+    final chart = rpePct(target, reps);
+    if (topPct == null || topReps == null) return chart;
+    return topPct < chart ? topPct : chart;
+  }
+
   final repOptions = topReps != null ? [topReps] : const [1, 2, 3];
   final topSetOptions = <int, num>{
     for (final reps in repOptions)
-      reps: _roundTo(workingMax * rpePct(target, reps), rounding),
+      reps: _roundTo(workingMax * fracFor(reps), rounding),
   };
   final backOffWeight = _roundTo(workingMax * 0.82, rounding);
   final saturdaySingle = policy.saturdaySingle

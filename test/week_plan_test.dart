@@ -206,9 +206,9 @@ void main() {
     test('block 0 uses weekly_template_block_0 for Monday morning', () {
       final week = buildWeekPlan(realProgram, realPhase, DateTime(2026, 9, 21));
       final monday = week[0];
-      // block_0 Monday should use the block-0 template (one hard single).
+      // block_0 Monday should use the block-0 template (v11 cut wave).
       expect(monday.slice!.todayTemplate['morning'],
-          contains('one hard single at RPE 8'));
+          contains('wave top per strength_wave_cut'));
     });
   });
 

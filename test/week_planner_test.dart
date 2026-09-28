@@ -1,8 +1,8 @@
 // Tests for the pure week-planner core (buildWeekPlannedEntries) against
-// BOTH the live airledger-fitness program.yaml (pins the v4 `planned` +
-// `weight_fill` + `warmup_protocol` contract) and synthetic programs
-// (sets expansion, edge cases), plus the PlanStore-level regenerate
-// (v1 → v2 upgrade) semantics.
+// BOTH the live airledger-fitness program.yaml (v11: the block-0 CUT
+// WAVE + %TM volume slots, plan_v5; v10: the post-cut wave template)
+// and synthetic programs (sets expansion, edge cases), plus the
+// PlanStore-level regenerate semantics.
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -47,10 +47,11 @@ ViewSchema _strengthView() => ViewSchema(
 void main() {
   final program = _loadYamlMap('$_fitnessRepo/program.yaml');
 
-  // Program anchor week: Monday 2026-09-21 = week 0 since anchor → parity a.
-  final anchorMonday = DateTime.utc(2026, 9, 21);
-  // One week later → parity b.
-  final bMonday = DateTime.utc(2026, 9, 28);
+  // Cut-wave anchor week (strength_wave_cut.anchor_monday): Monday
+  // 2026-09-28 = wave week 1 (top 5 @ 0.811). The program-start week
+  // (Sep 21) PRECEDES the anchor — wave tops are skipped there.
+  final w1Monday = DateTime.utc(2026, 9, 28);
+  final preMonday = DateTime.utc(2026, 9, 21);
 
   // References used across the weight-fill tests (per-lift 42-day e1rm).
   const refs = {
@@ -69,90 +70,144 @@ void main() {
           '${e['exercise']} ${e['weight'] ?? '-'}x${e['reps']}',
       ];
 
-  group('live program.yaml v4 — reps skeleton (no references)', () {
-    test('A week: squat heavy Monday (1x1 + 1x3), deadlift light Friday',
-        () {
-      final entries = buildWeekPlannedEntries(program, anchorMonday);
-      final mon = onDay(entries, anchorMonday);
-      expect(mon.map((e) => e['exercise']),
-          everyElement('Barbell Squat'));
-      expect(mon.map((e) => e['reps']).toList(), [1, 3]);
-      final fri = onDay(entries, anchorMonday.add(const Duration(days: 4)));
-      expect(fri.map((e) => e['exercise']),
-          everyElement('Barbell Deadlift'));
-      expect(fri.map((e) => e['reps']).toList(), [3]);
-    });
-
-    test('B week: squat light Monday (1x3), deadlift heavy Friday (1x1+1x3)',
-        () {
-      final entries = buildWeekPlannedEntries(program, bMonday);
-      final mon = onDay(entries, bMonday);
-      expect(mon.map((e) => e['exercise']),
-          everyElement('Barbell Squat'));
-      expect(mon.map((e) => e['reps']).toList(), [3]);
-      final fri = onDay(entries, bMonday.add(const Duration(days: 4)));
-      expect(fri.map((e) => e['exercise']),
-          everyElement('Barbell Deadlift'));
-      expect(fri.map((e) => e['reps']).toList(), [1, 3]);
-    });
-
-    test('Tuesday presses have no alternation: bench + OHP singles/triples',
-        () {
-      for (final monday in [anchorMonday, bMonday]) {
-        final tue = onDay(buildWeekPlannedEntries(program, monday),
-            monday.add(const Duration(days: 1)));
-        expect(
-            tue
-                .map((e) => '${e['exercise']} x${e['reps']}')
-                .toList(),
-            [
-              'Flat Barbell Bench Press x1',
-              'Flat Barbell Bench Press x3',
-              'Overhead Press x1',
-              'Overhead Press x3',
-            ],
-            reason: 'week of $monday');
+  group('live program.yaml v11 — block-0 cut skeleton (no wm/refs)', () {
+    test('wave week 1: tops resolve to 5s; volume slots + accessories at '
+        'low-end reps; Tue/Sun plan nothing', () {
+      final entries = buildWeekPlannedEntries(program, w1Monday);
+      final mon = onDay(entries, w1Monday);
+      expect(rows(mon), [
+        'Barbell Squat -x5', // wave wk1 top
+        'Bulgarian Split Squat -x8',
+        'Bulgarian Split Squat -x8',
+        'Bulgarian Split Squat -x8',
+        'Flat Barbell Bench Press -x8', // 4x8 @ 68% TM (weightless w/o wm)
+        'Flat Barbell Bench Press -x8',
+        'Flat Barbell Bench Press -x8',
+        'Flat Barbell Bench Press -x8',
+        'Lateral Dumbbell Raise -x12',
+        'Lateral Dumbbell Raise -x12',
+        'Lateral Dumbbell Raise -x12',
+        'Triceps Extension -x10',
+        'Triceps Extension -x10',
+      ]);
+      expect(mon.first['top'], isTrue);
+      final wed = onDay(entries, w1Monday.add(const Duration(days: 2)));
+      expect(rows(wed), [
+        'Flat Barbell Bench Press -x5', // wave top
+        'Flat Barbell Bench Press -x6', // back-offs 3x6-8 @ 72%
+        'Flat Barbell Bench Press -x6',
+        'Flat Barbell Bench Press -x6',
+        'Barbell Squat -x8', // squat volume 3x8 @ 65%
+        'Barbell Squat -x8',
+        'Barbell Squat -x8',
+        'Overhead Press -x8', // OHP volume 3x8-10 @ 62%
+        'Overhead Press -x8',
+        'Overhead Press -x8',
+        'Pull Up -x6',
+        'Pull Up -x6',
+        'Pull Up -x6',
+      ]);
+      final thu = onDay(entries, w1Monday.add(const Duration(days: 3)));
+      expect(rows(thu), [
+        'Muscle Up -x1', // skill FIRST — planner keeps template order
+        'Muscle Up -x1',
+        'Muscle Up -x1',
+        'Parallel Bar Triceps Dip -x8',
+        'Parallel Bar Triceps Dip -x8',
+        'Parallel Bar Triceps Dip -x8',
+        'EZ-Bar Preacher Curl -x8',
+        'EZ-Bar Preacher Curl -x8',
+        'EZ-Bar Preacher Curl -x8',
+      ]);
+      final fri = onDay(entries, w1Monday.add(const Duration(days: 4)));
+      expect(rows(fri), [
+        'Barbell Deadlift -x5', // wave top
+        'Barbell Deadlift -x4', // back-offs 2x4-6 @ 75%
+        'Barbell Deadlift -x4',
+        'Romanian Deadlift -x8',
+        'Romanian Deadlift -x8',
+        'Flat Barbell Bench Press -x8', // third bench exposure @ 65%
+        'Flat Barbell Bench Press -x8',
+        'Flat Barbell Bench Press -x8',
+      ]);
+      // Tue (4x4 + hard climb, no lifting) and Sun plan nothing.
+      for (final offset in [1, 6]) {
+        expect(onDay(entries, w1Monday.add(Duration(days: offset))), isEmpty,
+            reason: 'offset $offset');
       }
     });
 
-    test('v7 week_start saturday: the generation window runs Sat–Fri, '
-        'so Monday + the FOLLOWING Friday plan as one week', () {
-      // Passing the anchor Monday normalises to the Saturday before it
-      // (Sep 19) — the accounting week containing that Monday.
-      final entries = buildWeekPlannedEntries(program, anchorMonday);
-      final dates = entries.map((e) => e['date'] as DateTime).toSet();
-      final windowStart = DateTime.utc(2026, 9, 19); // Saturday
-      for (final d in dates) {
-        expect(d.isBefore(windowStart), isFalse);
-        expect(d.isAfter(windowStart.add(const Duration(days: 6))), isFalse);
-      }
-      // Template lookup keys by ACTUAL weekday: Monday squats + the
-      // Friday (Sep 25) deadlift both land inside this window, with the
-      // same 'a' parity (alternation anchored to the contained Monday).
-      final mon = onDay(entries, anchorMonday);
-      expect(mon.map((e) => e['exercise']), everyElement('Barbell Squat'));
-      final fri = onDay(entries, DateTime.utc(2026, 9, 25));
-      expect(fri.map((e) => e['exercise']),
-          everyElement('Barbell Deadlift'));
-      expect(fri.map((e) => e['reps']).toList(), [3]); // a-week: light
+    test('the Saturday OHP day (Sat Oct 3 sits in the Oct 5 window and is '
+        'wave week 1 via ITS Monday)', () {
+      final entries =
+          buildWeekPlannedEntries(program, DateTime.utc(2026, 10, 5));
+      final sat = onDay(entries, DateTime.utc(2026, 10, 3));
+      expect(rows(sat), [
+        'Overhead Press -x5', // wave wk1 top (Sat's Monday is Sep 28)
+        'Overhead Press -x6', // back-offs 3x6-8 @ 72%
+        'Overhead Press -x6',
+        'Overhead Press -x6',
+        'Seated Cable Row -x8',
+        'Seated Cable Row -x8',
+        'Seated Cable Row -x8',
+        'Pull Up -x6',
+        'Pull Up -x6',
+        'Pull Up -x6',
+        'Lateral Dumbbell Raise -x12',
+        'Lateral Dumbbell Raise -x12',
+        'Lateral Dumbbell Raise -x12',
+        'Cable Face Pull -x12',
+        'Cable Face Pull -x12',
+        'Cable External Rotation -x12',
+        'Cable External Rotation -x12',
+      ]);
+      // Mon Oct 5 = wave week 2: top goes to 4 reps.
+      final mon = onDay(entries, DateTime.utc(2026, 10, 5));
+      expect(rows(mon).first, 'Barbell Squat -x4');
     });
 
-    test('without references: no weight keys, no warmup rows anywhere', () {
-      for (final monday in [anchorMonday, bMonday]) {
+    test('wave weeks cycle 5/4/3 then deload (top 5, non-top halved)', () {
+      // Week 3 (Oct 12): tops are triples.
+      final w3 = onDay(
+          buildWeekPlannedEntries(program, DateTime.utc(2026, 10, 12)),
+          DateTime.utc(2026, 10, 12));
+      expect(rows(w3).first, 'Barbell Squat -x3');
+      // Week 4 (Oct 19): deload — top 5 stays, every non-top set count
+      // is halved (min 1): BSS 3→2, bench 4→2, laterals 3→2,
+      // triceps 2→1.
+      final w4 = onDay(
+          buildWeekPlannedEntries(program, DateTime.utc(2026, 10, 19)),
+          DateTime.utc(2026, 10, 19));
+      expect(rows(w4), [
+        'Barbell Squat -x5',
+        'Bulgarian Split Squat -x8',
+        'Bulgarian Split Squat -x8',
+        'Flat Barbell Bench Press -x8',
+        'Flat Barbell Bench Press -x8',
+        'Lateral Dumbbell Raise -x12',
+        'Lateral Dumbbell Raise -x12',
+        'Triceps Extension -x10',
+      ]);
+      expect(w4.first['top'], isTrue);
+    });
+
+    test('pre-anchor cut days: wave tops are SKIPPED (never guessed), '
+        'volume slots still plan', () {
+      final entries = buildWeekPlannedEntries(program, preMonday);
+      final mon = onDay(entries, preMonday);
+      // No squat top — the wave starts Sep 28; the rest of Monday plans.
+      expect(rows(mon).where((r) => r.startsWith('Barbell Squat')), isEmpty);
+      expect(mon.where((e) => e['top'] == true), isEmpty);
+      expect(rows(mon), contains('Flat Barbell Bench Press -x8'));
+    });
+
+    test('without wm or references: no weight keys anywhere', () {
+      for (final monday in [preMonday, w1Monday]) {
         final entries = buildWeekPlannedEntries(program, monday);
         expect(entries, isNotEmpty);
         for (final e in entries) {
-          expect(e.keys.toSet(), {'date', 'exercise', 'reps'});
+          expect(e.containsKey('weight'), isFalse, reason: '$e');
         }
-      }
-    });
-
-    test('non-lifting days (wed/thu/sat/sun) produce nothing', () {
-      final entries =
-          buildWeekPlannedEntries(program, anchorMonday, references: refs);
-      for (final offset in [2, 3, 5, 6]) {
-        final day = anchorMonday.add(Duration(days: offset));
-        expect(onDay(entries, day), isEmpty, reason: 'offset $offset');
       }
     });
 
@@ -164,10 +219,10 @@ void main() {
 
     test('non-Monday input normalises to the same ISO week', () {
       final fromWed = buildWeekPlannedEntries(
-          program, anchorMonday.add(const Duration(days: 2)),
+          program, w1Monday.add(const Duration(days: 2)),
           references: refs);
       expect(fromWed,
-          buildWeekPlannedEntries(program, anchorMonday, references: refs));
+          buildWeekPlannedEntries(program, w1Monday, references: refs));
     });
   });
 
@@ -230,18 +285,26 @@ void main() {
         'Calf Raise -x8',
         'Calf Raise -x8',
       ]);
-      // Sat Dec 12 belongs to block 0 (cut) — its template has no
-      // Saturday planned lifts; the window plans nothing there.
-      expect(onDay(entries, DateTime.utc(2026, 12, 12)), isEmpty);
+      // Sat Dec 12 still belongs to block 0 — since v11 the CUT
+      // template's Saturday (OHP day) plans there, on the cut wave's
+      // clock (Dec 12's Monday is Dec 7 → cut wave week 3, top x3).
+      final sat0 = onDay(entries, DateTime.utc(2026, 12, 12));
+      expect(rows(sat0).first, 'Overhead Press -x3');
+      expect(sat0.first['top'], isTrue);
       // Thu (4x4) / Sun (rest) plan nothing.
       for (final offset in [3, 6]) {
         expect(onDay(entries, dec14.add(Duration(days: offset))), isEmpty,
             reason: 'offset $offset');
       }
       // The wave top rows carry the marker; everything else does not.
+      // Block-1 tops (squat, bench, deadlift) are the post-cut wave's
+      // week-1 fives; the block-0 Saturday OHP is the cut wave's x3.
       final tops = entries.where((e) => e['top'] == true).toList();
-      expect(tops, hasLength(3)); // squat, bench, deadlift this window
-      expect(tops.map((e) => e['reps']), everyElement(5));
+      expect(tops, hasLength(4));
+      expect(
+          tops.where((e) => e['date'] != DateTime.utc(2026, 12, 12))
+              .map((e) => e['reps']),
+          everyElement(5));
     });
 
     test('the Saturday OHP day: wave top + back-offs, un-ramped second '
@@ -412,15 +475,23 @@ void main() {
     });
   });
 
-  group('live program.yaml v4 — weight fill + warmup ramp', () {
+  group('live program.yaml v11 — cut weights (wm × wave pct / %TM)', () {
+    // The §5 seed values; deadlift pain-capped at RPE 7 in one test.
+    const wms = {
+      'squat': 320.0,
+      'bench': 240.0,
+      'deadlift': 330.0,
+      'press': 140.0,
+    };
+
     test(
         'key lockdown: generated keys drawn from exactly '
-        '{date, exercise, reps, weight, top} — never rpe/notes', () {
-      // Block-0 weeks + a post-cut (v10) week with wave-top markers.
-      for (final monday in [anchorMonday, bMonday,
+        '{date, exercise, reps, weight, top} — never rpe/notes/pct', () {
+      // Block-0 cut weeks + a post-cut (v10) week with wave-top markers.
+      for (final monday in [preMonday, w1Monday,
           DateTime.utc(2026, 12, 14)]) {
-        final entries =
-            buildWeekPlannedEntries(program, monday, references: refs);
+        final entries = buildWeekPlannedEntries(program, monday,
+            references: refs, workingMaxes: wms);
         expect(entries, isNotEmpty);
         for (final e in entries) {
           expect(
@@ -432,207 +503,188 @@ void main() {
               isTrue);
           expect(e.containsKey('rpe'), isFalse);
           expect(e.containsKey('notes'), isFalse);
+          expect(e.containsKey('pct'), isFalse);
         }
       }
     });
 
-    test('A-week Monday: squat ramp to top single, then 96%/88% work', () {
+    test('Monday wk1: squat top at wm × 0.811 (chart[8][5]) with its '
+        'ramp; bench volume 4x8 at wm × 0.68; accessories weightless', () {
       final mon = onDay(
-          buildWeekPlannedEntries(program, anchorMonday, references: refs),
-          anchorMonday);
-      // ref 300: single = round5(288) = 290 (top), triple = round5(264) =
-      // 265; ramp 45x10 → 40% 116→115 x5 → 60% 174→175 x3 → 80% 232→230 x1.
+          buildWeekPlannedEntries(program, w1Monday,
+              references: refs, workingMaxes: wms),
+          w1Monday);
+      // squat 320 × 0.811 = 259.5 → 260; ramp 45x10, 104→105 x5,
+      // 156→155 x3, 208→210 x1. bench 240 × 0.68 = 163.2 → 165; ramp
+      // toward 165: 66→65, 99→100, 132→130.
       expect(rows(mon), [
         'Barbell Squat 45x10',
-        'Barbell Squat 115x5',
-        'Barbell Squat 175x3',
-        'Barbell Squat 230x1',
-        'Barbell Squat 290x1',
-        'Barbell Squat 265x3',
-      ]);
-    });
-
-    test('Tuesday: per-exercise ramps for bench then press', () {
-      final tue = onDay(
-          buildWeekPlannedEntries(program, anchorMonday, references: refs),
-          anchorMonday.add(const Duration(days: 1)));
-      expect(rows(tue), [
-        // bench ref 250: top single 240, triple 220; ramp 96→95, 144→145,
-        // 192→190.
+        'Barbell Squat 105x5',
+        'Barbell Squat 155x3',
+        'Barbell Squat 210x1',
+        'Barbell Squat 260x5',
+        'Bulgarian Split Squat -x8',
+        'Bulgarian Split Squat -x8',
+        'Bulgarian Split Squat -x8',
         'Flat Barbell Bench Press 45x10',
-        'Flat Barbell Bench Press 95x5',
-        'Flat Barbell Bench Press 145x3',
-        'Flat Barbell Bench Press 190x1',
-        'Flat Barbell Bench Press 240x1',
-        'Flat Barbell Bench Press 220x3',
-        // press ref 150: top single 145, triple 130; ramp 58→60, 87→85,
-        // 116→115.
-        'Overhead Press 45x10',
-        'Overhead Press 60x5',
-        'Overhead Press 85x3',
-        'Overhead Press 115x1',
-        'Overhead Press 145x1',
-        'Overhead Press 130x3',
+        'Flat Barbell Bench Press 65x5',
+        'Flat Barbell Bench Press 100x3',
+        'Flat Barbell Bench Press 130x1',
+        'Flat Barbell Bench Press 165x8',
+        'Flat Barbell Bench Press 165x8',
+        'Flat Barbell Bench Press 165x8',
+        'Flat Barbell Bench Press 165x8',
+        'Lateral Dumbbell Raise -x12',
+        'Lateral Dumbbell Raise -x12',
+        'Lateral Dumbbell Raise -x12',
+        'Triceps Extension -x10',
+        'Triceps Extension -x10',
       ]);
     });
 
-    test('deadlift rule: 135x5 start, only ramp steps above 135 survive',
+    test('Wednesday wk1: bench top + 72% back-offs, squat 65%, OHP 62%',
         () {
-      // A week, deadlift light (one triple): ref 200 → 175 top. 60% =
-      // 105 (≤135, dropped), 80% = 140 (>135, kept).
-      final friA = onDay(
-          buildWeekPlannedEntries(program, anchorMonday, references: refs),
-          anchorMonday.add(const Duration(days: 4)));
-      expect(rows(friA), [
-        'Barbell Deadlift 135x5',
-        'Barbell Deadlift 140x1',
-        'Barbell Deadlift 175x3',
+      final wed = onDay(
+          buildWeekPlannedEntries(program, w1Monday,
+              references: refs, workingMaxes: wms),
+          w1Monday.add(const Duration(days: 2)));
+      // bench top 240 × 0.811 = 194.6 → 195 (ramp 80/115/155);
+      // back-offs 240 × 0.72 = 172.8 → 175; squat 320 × 0.65 = 208 →
+      // 210 (ramp 85/125/170); OHP 140 × 0.62 = 86.8 → 85 (ramp
+      // 35/50/70). Pull-ups are weightless accessories.
+      expect(rows(wed), [
+        'Flat Barbell Bench Press 45x10',
+        'Flat Barbell Bench Press 80x5',
+        'Flat Barbell Bench Press 115x3',
+        'Flat Barbell Bench Press 155x1',
+        'Flat Barbell Bench Press 195x5',
+        'Flat Barbell Bench Press 175x6',
+        'Flat Barbell Bench Press 175x6',
+        'Flat Barbell Bench Press 175x6',
+        'Barbell Squat 45x10',
+        'Barbell Squat 85x5',
+        'Barbell Squat 125x3',
+        'Barbell Squat 170x1',
+        'Barbell Squat 210x8',
+        'Barbell Squat 210x8',
+        'Barbell Squat 210x8',
+        'Overhead Press 45x10',
+        'Overhead Press 35x5',
+        'Overhead Press 50x3',
+        'Overhead Press 70x1',
+        'Overhead Press 85x8',
+        'Overhead Press 85x8',
+        'Overhead Press 85x8',
+        'Pull Up -x6',
+        'Pull Up -x6',
+        'Pull Up -x6',
       ]);
-      // B week, deadlift heavy: top single 190. 60% = 114→115 (dropped),
-      // 80% = 152→150 (kept). No 45-lb bar row ever.
-      final friB = onDay(
-          buildWeekPlannedEntries(program, bMonday, references: refs),
-          bMonday.add(const Duration(days: 4)));
-      expect(rows(friB), [
+    });
+
+    test('Friday wk1: deadlift top + 75% back-offs (135-rule ramp), '
+        'bench 65%', () {
+      final fri = onDay(
+          buildWeekPlannedEntries(program, w1Monday,
+              references: refs, workingMaxes: wms),
+          w1Monday.add(const Duration(days: 4)));
+      // dl top 330 × 0.811 = 267.6 → 270 (ramp 135x5, 160x3, 215x1);
+      // back-offs 330 × 0.75 = 247.5 → 250; bench 240 × 0.65 = 156 →
+      // 155 (ramp toward 155: 60/95/125).
+      expect(rows(fri), [
         'Barbell Deadlift 135x5',
-        'Barbell Deadlift 150x1',
-        'Barbell Deadlift 190x1',
-        'Barbell Deadlift 175x3',
+        'Barbell Deadlift 160x3',
+        'Barbell Deadlift 215x1',
+        'Barbell Deadlift 270x5',
+        'Barbell Deadlift 250x4',
+        'Barbell Deadlift 250x4',
+        'Romanian Deadlift -x8',
+        'Romanian Deadlift -x8',
+        'Flat Barbell Bench Press 45x10',
+        'Flat Barbell Bench Press 60x5',
+        'Flat Barbell Bench Press 95x3',
+        'Flat Barbell Bench Press 125x1',
+        'Flat Barbell Bench Press 155x8',
+        'Flat Barbell Bench Press 155x8',
+        'Flat Barbell Bench Press 155x8',
       ]);
-      // Strong deadlift: both pct steps clear 135 and are kept.
-      final friBig = onDay(
-          buildWeekPlannedEntries(program, bMonday,
-              references: const {'deadlift': 400.0}),
-          bMonday.add(const Duration(days: 4)));
-      expect(rows(friBig), [
-        'Barbell Deadlift 135x5',
-        'Barbell Deadlift 230x3', // 60% of 385
-        'Barbell Deadlift 310x1', // 80% of 385
-        'Barbell Deadlift 385x1',
-        'Barbell Deadlift 350x3',
-      ]);
+    });
+
+    test('wave week 2/3 pcts: 0.837 then 0.863; deload top at 0.70', () {
+      num topWeight(DateTime monday) {
+        final mon = onDay(
+            buildWeekPlannedEntries(program, monday,
+                references: refs, workingMaxes: wms),
+            monday);
+        return mon.firstWhere((e) => e['top'] == true)['weight'] as num;
+      }
+
+      // wk2 (Oct 5): 320 × 0.837 = 267.8 → 270 (x4).
+      expect(topWeight(DateTime.utc(2026, 10, 5)), 270);
+      // wk3 (Oct 12): 320 × 0.863 = 276.2 → 275 (x3).
+      expect(topWeight(DateTime.utc(2026, 10, 12)), 275);
+      // deload (Oct 19): 320 × 0.70 = 224 → 225 (x5).
+      expect(topWeight(DateTime.utc(2026, 10, 19)), 225);
+    });
+
+    test('an active RPE cap undercuts the wave pct (pain-capped '
+        'deadlift → chart[7][5])', () {
+      final fri = onDay(
+          buildWeekPlannedEntries(program, w1Monday,
+              references: refs,
+              workingMaxes: wms,
+              capRpeByLift: const {'deadlift': 7}),
+          w1Monday.add(const Duration(days: 4)));
+      // min(0.811, chart[7][5] = 0.786) → 330 × 0.786 = 259.4 → 260.
+      expect(rows(fri), contains('Barbell Deadlift 260x5'));
+      // The 75% back-offs sit under chart[7][4] = 0.811 — unchanged.
+      expect(rows(fri), contains('Barbell Deadlift 250x4'));
+    });
+
+    test('cut_late (Nov 16+) RPE-7 cap softens the wave top the same '
+        'way', () {
+      // Nov 23 is wave week 1 again (8 whole weeks since the anchor);
+      // cut_late's target/cap 7 → min(0.811, 0.786) → 320 × 0.786 =
+      // 251.5 → 250.
+      final mon = onDay(
+          buildWeekPlannedEntries(program, DateTime.utc(2026, 11, 23),
+              references: refs, workingMaxes: wms),
+          DateTime.utc(2026, 11, 23));
+      expect(
+          mon.firstWhere((e) => e['top'] == true)['weight'], 250);
+    });
+
+    test('%TM rows NEVER price off the reference e1rm — without a '
+        'working max the whole cut week is weightless', () {
+      final entries = buildWeekPlannedEntries(program, w1Monday,
+          references: refs); // references only, no wms
+      expect(entries, isNotEmpty);
+      for (final e in entries) {
+        expect(e.containsKey('weight'), isFalse, reason: '$e');
+      }
     });
 
     test('rounding: every filled weight is a nearest-5 multiple', () {
-      final entries = buildWeekPlannedEntries(program, anchorMonday,
-          references: const {'squat': 299.0});
-      final mon = onDay(entries, anchorMonday);
-      // 299 × 0.96 = 287.04 → 285; 299 × 0.88 = 263.12 → 265.
-      expect(rows(mon).sublist(4), [
-        'Barbell Squat 285x1',
-        'Barbell Squat 265x3',
-      ]);
+      final entries = buildWeekPlannedEntries(program, w1Monday,
+          references: refs, workingMaxes: wms);
       for (final e in entries) {
         final w = e['weight'];
         if (w is num) expect(w % 5, 0, reason: '$e');
       }
     });
 
-    test('absent reference: no weight AND no warmups for that lift only',
-        () {
-      // Only squat has a reference — bench/press/deadlift days fall back
-      // to bare skeleton rows (never a guessed weight).
-      final entries = buildWeekPlannedEntries(program, anchorMonday,
-          references: const {'squat': 300.0});
-      final mon = onDay(entries, anchorMonday);
-      expect(mon, hasLength(6)); // 4 warmups + 2 working
-      final tue = onDay(entries, anchorMonday.add(const Duration(days: 1)));
-      expect(rows(tue), [
-        'Flat Barbell Bench Press -x1',
-        'Flat Barbell Bench Press -x3',
-        'Overhead Press -x1',
-        'Overhead Press -x3',
-      ]);
-      for (final e in tue) {
-        expect(e.keys.toSet(), {'date', 'exercise', 'reps'});
-      }
-      final fri = onDay(entries, anchorMonday.add(const Duration(days: 4)));
-      expect(rows(fri), ['Barbell Deadlift -x3']);
-    });
-  });
-
-  group('v3 — working-max weights (wm × rpe_chart[policy target][reps])', () {
-    // The §5 seed values; deadlift pain-capped at RPE 7.
-    const wms = {
-      'squat': 320.0,
-      'bench': 240.0,
-      'deadlift': 330.0,
-      'press': 140.0,
-    };
-
-    test('A-week Monday squat: single at chart[8][1], triple at chart[8][3]',
-        () {
-      final mon = onDay(
-          buildWeekPlannedEntries(program, anchorMonday,
-              references: refs, workingMaxes: wms),
-          anchorMonday);
-      // wm 320, cut_early target 8: single 295.04→295, triple 276.16→275;
-      // ramp toward 295: 118→120, 177→175, 236→235.
-      expect(rows(mon), [
-        'Barbell Squat 45x10',
-        'Barbell Squat 120x5',
-        'Barbell Squat 175x3',
-        'Barbell Squat 235x1',
-        'Barbell Squat 295x1',
-        'Barbell Squat 275x3',
-      ]);
-    });
-
-    test('Tuesday bench + press from their working maxes', () {
-      final tue = onDay(
-          buildWeekPlannedEntries(program, anchorMonday,
-              references: refs, workingMaxes: wms),
-          anchorMonday.add(const Duration(days: 1)));
-      expect(rows(tue), [
-        // bench wm 240: single 221.28→220, triple 207.12→205.
-        'Flat Barbell Bench Press 45x10',
-        'Flat Barbell Bench Press 90x5',
-        'Flat Barbell Bench Press 130x3',
-        'Flat Barbell Bench Press 175x1',
-        'Flat Barbell Bench Press 220x1',
-        'Flat Barbell Bench Press 205x3',
-        // press wm 140: single 129.08→130, triple 120.82→120.
-        'Overhead Press 45x10',
-        'Overhead Press 50x5',
-        'Overhead Press 80x3',
-        'Overhead Press 105x1',
-        'Overhead Press 130x1',
-        'Overhead Press 120x3',
-      ]);
-    });
-
-    test('an active RPE cap lowers the target (pain-capped deadlift)', () {
-      final fri = onDay(
-          buildWeekPlannedEntries(program, anchorMonday,
-              references: refs,
-              workingMaxes: wms,
-              capRpeByLift: const {'deadlift': 7}),
-          anchorMonday.add(const Duration(days: 4)));
-      // A-week deadlift light 1x3 at chart[7][3]=0.837: 276.21→275.
-      expect(rows(fri), [
-        'Barbell Deadlift 135x5',
-        'Barbell Deadlift 165x3',
-        'Barbell Deadlift 220x1',
-        'Barbell Deadlift 275x3',
-      ]);
-    });
-
-    test('lifts without a working max fall back to the reference path', () {
-      final entries = buildWeekPlannedEntries(program, anchorMonday,
+    test('lifts without a working max stay weightless; others fill', () {
+      final entries = buildWeekPlannedEntries(program, w1Monday,
           references: refs, workingMaxes: const {'squat': 320.0});
-      final mon = onDay(entries, anchorMonday);
-      expect(rows(mon).sublist(4),
-          ['Barbell Squat 295x1', 'Barbell Squat 275x3']);
-      final tue = onDay(entries, anchorMonday.add(const Duration(days: 1)));
-      // bench ref 250 × 0.96 = 240 (v2 math).
-      expect(rows(tue), contains('Flat Barbell Bench Press 240x1'));
-    });
-
-    test('no working maxes at all == v2 output exactly', () {
+      final mon = onDay(entries, w1Monday);
+      expect(rows(mon), contains('Barbell Squat 260x5'));
+      // Bench volume has no wm → weightless (never the reference).
       expect(
-          buildWeekPlannedEntries(program, anchorMonday, references: refs),
-          buildWeekPlannedEntries(program, anchorMonday,
-              references: refs, workingMaxes: const {}));
+          mon
+              .where((e) =>
+                  e['exercise'] == 'Flat Barbell Bench Press' &&
+                  e.containsKey('weight'))
+              .toList(),
+          isEmpty);
     });
   });
 
@@ -699,54 +751,54 @@ void main() {
     });
 
     test('empty/malformed program produces nothing', () {
-      expect(buildWeekPlannedEntries({}, anchorMonday), isEmpty);
+      expect(buildWeekPlannedEntries({}, w1Monday), isEmpty);
       expect(
-          buildWeekPlannedEntries({'versions': []}, anchorMonday), isEmpty);
+          buildWeekPlannedEntries({'versions': []}, w1Monday), isEmpty);
       expect(
           buildWeekPlannedEntries({
             'versions': [
               {'version': 1, 'pending': true},
             ],
-          }, anchorMonday),
+          }, w1Monday),
           isEmpty);
     });
   });
 
-  group('regenerateWeek (v1 → v2 upgrade)', () {
+  group('regenerateWeek (plan upgrade semantics)', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
     test('replaces only this week\'s still-planned week-plan rows, '
         'today-forward', () async {
       final view = _strengthView();
-      // v1-style leftovers for the target week (Mon + Fri), a user
+      // Stale leftovers for the target week (Mon + Fri), a user
       // template entry, and next week's plan — only the first two may go.
       final monEntry = PlannedEntry.create(
         view: view,
-        date: DateTime(2026, 9, 21),
-        values: {'exercise': 'Barbell Squat', 'reps': 1},
+        date: DateTime(2026, 9, 28),
+        values: {'exercise': 'Barbell Squat', 'reps': 5},
         templateName: WeekPlanner.templateLabel,
       );
       final friEntry = PlannedEntry.create(
         view: view,
-        date: DateTime(2026, 9, 25),
-        values: {'exercise': 'Barbell Deadlift', 'reps': 3},
+        date: DateTime(2026, 10, 2),
+        values: {'exercise': 'Barbell Deadlift', 'reps': 5},
         templateName: WeekPlanner.templateLabel,
       );
       final userEntry = PlannedEntry.create(
         view: view,
-        date: DateTime(2026, 9, 21),
+        date: DateTime(2026, 9, 28),
         values: {'exercise': 'Face Pull', 'reps': 15},
         templateName: 'my template',
       );
       final nextWeekEntry = PlannedEntry.create(
         view: view,
-        date: DateTime(2026, 9, 28),
-        values: {'exercise': 'Barbell Squat', 'reps': 3},
+        date: DateTime(2026, 10, 5),
+        values: {'exercise': 'Barbell Squat', 'reps': 4},
         templateName: WeekPlanner.templateLabel,
       );
       await PlanStore.addAll(
           view, [monEntry, friEntry, userEntry, nextWeekEntry]);
-      // Simulate "Monday's single was already logged": Log-now removed it
+      // Simulate "Monday's top was already logged": Log-now removed it
       // from PlanStore before the upgrade ran.
       await PlanStore.remove(view, monEntry.localId);
 
@@ -754,20 +806,26 @@ void main() {
         strengthView: view,
         program: program,
         references: refs,
-        targetMonday: DateTime.utc(2026, 9, 21),
-        today: DateTime(2026, 9, 23), // Wednesday
+        targetMonday: DateTime.utc(2026, 9, 28),
+        today: DateTime(2026, 9, 30), // Wednesday
       );
 
-      // Today-forward only: Mon/Tue are past — the logged Monday single is
-      // NOT re-created. A-week Friday = deadlift light + its ramp.
+      // Today-forward only: Sat/Sun/Mon/Tue are past — the logged
+      // Monday squat is NOT re-created. Wed 13 + Thu 9 + Fri 8 rows
+      // (skeleton — references only, %TM rows never price off e1rm).
+      expect(added, hasLength(30));
+      final wed = added
+          .where((e) => e.date == DateTime(2026, 9, 30))
+          .toList();
       expect(
-        [for (final e in added) '${e.values['exercise']} '
+        [for (final e in wed) '${e.values['exercise']} '
             '${e.values['weight'] ?? '-'}x${e.values['reps']}'],
-        [
-          'Barbell Deadlift 135x5',
-          'Barbell Deadlift 140x1',
-          'Barbell Deadlift 175x3',
-        ],
+        containsAll([
+          'Flat Barbell Bench Press -x5', // wave wk1 top
+          'Barbell Squat -x8', // 65% volume slot (weightless w/o wm)
+          'Overhead Press -x8',
+          'Pull Up -x6',
+        ]),
       );
       for (final e in added) {
         expect(e.templateName, WeekPlanner.templateLabel);
@@ -777,13 +835,13 @@ void main() {
 
       // Store state: old week-plan rows for THIS week gone; the user's
       // template entry and next week's plan untouched.
-      final friday = await PlanStore.loadForDate(view, DateTime(2026, 9, 25));
+      final friday = await PlanStore.loadForDate(view, DateTime(2026, 10, 2));
       expect(friday.map((e) => e.localId), isNot(contains(friEntry.localId)));
-      expect(friday, hasLength(3));
-      final monday = await PlanStore.loadForDate(view, DateTime(2026, 9, 21));
+      expect(friday, hasLength(8));
+      final monday = await PlanStore.loadForDate(view, DateTime(2026, 9, 28));
       expect(monday.map((e) => e.localId), [userEntry.localId]);
       final nextMon =
-          await PlanStore.loadForDate(view, DateTime(2026, 9, 28));
+          await PlanStore.loadForDate(view, DateTime(2026, 10, 5));
       expect(nextMon.map((e) => e.localId), [nextWeekEntry.localId]);
     });
 
@@ -793,13 +851,15 @@ void main() {
         strengthView: view,
         program: program,
         references: refs,
-        targetMonday: DateTime.utc(2026, 9, 21),
-        today: DateTime(2026, 9, 21),
+        targetMonday: DateTime.utc(2026, 9, 28),
+        today: DateTime(2026, 9, 28),
+        workingMaxes: const {'squat': 320.0},
       );
-      final monday = await PlanStore.loadForDate(view, DateTime(2026, 9, 21));
+      final monday = await PlanStore.loadForDate(view, DateTime(2026, 9, 28));
+      // Squat ramp + wave top: 45x10, 105x5, 155x3, 210x1, 260x5.
       expect(
-        [for (final e in monday) e.values['weight']],
-        [45, 115, 175, 230, 290, 265],
+        [for (final e in monday.take(5)) e.values['weight']],
+        [45, 105, 155, 210, 260],
       );
       expect(monday.first.values['weight'], isA<num>());
     });

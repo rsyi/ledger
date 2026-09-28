@@ -41,6 +41,8 @@ WeekDriverInputs inputs({
   List<DateTime> cardioDates = const [],
   Map<DateTime, double> proteinByDay = const {},
   double? bodyweightLb,
+  List<LoggedSet> strengthSets = const [],
+  MuscleMap? muscleMap,
 }) => WeekDriverInputs(
   graded: graded,
   readings: readings,
@@ -49,6 +51,22 @@ WeekDriverInputs inputs({
   cardioDates: cardioDates,
   proteinByDay: proteinByDay,
   bodyweightLb: bodyweightLb,
+  strengthSets: strengthSets,
+  muscleMap: muscleMap,
+);
+
+LoggedSet ls(String exercise, DateTime date, {int reps = 5}) =>
+    LoggedSet(date: date, exercise: exercise, reps: reps);
+
+/// A small v9-shaped muscle map for the counting tests.
+final testMap = MuscleMap(
+  exercises: {
+    'Barbell Squat': {'quads': 1.0, 'hamstrings_glutes': 0.5},
+    'Flat Barbell Bench Press': {'chest': 1.0, 'triceps': 0.5},
+    'Weighted Pull Up': {'back': 1.0, 'biceps': 0.5},
+    'Muscle Up': {'back': 0.75, 'triceps': 0.5},
+  },
+  climbingSession: {'back': 3.0, 'biceps': 1.5},
 );
 
 TopSetReading reading(
@@ -664,6 +682,238 @@ phases:
     });
   });
 
+  // v9 (post-cut-recomp-spec 2026-09-27): hypertrophy is first-class —
+  // 8-12 productive sets per muscle group per week, overlap-counted
+  // from strength rows + climbing sessions + calisthenics via the
+  // program's declared exercise_muscle_map.
+  group('hypertrophy_volume (v9)', () {
+    final config = WeekDriverConfig(
+      id: 'hypertrophy_volume',
+      band: const [8, 12],
+      muscleGroups: const ['quads', 'chest', 'back'],
+    );
+
+    test('counts per-group set credits from strength rows via the map', () {
+      final d = DateTime(2026, 9, 21);
+      final e = evalOne(
+        config,
+        inputs(
+          muscleMap: testMap,
+          strengthSets: [
+            for (var i = 0; i < 8; i++) ls('Barbell Squat', d),
+            for (var i = 0; i < 8; i++) ls('Flat Barbell Bench Press', d),
+          ],
+        ),
+      );
+      // quads 8 (in band), chest 8 (in band), back 0 → pending.
+      expect(e.status, DriverStatus.pending);
+      final byGroup = {for (final t in e.ticks) t.lift: t};
+      expect(byGroup['quads']!.count, 8);
+      expect(byGroup['chest']!.count, 8);
+      expect(byGroup['back']!.count, 0);
+      expect(byGroup['quads']!.target, 8); // band low edge
+      expect(e.value, '2/3');
+    });
+
+    test('climbing sessions credit via climbing_session; all groups in '
+        'band → met', () {
+      final d = DateTime(2026, 9, 21);
+      final e = evalOne(
+        config,
+        inputs(
+          muscleMap: testMap,
+          climbingDates: [DateTime(2026, 9, 20), DateTime(2026, 9, 22)],
+          strengthSets: [
+            for (var i = 0; i < 8; i++) ls('Barbell Squat', d),
+            for (var i = 0; i < 8; i++) ls('Flat Barbell Bench Press', d),
+            // back: 2 pull-up sets (2.0) + 2 climbing sessions (6.0) = 8
+            ls('Weighted Pull Up', d),
+            ls('Weighted Pull Up', d),
+          ],
+        ),
+      );
+      expect(e.status, DriverStatus.met);
+      final byGroup = {for (final t in e.ticks) t.lift: t};
+      expect(byGroup['back']!.count, 8);
+    });
+
+    test('over the top of the band → violated (excess volume, the '
+        'pulling caution)', () {
+      final d = DateTime(2026, 9, 21);
+      final e = evalOne(
+        config,
+        inputs(
+          muscleMap: testMap,
+          climbingDates: [DateTime(2026, 9, 20), DateTime(2026, 9, 22)],
+          strengthSets: [
+            for (var i = 0; i < 8; i++) ls('Barbell Squat', d),
+            for (var i = 0; i < 8; i++) ls('Flat Barbell Bench Press', d),
+            // back: 8 pull-up sets + 6.0 climbing credit = 14 > 12
+            for (var i = 0; i < 8; i++) ls('Weighted Pull Up', d),
+          ],
+        ),
+      );
+      expect(e.status, DriverStatus.violated);
+    });
+
+    test('prefix match: banded muscle-up rows count under "Muscle Up"', () {
+      final d = DateTime(2026, 9, 21);
+      final e = evalOne(
+        config,
+        inputs(
+          muscleMap: testMap,
+          strengthSets: [
+            ls('Muscle Up Purple Band', d),
+            ls('Muscle Up', d),
+          ],
+        ),
+      );
+      final byGroup = {for (final t in e.ticks) t.lift: t};
+      expect(byGroup['back']!.count, 2); // 2 × 0.75 = 1.5 → rounds to 2
+    });
+
+    test('rows outside the accounting week never count; no map → pending '
+        'with no ticks', () {
+      final e = evalOne(
+        config,
+        inputs(
+          muscleMap: testMap,
+          strengthSets: [
+            for (var i = 0; i < 8; i++)
+              ls('Barbell Squat', DateTime(2026, 9, 18)), // last week
+          ],
+        ),
+      );
+      expect({for (final t in e.ticks) t.lift: t.count}['quads'], 0);
+      final noMap = evalOne(config, inputs(strengthSets: [
+        ls('Barbell Squat', DateTime(2026, 9, 21)),
+      ]));
+      expect(noMap.status, DriverStatus.pending);
+      expect(noMap.ticks, isEmpty);
+    });
+  });
+
+  // v9: each main lift gets BOTH a heavy exposure (top-set reading)
+  // and a hypertrophy exposure (3-8-rep sets) every week.
+  group('dual_exposure (v9)', () {
+    final config = WeekDriverConfig(
+      id: 'dual_exposure',
+      lifts: const ['squat', 'bench', 'deadlift', 'press'],
+      hypSetsMin: 3,
+      hypReps: const [3, 8],
+    );
+
+    test('heavy reading + 3 hypertrophy sets = both halves tick', () {
+      final d = DateTime(2026, 9, 21);
+      final e = evalOne(
+        config,
+        inputs(
+          readings: [reading('squat', d)],
+          strengthSets: [
+            ls('Barbell Squat', d, reps: 5),
+            ls('Barbell Squat', d, reps: 5),
+            ls('Barbell Squat', d, reps: 5),
+          ],
+        ),
+      );
+      final byLift = {for (final t in e.ticks) t.lift: t};
+      expect(byLift['squat']!.count, 2);
+      expect(byLift['squat']!.target, 2);
+      expect(byLift['bench']!.count, 0);
+      expect(e.status, DriverStatus.pending);
+      expect(e.value, '2/8');
+    });
+
+    test('reps outside 3-8 (singles, warmup 10s) never count toward the '
+        'hypertrophy half', () {
+      final d = DateTime(2026, 9, 21);
+      final e = evalOne(
+        config,
+        inputs(
+          readings: const [],
+          strengthSets: [
+            ls('Barbell Squat', d, reps: 1),
+            ls('Barbell Squat', d, reps: 10),
+            ls('Barbell Squat', d, reps: 2),
+          ],
+        ),
+      );
+      expect({for (final t in e.ticks) t.lift: t.count}['squat'], 0);
+    });
+
+    test('all four lifts with both exposures → met', () {
+      final d = DateTime(2026, 9, 21);
+      final e = evalOne(
+        config,
+        inputs(
+          readings: [
+            reading('squat', d),
+            reading('bench', d),
+            reading('deadlift', d),
+            reading('press', d),
+          ],
+          strengthSets: [
+            for (final ex in [
+              'Barbell Squat',
+              'Flat Barbell Bench Press',
+              'Barbell Deadlift',
+              'Overhead Press',
+            ])
+              for (var i = 0; i < 3; i++) ls(ex, d, reps: 5),
+          ],
+        ),
+      );
+      expect(e.status, DriverStatus.met);
+      expect(e.value, '8/8');
+    });
+
+    test('light_week readings do not tick the heavy half', () {
+      final d = DateTime(2026, 9, 21);
+      final e = evalOne(
+        config,
+        inputs(readings: [reading('squat', d, kind: 'light_week')]),
+      );
+      expect({for (final t in e.ticks) t.lift: t.count}['squat'], 0);
+    });
+  });
+
+  // v9: the recomp protein target is ABSOLUTE (160-175 g/day), not
+  // per-lb — floor_g wins over floor_g_per_lb when declared.
+  group('protein_floor — absolute floor_g (v9)', () {
+    final config = WeekDriverConfig(
+      id: 'protein_floor',
+      floorG: 160,
+      bandG: const [160, 175],
+    );
+
+    test('daily average at/over the absolute floor → met, grams shown', () {
+      final e = evalOne(
+        config,
+        inputs(proteinByDay: {
+          DateTime(2026, 9, 21): 170,
+          DateTime(2026, 9, 22): 160,
+        }),
+      );
+      expect(e.status, DriverStatus.met);
+      expect(e.value, '165 g');
+    });
+
+    test('under the absolute floor → violated', () {
+      final e = evalOne(
+        config,
+        inputs(proteinByDay: {DateTime(2026, 9, 21): 120}),
+      );
+      expect(e.status, DriverStatus.violated);
+      expect(e.value, '120 g');
+    });
+
+    test('absolute floor needs no bodyweight; no data → pending', () {
+      final e = evalOne(config, inputs());
+      expect(e.status, DriverStatus.pending);
+      expect(e.value, '— g');
+    });
+  });
+
   group('real dashboards.yaml (airledger-fitness checkout)', () {
     const path = '../airledger-fitness/app/dashboards.yaml';
 
@@ -697,17 +947,22 @@ phases:
       expect(bulk[0].perLiftTargets['deadlift'], 1);
       expect(bulk[1].target, 6);
       final recomp = byPhase['recomp']!;
+      // v9 (post-cut-recomp-spec): dual exposure per lift + the 8-12
+      // hypertrophy band + the ABSOLUTE protein floor replace the
+      // bulk-shaped frequency/near-max/per-lb drivers.
       expect(recomp.map((d) => d.id).toList(), [
-        'lift_frequency',
-        'near_max_exposure',
+        'dual_exposure',
+        'hypertrophy_volume',
         'protein_floor',
         'bike_4x4',
       ]);
-      // Recomp protein floor is 1.0 g/lb (targets 1.0-1.1, four
-      // feedings); training-input drivers match the bulk (the variant
-      // keeps the whole training week).
-      expect(recomp[2].floorGPerLb, 1.0);
-      expect(recomp[1].target, 6);
+      expect(recomp[0].lifts, ['squat', 'bench', 'deadlift', 'press']);
+      expect(recomp[0].hypSetsMin, 3);
+      expect(recomp[0].hypReps, [3, 8]);
+      expect(recomp[1].band, [8, 12]);
+      expect(recomp[1].muscleGroups, contains('back'));
+      expect(recomp[2].floorG, 160);
+      expect(recomp[2].bandG, [160, 175]);
       // The ship gate: every driver names the outcome it drives and
       // carries its causal story.
       for (final drivers in byPhase.values) {

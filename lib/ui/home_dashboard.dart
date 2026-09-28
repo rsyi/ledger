@@ -682,18 +682,25 @@ class HomeDashboardState extends State<HomeDashboard> {
     final bw =
         observedWeightStats(daily, _today).bw7dAvg ??
         contemporaneousBodyweightLbs(daily, _today);
+    final programVersion = currentVersion(docs?.program);
     return evaluateWeekDrivers(
       configs: configs,
       inputs: WeekDriverInputs(
         graded: rows.isEmpty ? const [] : gradeSets(rows),
         readings: await _loadTopSetReadings(),
-        alternationAnchorMonday: _alternationAnchor(
-          currentVersion(docs?.program),
-        ),
+        alternationAnchorMonday: _alternationAnchor(programVersion),
         climbingDates: await _climbDates,
         cardioDates: await _loadCardioDates(),
         proteinByDay: await _loadProteinByDay(),
         bodyweightLb: bw,
+        // v9 hypertrophy counting: every logged strength set (name +
+        // reps — accessories/calisthenics included) against the
+        // program's declared exercise_muscle_map.
+        strengthSets: [
+          for (final r in rows)
+            LoggedSet(date: r.date, exercise: r.exercise, reps: r.reps),
+        ],
+        muscleMap: parseExerciseMuscleMap(programVersion),
       ),
       today: _today,
       weekStartDay: await _weekStartDay(),

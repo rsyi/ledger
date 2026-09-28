@@ -41,13 +41,27 @@
 ///                        (import-driven snapshot) → pending with
 ///                        [DriverEval.staleAsOf] for the "as of" tag.
 ///   bike_4x4             distinct 4x4 session days vs `target`.
+///   dual_exposure        v9 (post-cut-recomp-spec): each listed lift
+///                        needs BOTH a heavy exposure (a top-set
+///                        reading, same rule as top_single_per_lift)
+///                        and a hypertrophy exposure (≥ `hyp_sets_min`
+///                        logged sets with reps inside `hyp_reps`)
+///                        this week — two half-ticks per lift.
+///   hypertrophy_volume   v9: per-muscle-group weekly productive sets
+///                        vs the `band` (8-12), overlap-counted from
+///                        strength rows + climbing sessions +
+///                        calisthenics via the program's declared
+///                        exercise_muscle_map. Under the band mid-week
+///                        is pending; OVER the top is violated (the
+///                        excess-pulling caution).
 ///
 /// Pure Dart, no Flutter, no IO — the strip UI stays layout-only.
 library;
 
 import 'package:yaml/yaml.dart';
 
-import 'program_metrics.dart' show GradedSet, anchorMondayOf, weekStartOf;
+import 'program_metrics.dart'
+    show GradedSet, anchorMondayOf, mainLiftByExercise, weekStartOf;
 
 // ---------------------------------------------------------------------------
 // Config (dashboards.yaml phases.<phase>.weekly_drivers)
@@ -75,6 +89,28 @@ class WeekDriverConfig {
   /// protein_floor's g-per-lb-of-bodyweight floor.
   final double? floorGPerLb;
 
+  /// protein_floor v9: ABSOLUTE daily floor in grams (post-cut recomp:
+  /// 160). Wins over [floorGPerLb] when declared.
+  final double? floorG;
+
+  /// protein_floor v9: the absolute target band ([160, 175]) — display
+  /// context; the floor is the gate.
+  final List<double>? bandG;
+
+  /// hypertrophy_volume: the per-muscle weekly set band ([8, 12]).
+  final List<double>? band;
+
+  /// hypertrophy_volume: the muscle groups the band is evaluated
+  /// against (v9 hypertrophy_targets.muscle_groups).
+  final List<String> muscleGroups;
+
+  /// dual_exposure: minimum hypertrophy sets per lift per week (def 3).
+  final int? hypSetsMin;
+
+  /// dual_exposure: the rep range that counts as hypertrophy work
+  /// (def [3, 8]).
+  final List<int>? hypReps;
+
   /// top_single_per_lift: the every-two-weeks heavy rule (2026-09-25).
   /// A HEAVY exposure (reading with reps ≤ 2 at RPE ≥ 7.5) must exist
   /// within this many trailing days for squat/deadlift; the eval's
@@ -97,6 +133,12 @@ class WeekDriverConfig {
     this.target,
     this.cap,
     this.floorGPerLb,
+    this.floorG,
+    this.bandG,
+    this.band,
+    this.muscleGroups = const [],
+    this.hypSetsMin,
+    this.hypReps,
     this.heavySingleMaxDays,
     this.outcome,
     this.why,
@@ -132,6 +174,12 @@ Map<String, List<WeekDriverConfig>>? parseWeeklyDrivers(String? raw) {
       if (id.isEmpty) continue;
       final lifts = d['lifts'];
       final perLift = d['per_lift_targets'];
+      List<double>? numPair(Object? v) =>
+          v is List && v.length == 2 && v.every((e) => e is num)
+              ? [(v[0] as num).toDouble(), (v[1] as num).toDouble()]
+              : null;
+      final groups = d['muscle_groups'];
+      final hypReps = numPair(d['hyp_reps']);
       parsed.add(
         WeekDriverConfig(
           id: id,
@@ -149,6 +197,16 @@ Map<String, List<WeekDriverConfig>>? parseWeeklyDrivers(String? raw) {
           target: (d['target'] as num?)?.toDouble(),
           cap: (d['cap'] as num?)?.toDouble(),
           floorGPerLb: (d['floor_g_per_lb'] as num?)?.toDouble(),
+          floorG: (d['floor_g'] as num?)?.toDouble(),
+          bandG: numPair(d['band_g']),
+          band: numPair(d['band']),
+          muscleGroups: groups is List
+              ? [for (final g in groups) g.toString()]
+              : const [],
+          hypSetsMin: (d['hyp_sets_min'] as num?)?.toInt(),
+          hypReps: hypReps == null
+              ? null
+              : [hypReps[0].toInt(), hypReps[1].toInt()],
           heavySingleMaxDays: (d['heavy_single_max_days'] as num?)?.toInt(),
           outcome: d['outcome']?.toString(),
           why: d['why']?.toString(),
@@ -278,8 +336,81 @@ class DriverEval {
         'protein_floor': 'protein',
         'climbing_cap': 'climb',
         'bike_4x4': '4x4',
+        'dual_exposure': 'lifts',
+        'hypertrophy_volume': 'hyp sets',
       }[config.id] ??
       config.id;
+}
+
+/// One logged strength SET (one row) — the raw material the v9
+/// hypertrophy/dual-exposure counters read. Deliberately thinner than
+/// GradedSet: counting needs the exercise NAME (the muscle map is
+/// name-keyed and covers accessories/calisthenics the §2.5 grader
+/// ignores) and the reps.
+class LoggedSet {
+  final DateTime date;
+  final String exercise;
+  final int reps;
+
+  const LoggedSet({
+    required this.date,
+    required this.exercise,
+    required this.reps,
+  });
+}
+
+/// The v9 exercise → muscle-group credit map (program.yaml
+/// `exercise_muscle_map`): per-SET fractional credits per group, plus
+/// the per-SESSION climbing credits. Parsed by [parseExerciseMuscleMap].
+class MuscleMap {
+  /// Exact logged exercise name → {group: credit}. Lookup is exact
+  /// first, then longest declared PREFIX ("Muscle Up Purple Band"
+  /// counts under "Muscle Up").
+  final Map<String, Map<String, double>> exercises;
+
+  /// One climbing session's credits ({back: 3, forearms: 3, ...}).
+  final Map<String, double> climbingSession;
+
+  const MuscleMap({
+    required this.exercises,
+    this.climbingSession = const {},
+  });
+
+  /// Credits for a logged [exercise] name, or null when unmapped.
+  Map<String, double>? creditsFor(String exercise) {
+    final exact = exercises[exercise];
+    if (exact != null) return exact;
+    String? bestKey;
+    for (final key in exercises.keys) {
+      if (exercise.startsWith(key) &&
+          (bestKey == null || key.length > bestKey.length)) {
+        bestKey = key;
+      }
+    }
+    return bestKey == null ? null : exercises[bestKey];
+  }
+}
+
+/// Parses a program VERSION map's `exercise_muscle_map` (v9). Null when
+/// absent/malformed — the hypertrophy driver then reports pending.
+MuscleMap? parseExerciseMuscleMap(Map<Object?, Object?>? version) {
+  final raw = version?['exercise_muscle_map'];
+  if (raw is! Map) return null;
+  Map<String, double> credits(Object? m) => m is Map
+      ? {
+          for (final e in m.entries)
+            if (e.value is num) e.key.toString(): (e.value as num).toDouble(),
+        }
+      : const {};
+  final exercises = raw['exercises'];
+  if (exercises is! Map) return null;
+  return MuscleMap(
+    exercises: {
+      for (final e in exercises.entries)
+        e.key.toString(): credits(e.value),
+    },
+    climbingSession: credits(raw['climbing_session']),
+  );
 }
 
 /// Already-fetched observations the evaluators read. All dates may be
@@ -314,6 +445,15 @@ class WeekDriverInputs {
   /// Current bodyweight (lb) pricing the protein floor — 7-day avg.
   final double? bodyweightLb;
 
+  /// ALL logged strength rows (one per set, any exercise) — the v9
+  /// hypertrophy/dual-exposure counters' source. Includes calisthenics
+  /// rows (they live in the strength view).
+  final List<LoggedSet> strengthSets;
+
+  /// The program's declared exercise → muscle-group credit map (v9).
+  /// Null → hypertrophy_volume reports pending.
+  final MuscleMap? muscleMap;
+
   const WeekDriverInputs({
     this.graded = const [],
     this.readings,
@@ -322,6 +462,8 @@ class WeekDriverInputs {
     this.cardioDates = const [],
     this.proteinByDay = const {},
     this.bodyweightLb,
+    this.strengthSets = const [],
+    this.muscleMap,
   });
 }
 
@@ -520,10 +662,26 @@ List<DriverEval> evaluateWeekDrivers({
           sum += grams;
           days++;
         });
+        final avg = days == 0 ? null : sum / days;
+        // v9: an ABSOLUTE floor_g (post-cut recomp 160-175 g/day) wins
+        // over the per-lb floor when declared — no bodyweight needed.
+        if (c.floorG != null) {
+          out.add(
+            DriverEval(
+              config: c,
+              status: avg == null
+                  ? DriverStatus.pending
+                  : avg >= c.floorG!
+                      ? DriverStatus.met
+                      : DriverStatus.violated,
+              value: avg == null ? '— g' : '${avg.round()} g',
+            ),
+          );
+          break;
+        }
         final bw = inputs.bodyweightLb;
-        final gPerLb = days == 0 || bw == null || bw <= 0
-            ? null
-            : (sum / days) / bw;
+        final gPerLb =
+            avg == null || bw == null || bw <= 0 ? null : avg / bw;
         final floor = c.floorGPerLb;
         out.add(
           DriverEval(
@@ -578,6 +736,124 @@ List<DriverEval> evaluateWeekDrivers({
             config: c,
             status: sessions >= t ? DriverStatus.met : DriverStatus.pending,
             value: frac(sessions, t),
+          ),
+        );
+
+      // v9 (post-cut-recomp-spec): each main lift needs BOTH a heavy
+      // exposure (a top-set reading — same ground truth as
+      // top_single_per_lift) and a hypertrophy exposure (≥ hyp_sets_min
+      // sets in the hyp_reps range) every week. Two half-ticks per
+      // lift; a heavy triple double-counts into the hypertrophy half by
+      // design (reps 3 sits in both bands).
+      case 'dual_exposure':
+        final lifts = c.lifts.isEmpty ? _defaultLifts : c.lifts;
+        final hypMin = c.hypSetsMin ?? 3;
+        final repsLo = c.hypReps == null ? 3 : c.hypReps![0];
+        final repsHi = c.hypReps == null ? 8 : c.hypReps![1];
+        final readings = inputs.readings ?? const <TopSetReading>[];
+        bool heavy(String lift) => readings.any(
+              (r) =>
+                  r.lift == lift &&
+                  r.kind != 'light_week' &&
+                  inWeek(r.date),
+            );
+        int hypSets(String lift) => inputs.strengthSets
+            .where(
+              (s) =>
+                  mainLiftByExercise[s.exercise] == lift &&
+                  s.reps >= repsLo &&
+                  s.reps <= repsHi &&
+                  inWeek(s.date),
+            )
+            .length;
+        final ticks = <DriverTick>[
+          for (final lift in lifts)
+            DriverTick(
+              lift: lift,
+              count: (heavy(lift) ? 1 : 0) +
+                  (hypSets(lift) >= hypMin ? 1 : 0),
+              target: 2,
+            ),
+        ];
+        final done = ticks.fold<int>(0, (n, t) => n + t.count);
+        out.add(
+          DriverEval(
+            config: c,
+            status: ticks.every((t) => t.done)
+                ? DriverStatus.met
+                : DriverStatus.pending,
+            value: frac(done, lifts.length * 2),
+            ticks: ticks,
+          ),
+        );
+
+      // v9: weekly productive sets per muscle group vs the 8-12 band,
+      // overlap-counted from strength rows (incl. calisthenics) +
+      // climbing sessions via the program's exercise_muscle_map. Under
+      // the band mid-week = pending (never punitive); OVER the top =
+      // violated (the excess-pulling caution). No map plumbed →
+      // pending with no ticks (a newer config on an older program
+      // can't count honestly).
+      case 'hypertrophy_volume':
+        final map = inputs.muscleMap;
+        final band = c.band ?? const [8.0, 12.0];
+        final lo = band[0] <= band[1] ? band[0] : band[1];
+        final hi = band[0] <= band[1] ? band[1] : band[0];
+        if (map == null) {
+          out.add(
+            DriverEval(
+              config: c,
+              status: DriverStatus.pending,
+              value: '— sets',
+            ),
+          );
+          break;
+        }
+        final groups = c.muscleGroups.isNotEmpty
+            ? c.muscleGroups
+            : {
+                for (final m in map.exercises.values) ...m.keys,
+              }.toList();
+        final counts = {for (final g in groups) g: 0.0};
+        for (final s in inputs.strengthSets) {
+          if (!inWeek(s.date)) continue;
+          final credits = map.creditsFor(s.exercise);
+          if (credits == null) continue;
+          for (final e in credits.entries) {
+            if (counts.containsKey(e.key)) {
+              counts[e.key] = counts[e.key]! + e.value;
+            }
+          }
+        }
+        final climbSessions = <DateTime>{
+          for (final d in inputs.climbingDates)
+            if (inWeek(d)) _day(d),
+        }.length;
+        for (final e in map.climbingSession.entries) {
+          if (counts.containsKey(e.key)) {
+            counts[e.key] = counts[e.key]! + climbSessions * e.value;
+          }
+        }
+        final ticks = <DriverTick>[
+          for (final g in groups)
+            DriverTick(
+              lift: g,
+              count: counts[g]!.round(),
+              target: lo.round(),
+            ),
+        ];
+        final over = counts.values.any((v) => v.round() > hi);
+        final inBand = ticks.where((t) => t.done).length;
+        out.add(
+          DriverEval(
+            config: c,
+            status: over
+                ? DriverStatus.violated
+                : inBand == groups.length
+                    ? DriverStatus.met
+                    : DriverStatus.pending,
+            value: frac(inBand, groups.length),
+            ticks: ticks,
           ),
         );
 

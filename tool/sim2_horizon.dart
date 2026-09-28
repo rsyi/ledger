@@ -21,6 +21,12 @@
 // own 13%-at-154 anchor implies) pending the Nov DEXA.
 //
 // Run: dart run tool/sim2_horizon.dart
+//
+// NOTE (2026-09-27): this CLI still carries the v8 bulk/recomp dials it
+// was written with. The AUTHORITATIVE dials + presets live in
+// lib/services/sim2_harness.dart (sim2BaselineDials — v9 post-cut
+// template: N=4, W=30), pinned by test/sim2_model_test.dart; prefer the
+// harness for current horizon numbers.
 
 import 'dart:math';
 

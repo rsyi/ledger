@@ -103,26 +103,38 @@ List<Sim2Block>? sim2BlocksFromProgramDocs(Map<Object?, Object?>? program) {
 // Baseline dials per block type + week types (from tool/sim2_horizon.dart)
 // ---------------------------------------------------------------------------
 
-/// Recomposition-variant baseline rate for blocks 2-7 (program.yaml v8,
-/// 2026-09-26): the 0..+0.15 lb/wk band's midpoint. [log]
+/// Recomposition-variant baseline rate for blocks 2-7 (program.yaml v9
+/// soft band [-0.1, 0.25] — flat-to-modest-rise; midpoint ≈ 0.075 kept
+/// from the v8 [0, 0.15] band, the "hold ~flat" intent). [log]
 const double sim2RecompR = 0.075;
 
-/// Recomp protein baseline, g/lb: the 1.0-1.1 target's midpoint. [log]
+/// Recomp protein baseline, g/lb: v9's ABSOLUTE 160-175 g/day at the
+/// expected ~157-160 lb maintenance bw ≈ 1.0-1.1 g/lb — midpoint kept.
+/// [log]
 const double sim2RecompProtein = 1.05;
 
+/// POST-CUT template dials (program.yaml v9, post-cut-recomp-spec
+/// 2026-09-27): W = the template's ~productive sets — 18 planned
+/// main-lift working sets + ~12 prose hypertrophy/accessory sets ≈ 30
+/// [log: counted from the v9 weekly_template]; N = the heavy
+/// exposures — ONE top set (1-3 @ RPE 7-8) per lift per week = 4
+/// (down from the bulk template's 6: the 8.5-9 top-set days and the
+/// Saturday singles are gone) [log].
+const double sim2PostCutN = 4;
+const double sim2PostCutW = 30;
+
 /// [log/assume] cut dials from current logged weeks (D~3.5, W~14, N~2-3,
-/// K=2 with the Tuesday limit session); training dials for blocks 2-7
-/// from spec §0 + program targets. Climbing-block N=3 [assume]: top-set
-/// RPE cap 8 kills most sets that count as near-max (RPE 8.5+).
+/// K=2 with the Tuesday limit session); post-cut training dials from
+/// the v9 template ([sim2PostCutN]/[sim2PostCutW]).
 ///
-/// RECOMP BASELINE (2026-09-26, program.yaml v8): blocks 2-7 run the
-/// recomposition variant — r = [sim2RecompR] (0..0.15 band midpoint,
-/// replacing the calendar's superseded bulk rates 0.4/0.2) and
-/// p = [sim2RecompProtein] (1.0-1.1 g/lb). The cut (block 0) and the
-/// reverse diet (block 1) are outside the variant and keep the
-/// calendar r. The old bulk trajectory is reachable via the
-/// 'Bulk plan (inactive)' preset, which restores r = block rate and
-/// the bulk-era protein.
+/// RECOMP BASELINE (v9, 2026-09-27): blocks 1-7 run the post-cut
+/// template — N=4 heavy exposures, W≈30 productive sets — with
+/// r = [sim2RecompR] and p = [sim2RecompProtein] for the rated blocks
+/// (2-7). The reverse block keeps N=3 (its tops are capped at RPE 7 —
+/// sub-near-max) but carries the template's volume. The cut (block 0)
+/// is untouched. The superseded bulk trajectory is reachable via the
+/// 'Bulk plan (inactive)' preset, which restores the bulk-era
+/// rates/protein AND the bulk template's N/W.
 Dials sim2BaselineDials(Sim2Block b) {
   switch (b.emphasis) {
     case 'cut':
@@ -130,15 +142,16 @@ Dials sim2BaselineDials(Sim2Block b) {
           dSessions: 3.5, n: 3, w: 14, k: 2, kLim: 1, z: 1, q: 1, r: b.r);
     case 'reverse':
       return Dials(
-          dSessions: 4, n: 3, w: 20, k: 2, kLim: 1, z: 1, q: 1, r: b.r);
+          dSessions: 4, n: 3, w: sim2PostCutW, k: 2, kLim: 1, z: 1, q: 1,
+          r: b.r);
     case 'climbing':
       return Dials(
-          dSessions: 4, n: 3, w: 28, k: 3, kLim: 1, h: 1, z: 1, q: 1,
-          r: sim2RecompR, p: sim2RecompProtein);
+          dSessions: 4, n: sim2PostCutN, w: sim2PostCutW, k: 3, kLim: 1,
+          h: 1, z: 1, q: 1, r: sim2RecompR, p: sim2RecompProtein);
     default: // lifting
       return Dials(
-          dSessions: 4, n: 6, w: 28, k: 2, kLim: 0, z: 1, q: 1,
-          r: sim2RecompR, p: sim2RecompProtein);
+          dSessions: 4, n: sim2PostCutN, w: sim2PostCutW, k: 2, kLim: 0,
+          z: 1, q: 1, r: sim2RecompR, p: sim2RecompProtein);
   }
 }
 
@@ -273,17 +286,22 @@ class Sim2Preset {
 
 final List<Sim2Preset> sim2Presets = [
   Sim2Preset('baseline', 'Baseline', 'the declared plan', (b, d, st) {}),
-  // The superseded bulk trajectory (program.yaml v8
-  // inactive_bulk_variant): restores the calendar's block rates
-  // (0.4 blocks 2-5, 0.2 blocks 6-7 — b.r carries them verbatim) and
-  // the bulk-era 0.8-1.0 protein for blocks 2-7. Blocks 0-1 were never
-  // under the variant, so their dials are already the bulk ones.
+  // The superseded bulk trajectory (program.yaml inactive_bulk_variant):
+  // restores the calendar's block rates (0.4 blocks 2-5, 0.2 blocks
+  // 6-7 — b.r carries them verbatim), the bulk-era 0.8-1.0 protein AND
+  // the bulk template's training shape (N=6 lifting / 3 climbing,
+  // W=28; reverse W=20) — v9's post-cut N/W belong to the recomp
+  // template only, so this preset must reproduce the ORIGINAL
+  // fit-report pins. Block 0 was never under the variant.
   Sim2Preset('bulk_plan', 'Bulk plan (inactive)',
-      'the superseded 154→170 bulk — old rates, old protein',
+      'the superseded 154→170 bulk — old rates, protein and template',
       (b, d, st) {
+    if (b.emphasis == 'reverse') d.w = 20;
     if (b.n >= 2) {
       d.r = b.r;
       d.p = 0.9;
+      d.w = 28;
+      d.n = b.emphasis == 'climbing' ? 3 : 6;
     }
   }),
   Sim2Preset('climb_more', 'Climb more', 'K=4, H=1 all year — the budget bites lifting',

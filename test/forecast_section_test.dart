@@ -207,7 +207,7 @@ void main() {
     expect(red, isNotEmpty,
         reason: 'the baseline cut runs L=6.9 > 6.0 → red spans');
     // The §8 confidence-collapse caption with the week count.
-    expect(find.textContaining('over-budget weeks: 56'), findsOneWidget);
+    expect(find.textContaining('over-budget weeks: 38'), findsOneWidget); // v9 dials
     expect(find.textContaining('confidence'), findsOneWidget);
   });
 

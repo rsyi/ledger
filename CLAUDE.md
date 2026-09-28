@@ -84,7 +84,7 @@ Schema additions go in BOTH places: Rust (`src/schema/`, `src/parse/`,
 round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 `lib/services/input_parser.dart`, `lib/services/engine_schema_adapter.dart`).
 
-## Current feature state (all live on device as of 2026-09-17)
+## Current feature state (all live on device as of 2026-09-28)
 
 - **Sync/store**: engine SQLite is source of truth; Sheets is the
   mirror. Ingest primitive: match-by-date OR match-by-dimension
@@ -225,6 +225,43 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   still pins 1023/1022/0.45, recomp gap ≈25 lb. Resolver slice shape
   UNCHANGED (ledger-mcp needed only test-pin updates, no deploy);
   shared fixtures pin v10 + the Tue/Fri swap.
+- **Recomp TRACKING layer (2026-09-28, coach/recomp-tracking-spec.md —
+  canonical, user-authored)**: adherence INPUTS vs generated OUTCOMES.
+  SCHEMAS (existing keys only — NO Rust/dylib change; engine's
+  additive header merge adds columns, new tabs auto-create): strength
+  `set_type` dropdown (warmup/heavy/hypertrophy/skill/rehab, optional,
+  autofill:false; RIR = 10 − RPE convention documented on rpe — NO
+  second field); NEW `calisthenics` view+input (skill dropdown,
+  variation, sets/reps/hold_seconds, assistance, clean switch, rpe;
+  skill quality NOT volume; dashboards entry domain, person-standing
+  icon); weight `waist_in` (weekly navel); cardio
+  `completed_intervals`; daily_notes recovery subjectives
+  (sleep_hours/sleep_quality/fatigue/soreness/pain/readiness — §2.4
+  amendment noted in the airledger intent-layers spec; pain OUTRANKS
+  numbers). WEEKLY REVIEW: lib/services/recomp_review.dart (pure,
+  16 tests) — daily nutrition adherence vs targets-IN-FORCE (block-0
+  nulls → honest "no target"), set_type-aware productive sets/muscle
+  (untagged legacy rows effort-inferred: RPE<6 = warmup, else counted;
+  climbing overlap credited), avg RIR, heavy exposures (readings),
+  V5+ climbing deriveds, calisthenics bests, 4x4 workload (speed ×
+  incline) trend at comparable HR (±5 bpm), recovery aggregates, body
+  7d avgs + waist, the 10-question coaching decision + markdown.
+  Review weeks are MON-SUN (schedule shape), deliberately NOT the
+  Saturday accounting week. tool/program_status_update.dart: Sundays
+  (or --weekly) rewrite the `weekly_review` tab (8 weeks,
+  newest-first: week_start/week_end/generated_at/markdown);
+  --weekly-brief [--week=YYYY-MM-DD] prints one review;
+  coach_nightly.sh injects it into SUNDAY briefings. MCP
+  `get_weekly_review` (deployed) serves the tab. `nutrition.
+  maintenance_kcal` in a future program version feeds Q2 (unset →
+  "no data" until block 1 records it). HOME DASHBOARD: in the recomp
+  phase the THIS WEEK strip becomes the spec's one-screen rows
+  (BODY/NUTRITION/HYPERTROPHY/STRENGTH/SKILLS/CARDIO/RECOVERY, live
+  weekly review over local rows incl. the new calisthenics +
+  daily_notes sources; placeholders for waist/DEXA/recovery until
+  data flows; detail sheet ends on the spec's closing question);
+  other phases keep the driver checklist (test-pinned). Hidden until
+  the phase flips (cut → effective key stays cut).
 - **Post-cut recomp program (v9, 2026-09-27, superseded by v10 above)**:
   coach/program.yaml v9
   integrates the user's `coach/post-cut-recomp-spec.md` (user-authored;
@@ -388,6 +425,16 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
+- Recomp tracking (2026-09-28): user should start TAGGING set_type on
+  new strength rows (legacy rows stay effort-inferred), take the first
+  weekly waist measurement, and log sleep/fatigue/soreness in daily
+  notes — the review says "no data" honestly until then. The
+  calisthenics tab auto-creates on the app's first engine sync after
+  this install. No DEXA data source yet (dashboard shows "DEXA —" +
+  latest scale bf). `nutrition.maintenance_kcal` gets recorded in a
+  new program version at the end of block 1 — Q2 of the weekly
+  decision is "no data" until then. 4x4 `completed_intervals` is
+  session-level by convention (fill on the day's last row).
 - Kaya (in-app Gmail flow, 2026-09-21 — supersedes the 2026-09-18
   CLI-only shape): climbing data is STILL never synced into the engine
   ledger; the `kaya_ascents` tab replace-all just moved in-app.

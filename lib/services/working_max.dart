@@ -927,6 +927,11 @@ List<({num weight, num reps})> warmupRamp(
 /// Saturday 8.5 single where the policy allows, and the warm-up ramp
 /// toward the top single. Rounds to 5 lb (2.5 for bench/press with
 /// [microplates]).
+///
+/// Strength wave (program.yaml v10): when [topReps] is given, the week
+/// prescribes exactly ONE top-set rep count (the wave's 5/3/1) —
+/// topSetOptions carries only that entry, priced off the same chart at
+/// the same policy target, and the warm-up ramps toward it.
 Prescription buildPrescription({
   required String lift,
   required LoadPolicy policy,
@@ -934,6 +939,7 @@ Prescription buildPrescription({
   Object? warmupProtocol,
   double? activeCapRpe,
   bool microplates = false,
+  int? topReps,
   List<WmDecision> recentDecisions = const [],
 }) {
   final rounding =
@@ -944,15 +950,17 @@ Prescription buildPrescription({
     target = policy.capRpe!;
   }
 
+  final repOptions = topReps != null ? [topReps] : const [1, 2, 3];
   final topSetOptions = <int, num>{
-    for (final reps in const [1, 2, 3])
+    for (final reps in repOptions)
       reps: _roundTo(workingMax * rpePct(target, reps), rounding),
   };
   final backOffWeight = _roundTo(workingMax * 0.82, rounding);
   final saturdaySingle = policy.saturdaySingle
       ? _roundTo(workingMax * rpePct(8.5, 1), rounding)
       : null;
-  final warmups = warmupRamp(warmupProtocol, lift, topSetOptions[1]!);
+  final warmups = warmupRamp(
+      warmupProtocol, lift, topSetOptions[topReps ?? 1]!);
   final last = recentDecisions.length <= 3
       ? recentDecisions
       : recentDecisions.sublist(recentDecisions.length - 3);

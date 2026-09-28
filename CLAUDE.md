@@ -185,7 +185,48 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   NOT wired from coach_flags (volume flags are bulk-calibrated and
   fire every block-0 cut week — would freeze all lifts vs §3); app
   on-log evaluation + MCP/TS twin = WM-3.
-- **Post-cut recomp program (v9, 2026-09-27)**: coach/program.yaml v9
+- **Post-cut FINAL spec (program.yaml v10, 2026-09-27)**: integrates the
+  user's FINAL `coach/post-cut-final-spec.md` (canonical; supersedes
+  post-cut-recomp-spec.md where they differ). On top of v9: STRENGTH
+  WAVE — repeating 4-week 5/3/1/deload per lift @ RPE 7-8, anchored to
+  BLOCK START so block week 4 (light) IS the wave deload and week 8
+  (test) is the second deload carrying the block-result single; block 1
+  (3 wk) runs 5/3/1 with no deload. Encoded as `strength_wave`; planned
+  top rows carry `reps: top`, resolved by program_current.dart's
+  strengthWaveTopReps (light→5 @ RPE-6 cap, test→1); readings still
+  evaluate through the UNCHANGED load_policies (extraction is
+  rep-agnostic). CONCRETE schedule: weekly_template rewritten verbatim
+  (backoffs 3-4×5-8, deadlift 2×4-6; RDL/BSS/HLR/rows/laterals/triceps/
+  face pulls/ext rot/curls/leg press/leg curl/calf raises) and the
+  planner `planned` lists NOW INCLUDE ACCESSORIES (low-end reps, no
+  rpe/notes/weight; HSPU/front-lever stay prose — no rep range in the
+  spec). Tue = TECHNIQUE climbing (V3-V5) / Fri = LIMIT — v9 had them
+  SWAPPED; fixed. `emphasis_volume` (climbing blocks: non-top sets
+  ×0.6-0.7, tops preserved), `volume_ramp` (maintenance wk1 ×0.65 /
+  wk2 ×0.85, accessories only, anchored 2026-12-14), wave deload ×0.5
+  non-top on light/test — all applied by week_planner (plan_v4;
+  entries may carry a `top` marker, not persisted). `expectations_1yr`
+  (NOT targets) → faint "expectation range, not target" bands on the
+  Program forecast (strength/bw/BF, sim2ExpectationsFromProgramDocs →
+  ForecastInputs.expectations). `plateau_checklist` (7 causes before
+  +100 kcal) in weight_rules/stall_rule. exercise_muscle_map extended
+  with the new accessories (Hack Squat, Leg Curl, Calf Raise, Triceps
+  Extension, Cable External Rotation, EZ-Bar Preacher/Strict Wall
+  curls, dumbbell curls/rows, Back to Wall Handstand Pushup, Lateral
+  Cable Raise — best-judgment credits, user review wanted). WM §4
+  prescriptions are wave-aware (buildPrescription topReps; week-plan Rx
+  shows "Top set (wave)" + planned-row backoffs). Sim2 v10 dials:
+  N stays 4 (wave ≈ same heavy count); W recounted from the concrete
+  schedule 57 lifting / 38 climbing / 50 reverse (v9 estimated 30 —
+  CAVEAT: b fitted around W≈20, extrapolation), every post-cut block
+  kLim=1 (Fri limit year-round; bulk preset pins its own kLim) →
+  baseline 999 det / 59 over-budget (L 7.4 vs cap 7.0 on normal lifting
+  weeks — the plan's honest red flag) / MC 997, P(V8) 0.79; bulk preset
+  still pins 1023/1022/0.45, recomp gap ≈25 lb. Resolver slice shape
+  UNCHANGED (ledger-mcp needed only test-pin updates, no deploy);
+  shared fixtures pin v10 + the Tue/Fri swap.
+- **Post-cut recomp program (v9, 2026-09-27, superseded by v10 above)**:
+  coach/program.yaml v9
   integrates the user's `coach/post-cut-recomp-spec.md` (user-authored;
   where it conflicts with program-2026-27-source.md THE SPEC WINS).
   Post-cut (Dec 14+, blocks 1-7): NEW weekly template (Mon squat / Tue
@@ -414,16 +455,27 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   ~/repos/airledger-fitness. The sheet columns + backfilled data are
   ALREADY live (harmless to the old app — unknown columns are
   ignored).
-- **Post-cut recomp year (program.yaml v9, 2026-09-27 — supersedes the
-  v8 recomp entry)**: the 2026-27 year runs the post-cut recomp per
-  the user's `airledger-fitness/coach/post-cut-recomp-spec.md` from
-  Dec 14 (see feature state). Follow-ups from it:
-  - USER REVIEW WANTED: the v9 `exercise_muscle_map` credits (incl.
-    the per-climbing-session pulling credit back 3 / forearms 3 /
-    biceps 1.5 / core 1 and every per-exercise fraction) are Claude's
-    best-judgment defaults — correct them in program.yaml; the
-    hypertrophy counters re-read on next sync. Same for the climb-day
-    assignment (Tue = limit, Fri = technique/volume — swap freely).
+- **Post-cut recomp year (program.yaml v10, 2026-09-27 — supersedes the
+  v9/v8 recomp entries)**: the 2026-27 year runs the post-cut recomp
+  per the user's `airledger-fitness/coach/post-cut-final-spec.md`
+  (FINAL; canonical) from Dec 14 (see feature state). Follow-ups:
+  - USER REVIEW WANTED: the `exercise_muscle_map` credits (incl. the
+    per-climbing-session pulling credit back 3 / forearms 3 /
+    biceps 1.5 / core 1, every per-exercise fraction, and the v10
+    additions for the new accessories) are Claude's best-judgment
+    defaults — correct them in program.yaml; the hypertrophy counters
+    re-read on next sync. The climb-day assignment is now FIXED by the
+    final spec (Tue = technique V3-V5, Fri = limit) — no longer
+    swap-freely.
+  - Wed HSPU + front-lever progressions are deliberately NOT planned
+    as rows (the spec gives quality-set counts, no rep range — the
+    planner never fabricates); pistol squat 3x3 IS planned. Add rows
+    if the user settles rep prescriptions.
+  - Sim W=57 is an extrapolation of the b-slope fitted around W≈20,
+    and the v10 baseline runs L 7.4 vs cap 7.0 on normal lifting
+    weeks (59 over-budget weeks flagged red) — the weekly Fri limit
+    session is the tipping term. Watch real fatigue in block 1-2 and
+    consider re-fitting once post-cut weeks accumulate.
   - User: book a DEXA for the week of Nov 2-8 (at ~157 lb); repeat
     every 3-4 months per the spec.
   - Daily-note gap: the one-line daily note (fingers, elbows, back,
@@ -435,10 +487,9 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     tracked yet"; the conditioned weight_rules (allow rise if waist
     stable etc.) can only run on judgment until a waist source lands —
     then wire a real eigenvector.
-  - Hypertrophy accessories in the v9 template are PROSE-only (RDL /
-    leg press / pull-ups / curls / laterals) — the planner plans main
-    lifts only; consider planned accessory rows or a template once
-    the user settles the exercise selection.
+  - ~~Hypertrophy accessories PROSE-only~~ RESOLVED in v10: the final
+    spec prescribes them concretely and the planner plans them
+    (accessory rows get no weights — no main-lift reference).
   - meals dashboard `protein_series` still shades goal_band_per_lb
     0.8-1.0 (cut-correct). Post-cut the spec's target is ABSOLUTE
     160-175 g/day — the driver carries it; flip the meals metric to

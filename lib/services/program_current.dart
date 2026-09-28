@@ -108,6 +108,57 @@ int weekStartDayOf(Map<Object?, Object?>? version) =>
     _weekdayByName[version?['week_start']?.toString().trim().toLowerCase()] ??
     DateTime.monday;
 
+/// The strength-wave week (1..4) for a block week under the version's
+/// `strength_wave` key (program.yaml v10, final post-cut spec): the
+/// repeating 4-week 5/3/1/deload wave, anchored to the BLOCK START —
+/// wave week = ((week_in_block − 1) mod 4) + 1. Null when the version
+/// declares no wave, the block is outside `applies_to_blocks`, or the
+/// inputs are malformed. Blocks 2-7 being 8 weeks, block weeks 4
+/// (light) and 8 (test) are both wave week 4 — the deload.
+int? strengthWaveWeek(
+  Map<Object?, Object?>? version, {
+  required int? blockN,
+  required int weekInBlock,
+}) {
+  final wave = version?['strength_wave'];
+  if (wave is! Map || blockN == null || weekInBlock < 1) return null;
+  final applies = wave['applies_to_blocks'];
+  if (applies is! List || !applies.contains(blockN)) return null;
+  return (weekInBlock - 1) % 4 + 1;
+}
+
+/// Prescribed TOP-SET reps for a wave week (program.yaml v10
+/// `strength_wave.top_reps_by_week`, week-type aware):
+///   * test week → 1 (the wave deload carries the block-result single);
+///   * light week → the wave-restart week-1 reps (a light top-5 at the
+///     RPE-6 cap — the block's light week IS the wave's deload);
+///   * otherwise → top_reps_by_week[wave week] (5/3/1). Wave week 4 on
+///     a NORMAL week can't occur under the v10 calendar; it falls back
+///     to the week-1 reps rather than guessing.
+/// Null when no wave applies or the table is malformed — callers must
+/// skip the top set rather than invent reps.
+int? strengthWaveTopReps(
+  Map<Object?, Object?>? version, {
+  required int? blockN,
+  required int weekInBlock,
+  String? weekType,
+}) {
+  final waveWeek =
+      strengthWaveWeek(version, blockN: blockN, weekInBlock: weekInBlock);
+  if (waveWeek == null) return null;
+  final wave = version!['strength_wave'] as Map;
+  final byWeek = wave['top_reps_by_week'];
+  if (byWeek is! Map) return null;
+  int? repsAt(int wk) {
+    final v = byWeek['$wk'] ?? byWeek[wk];
+    return v is num ? v.toInt() : null;
+  }
+
+  if (weekType == 'test') return 1;
+  if (weekType == 'light') return repsAt(1);
+  return repsAt(waveWeek) ?? repsAt(1);
+}
+
 /// Resolve the program slice for [date]. Returns null when [date] falls
 /// outside every block of the current program version (e.g. pre-program)
 /// or when no non-pending version exists.

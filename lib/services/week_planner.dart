@@ -19,6 +19,8 @@
 ///    PlanStore path coach proposals use.
 library;
 
+import 'dart:math' show max;
+
 import 'package:airledger_engine/airledger_engine.dart';
 import 'package:intl/intl.dart';
 
@@ -26,7 +28,7 @@ import '../models/planned_entry.dart';
 import '../models/view_schema.dart';
 import 'plan_store.dart';
 import 'program_current.dart'
-    show currentVersion, programCurrent, weekStartDayOf;
+    show currentVersion, programCurrent, strengthWaveTopReps, weekStartDayOf;
 import 'program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
 import 'program_provider.dart';
@@ -83,11 +85,13 @@ num _roundTo(num x, num step) {
 /// accepted; it's normalised to Monday).
 ///
 /// Returned maps have keys drawn from exactly {date, exercise, reps,
-/// weight} — never rpe or notes:
+/// weight, top} — never rpe or notes:
 ///   - `date`     — UTC-midnight [DateTime] of the entry's weekday
 ///   - `exercise` — the exact logged exercise name (metrics depend on it)
 ///   - `reps`     — planned reps for that one set
-///   - `weight`   — only when computable; never guessed.
+///   - `weight`   — only when computable; never guessed
+///   - `top`      — true on wave top-set rows (`reps: top` in the
+///     program); consumers ignore it when persisting.
 ///
 /// Weight fill, v3 (working-max controller, spec §0: percentages hang off
 /// the working max): when the lift has an entry in [workingMaxes] and a
@@ -114,6 +118,21 @@ num _roundTo(num x, num step) {
 /// Alternation-aware: when a day's `planned` is an a/b map, parity comes
 /// from `planned_alternation.anchor_monday` — whole ISO weeks since the
 /// anchor, even (incl. 0) = `a`, odd = `b`.
+///
+/// Strength wave (program.yaml v10 `strength_wave`, final post-cut
+/// spec): a planned item with `reps: top` resolves to the wave's
+/// prescribed top reps for the week (5/3/1; light week = the wave-
+/// restart 5, test week = the block-result single) via
+/// [strengthWaveTopReps]; when no wave is in force the row is SKIPPED
+/// (never guessed). Volume multipliers on NON-top rows, sets scaled to
+/// max(1, round(sets × m)):
+///   * wave deload (`deload_volume_multiplier`) on light/test weeks in
+///     wave blocks — the deload is reduced volume, not just intensity;
+///   * `emphasis_volume.climbing_block_lifting_multiplier` (midpoint)
+///     in climbing-emphasis blocks — heavies (top sets) preserved;
+///   * `volume_ramp` (midpoint, ACCESSORY rows only — exercises
+///     outside the four main lifts) keyed to whole weeks since its
+///     anchor_monday: the post-cut weeks 1-2 ease-in.
 ///
 /// Weeks that fall outside every block (pre-program) and days without a
 /// `planned` key produce nothing. Malformed structures are skipped, never
@@ -204,12 +223,24 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     ];
   }
 
+  // Volume multipliers (program.yaml v10). Midpoint of a [lo, hi] band;
+  // scalars pass through.
+  double? midOf(Object? v) {
+    if (v is num) return v.toDouble();
+    if (v is List && v.length == 2 && v[0] is num && v[1] is num) {
+      return ((v[0] as num) + (v[1] as num)) / 2;
+    }
+    return null;
+  }
+
+  final wave = version['strength_wave'];
   final entries = <Map<String, Object?>>[];
   for (var i = 0; i < 7; i++) {
     final day = weekStart.add(Duration(days: i));
     final block = _blockFor(version, day);
     if (block == null) continue; // outside every block: nothing to plan
     final blockN = block['n'];
+    final blockNInt = blockN is num ? blockN.toInt() : null;
     final block0Template = version['weekly_template_block_0'];
     final Object? template = (blockN == 0 && block0Template is Map)
         ? block0Template
@@ -223,17 +254,49 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     if (planned is Map) planned = planned[parity]; // alternation day
     if (planned is! List) continue;
 
+    // The day's slice (week type + week-in-block) feeds both the load
+    // policy and the strength wave.
+    final slice = programCurrent(program, null, day);
+    final weekType = slice?.weekType;
+    final weekInBlock = slice?.weekInBlock ?? 0;
+
     // The day's load policy (v3 weight path). Week-type overrides
     // (light/test) come through programCurrent's resolution.
     LoadPolicy? dayPolicy;
     if (policies.isNotEmpty) {
-      final rawBlockN = block['n'];
       dayPolicy = policyForDate(
         policies,
         date: day,
-        block: rawBlockN is num ? rawBlockN.toInt() : null,
-        weekType: programCurrent(program, null, day)?.weekType,
+        block: blockNInt,
+        weekType: weekType,
       );
+    }
+
+    // Non-top volume multipliers for this day (v10; all default 1.0 —
+    // pre-v10 programs and block 0 are untouched).
+    final waveApplies = wave is Map &&
+        (wave['applies_to_blocks'] as List?)?.contains(blockNInt) == true;
+    var nonTopMult = 1.0;
+    if (waveApplies && (weekType == 'light' || weekType == 'test')) {
+      nonTopMult *= midOf(wave['deload_volume_multiplier']) ?? 1.0;
+    }
+    if (block['emphasis']?.toString() == 'climbing') {
+      final ev = version['emphasis_volume'];
+      nonTopMult *=
+          midOf(ev is Map ? ev['climbing_block_lifting_multiplier'] : null) ??
+              1.0;
+    }
+    var accessoryRampMult = 1.0;
+    final ramp = version['volume_ramp'];
+    if (ramp is Map && ramp['anchor_monday'] != null) {
+      final anchor = _parseDay(ramp['anchor_monday']);
+      final dayMonday = day.subtract(Duration(days: day.weekday - 1));
+      final rampWeek = dayMonday.difference(anchor).inDays ~/ 7 + 1;
+      final byWeek = ramp['multipliers_by_week'];
+      if (rampWeek >= 1 && byWeek is Map) {
+        accessoryRampMult =
+            midOf(byWeek['$rampWeek'] ?? byWeek[rampWeek]) ?? 1.0;
+      }
     }
 
     // Pass 1: expand working sets (with weights where computable).
@@ -241,10 +304,31 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     for (final item in planned) {
       if (item is! Map) continue;
       final exercise = item['exercise'];
-      final reps = item['reps'];
-      if (exercise is! String || exercise.isEmpty || reps is! num) continue;
+      final rawReps = item['reps'];
+      num? reps;
+      var isTop = false;
+      if (rawReps is num) {
+        reps = rawReps;
+      } else if (rawReps?.toString() == 'top') {
+        // Wave-prescribed top reps; no wave in force → skip, never guess.
+        isTop = true;
+        reps = strengthWaveTopReps(
+          version,
+          blockN: blockNInt,
+          weekInBlock: weekInBlock,
+          weekType: weekType,
+        );
+      }
+      if (exercise is! String || exercise.isEmpty || reps == null) continue;
       final rawSets = item['sets'];
-      final sets = rawSets is num && rawSets >= 1 ? rawSets.toInt() : 1;
+      var sets = rawSets is num && rawSets >= 1 ? rawSets.toInt() : 1;
+      if (!isTop) {
+        var m = nonTopMult;
+        // The ramp eases ACCESSORIES only — main-lift back-offs follow
+        // the wave/RPE targets, not the ramp.
+        if (mainLiftByExercise[exercise] == null) m *= accessoryRampMult;
+        if (m != 1.0) sets = max(1, (sets * m).round());
+      }
       final weight = workingWeight(exercise, reps, dayPolicy);
       for (var s = 0; s < sets; s++) {
         // ONLY exercise + reps + optional weight (+ date). Never
@@ -255,6 +339,7 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
           'exercise': exercise,
           'reps': reps,
           'weight': ?weight,
+          if (isTop) 'top': true,
         });
       }
     }
@@ -295,8 +380,10 @@ class WeekPlanner {
 
   /// Planner generation suffix in the meta stamp. Bump when the generated
   /// row shape changes and existing weeks should be upgraded in place
-  /// (v3: working-max weight math replaced the reference-e1rm fill).
-  static const planVersion = 'plan_v3';
+  /// (v3: working-max weight math replaced the reference-e1rm fill;
+  /// v4: strength-wave top reps + planned accessories + volume
+  /// multipliers, program.yaml v10).
+  static const planVersion = 'plan_v4';
 
   /// Ledger meta key the runner writes the last swallowed error into.
   static const metaErrorKey = 'week_planner_error';

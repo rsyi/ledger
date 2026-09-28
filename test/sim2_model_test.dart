@@ -5,21 +5,24 @@
 //     carries the documented Bulk-C data-basis anomaly, err ≈ −47);
 //     median level |err| 31 lb over 68 obs points. HISTORY — these
 //     pins never move with plan changes.
-//   • §9.3 horizon, POST-CUT RECOMP BASELINE (program.yaml v9,
-//     post-cut-recomp-spec 2026-09-27): blocks 1-7 on the v9 template
-//     dials — N=4 heavy exposures (one per lift @ RPE 7-8), W=30
-//     productive sets, r=0.075 / P=1.05 — deterministic expressed
-//     total ~988 from 2026-09-28 (v8 recomp pin was ~982; +6.6 lb).
-//     WHICH TERM MOVED: the recovery-budget term — N 6→4 zeroes the
-//     loadNx overage in lifting blocks, over-budget weeks 56→38, so
-//     effectiveness stops bleeding — plus the W volume term (28→30)
-//     and the climbing-block near-max term (3→4); together they
-//     outweigh the lifting-block near-max drop (6→4). BW still ends
-//     ~158.8; MC median ~986 with P(V8 sent) ~0.80. The superseded
-//     bulk lives behind the 'Bulk plan (inactive)' preset — which now
-//     also restores the bulk template's N/W — and still reproduces
-//     the ORIGINAL fit-report pins (1023 deterministic / MC 1022 /
-//     P(V8) 0.45); recomp gap ≈ 35 lb SBD by Dec 2027.
+//   • §9.3 horizon, POST-CUT FINAL-SPEC BASELINE (program.yaml v10,
+//     post-cut-final-spec 2026-09-27): blocks 1-7 on the v10 template
+//     dials — N=4 heavy exposures (wave 5/3/1 tops ≈ same heavy count,
+//     so N is UNCHANGED from v9), W recounted from the now-concrete
+//     accessory schedule: 57 lifting / 38 climbing (×0.65 emphasis) /
+//     50 reverse (volume-ramp average); every post-cut block carries
+//     the weekly Fri limit session (kLim=1). Deterministic expressed
+//     total ~999 from 2026-09-28 (v9 pin was ~988; +10.5 lb).
+//     WHICH TERMS MOVED: the W volume term (30→57/38 — CAVEAT: b was
+//     fitted around W≈20, this is extrapolation) pushes capacity up;
+//     the weekly limit session (+0.4 load) tips normal lifting weeks
+//     to L=7.4 vs cap 7.0 — over-budget weeks 38→59, the red-flag
+//     honesty the final plan carries. BW still ends ~158.8; MC median
+//     ~997 with P(V8 sent) ~0.79. The superseded bulk lives behind
+//     the 'Bulk plan (inactive)' preset — which restores the bulk
+//     N/W/rates/protein AND its below-limit climbing — and still
+//     reproduces the ORIGINAL fit-report pins (1023 deterministic /
+//     MC 1022 / P(V8) 0.45); recomp gap ≈ 25 lb SBD by Dec 2027.
 // Fixtures: tool/calibration/*.csv (tests run from the package root).
 import 'dart:math';
 
@@ -103,19 +106,20 @@ void main() {
     final blocks = sim2DefaultBlocks();
     final start = DateTime.utc(2026, 9, 28);
 
-    test('v9 post-cut baseline: deterministic expressed total ~988, BW '
+    test('v10 post-cut baseline: deterministic expressed total ~999, BW '
         'holds ~158.8 inside the soft band', () {
       final run = sim2Run(params: p, blocks: blocks, start: start);
-      expect(run.end.s, closeTo(988.2, 1.5));
-      expect(run.end.sCap, closeTo(1000.6, 2));
-      // N=4 zeroes the near-max load overage → far fewer over-budget
-      // weeks than the bulk shape (was 56 at N=6).
-      expect(run.overBudgetWeeks, 38);
+      expect(run.end.s, closeTo(998.7, 1.5));
+      expect(run.end.sCap, closeTo(1016.0, 2));
+      // The weekly limit session (final spec: Fri = limit, year-round)
+      // costs +0.4 load — normal lifting weeks run 7.4 vs cap 7.0, so
+      // most are (slightly) over budget: the plan's honest red flag.
+      expect(run.overBudgetWeeks, 59);
       expect(run.end.bw, closeTo(158.8, 0.3)); // inside soft band 154-165
       expect(run.end.bw, lessThan(165)); // advisory tripwire untouched
       expect(run.end.vo2, closeTo(53.4, 0.3)); // lighter year helps VO2
       expect(run.end.bfPct, closeTo(15.6, 0.3)); // §5 rule μ=0.30 branch
-      expect(run.end.c, closeTo(7.71, 0.1)); // and the climbing
+      expect(run.end.c, closeTo(7.72, 0.1)); // and the climbing
       // start state: RPE basis 917, capacity 968, E 0.947
       expect(run.start.s, closeTo(917, 1));
       expect(run.start.sCap, closeTo(968, 1));
@@ -132,7 +136,7 @@ void main() {
     });
 
     test("'Bulk plan (inactive)' preset reproduces the ORIGINAL fit-report "
-        'pins; recomp gap ≈ 35 lb SBD', () {
+        'pins; recomp gap ≈ 25 lb SBD', () {
       final bulk = sim2Run(
           params: p, blocks: blocks, start: start, presetId: 'bulk_plan');
       expect(bulk.end.s, closeTo(1023.5, 1.5)); // 1023 per the report
@@ -141,11 +145,11 @@ void main() {
       expect(bulk.end.vo2, closeTo(49.6, 0.3));
       expect(bulk.end.bfPct, closeTo(17.6, 0.3));
       expect(bulk.end.c, closeTo(6.97, 0.1));
-      // The recomp cost on the SBD total (doc's own estimate ~25 lb).
-      // v9's template narrows it from the v8 ~42: the post-cut dials
-      // buy ~7 lb back via the recovery budget + volume terms.
+      // The recomp cost on the SBD total — now matching the doc's own
+      // ~25 lb estimate: the v10 volume (W 57) buys back most of what
+      // v9's thinner template left on the table.
       final base = sim2Run(params: p, blocks: blocks, start: start);
-      expect(bulk.end.s - base.end.s, closeTo(35, 3));
+      expect(bulk.end.s - base.end.s, closeTo(25, 3));
       // μ≈0 branch of the bulk plan keeps its old pin too.
       final bulkMu0 = sim2Run(
           params: p, blocks: blocks, start: start, presetId: 'bulk_plan',
@@ -153,15 +157,15 @@ void main() {
       expect(bulkMu0.end.bfPct, closeTo(16.1, 0.3));
     });
 
-    test('Monte Carlo (v9 baseline) median ~986, P(V8 sent) ~0.80, '
-        'injuries ~2.2; bulk preset keeps median 1022 / 0.45', () {
+    test('Monte Carlo (v10 baseline) median ~997, P(V8 sent) ~0.79, '
+        'injuries ~2.6; bulk preset keeps median 1022 / 0.45', () {
       final mc = sim2MonteCarlo(params: p, blocks: blocks, start: start);
-      expect(mc.medianTotal, closeTo(986, 2));
-      expect(mc.p20Total, closeTo(978, 3));
-      expect(mc.p80Total, closeTo(995, 3));
-      expect(mc.pV8Sent, closeTo(0.80, 0.04));
+      expect(mc.medianTotal, closeTo(997, 2));
+      expect(mc.p20Total, closeTo(989, 3));
+      expect(mc.p80Total, closeTo(1006, 3));
+      expect(mc.pV8Sent, closeTo(0.79, 0.04));
       expect(mc.pV8Touch, closeTo(0.39, 0.05));
-      expect(mc.injuryWeeksMean, closeTo(2.2, 0.5));
+      expect(mc.injuryWeeksMean, closeTo(2.6, 0.5));
       final bulkMc = sim2MonteCarlo(
           params: p, blocks: blocks, start: start, presetId: 'bulk_plan');
       expect(bulkMc.medianTotal, closeTo(1022, 2));
@@ -182,7 +186,7 @@ void main() {
       final base = sim2Run(params: p, blocks: blocks, start: start);
       final climb = sim2Run(
           params: p, blocks: blocks, start: start, presetId: 'climb_more');
-      expect(climb.end.s, lessThan(base.end.s - 30)); // 931 vs 988
+      expect(climb.end.s, lessThan(base.end.s - 30)); // 943 vs 999
       expect(climb.overBudgetWeeks, greaterThan(base.overBudgetWeeks));
       expect(climb.end.f, greaterThan(0.8)); // F_end 0.98
       // lifting-block expressed gain falls (report: +25 vs +87)
@@ -218,17 +222,17 @@ void main() {
           params: p, blocks: blocks, start: start, presetId: 'drop_cal');
       expect(drop.end.m, lessThan(base.end.m - 0.5));
       // Global N override (the dials row) moves the strength horizon.
-      // At the v9 baseline (N=4, budget balanced) forcing N=10 puts
-      // every week over budget — the load cost now OUTWEIGHS the
-      // saturating near-max gain (~-2 lb; under the v8 N=6 baseline it
-      // was ~+3).
+      // At the v10 baseline (already slightly over budget on lifting
+      // weeks) forcing N=10 deepens the overage — the load cost
+      // OUTWEIGHS the saturating near-max gain (~-5 lb; v9 was ~-2,
+      // v8's N=6 baseline ~+3).
       final n10 = sim2Run(
           params: p,
           blocks: blocks,
           start: start,
           overrides: const Sim2DialOverrides(n: 10));
       expect(n10.end.s, lessThan(base.end.s));
-      expect(n10.end.s, closeTo(base.end.s - 2, 2));
+      expect(n10.end.s, closeTo(base.end.s - 5, 2));
     });
   });
 

@@ -56,7 +56,7 @@ void main() {
     final v = currentVersion(program);
     expect(v, isNotNull);
     expect(v!['id'], 'bulk-2026-27');
-    expect(v['version'], 9);
+    expect(v['version'], 10);
     // A trailing pending entry must be skipped.
     final withPending = {
       'versions': [
@@ -64,7 +64,7 @@ void main() {
         {'version': 99, 'pending': true, 'id': 'draft'},
       ],
     };
-    expect(currentVersion(withPending)!['version'], 9);
+    expect(currentVersion(withPending)!['version'], 10);
   });
 
   for (final c in cases) {
@@ -126,8 +126,40 @@ void main() {
   test('today_template carries the weekly_template text for Mondays (non-block-0)', () {
     final slice =
         programCurrent(program, phase, DateTime.parse('2027-03-01'))!;
-    expect(slice.todayTemplate['morning'], contains('Squat heavy'));
+    expect(slice.todayTemplate['morning'], contains('squat top work per the wave'));
     expect(slice.todayTemplate['afternoon'], isNull);
+  });
+
+  group('strength wave (program.yaml v10)', () {
+    final version = currentVersion(program);
+
+    test('wave week cycles 1..4 from the block start; cut excluded', () {
+      expect(strengthWaveWeek(version, blockN: 3, weekInBlock: 1), 1);
+      expect(strengthWaveWeek(version, blockN: 3, weekInBlock: 3), 3);
+      expect(strengthWaveWeek(version, blockN: 3, weekInBlock: 4), 4);
+      expect(strengthWaveWeek(version, blockN: 3, weekInBlock: 5), 1);
+      expect(strengthWaveWeek(version, blockN: 3, weekInBlock: 8), 4);
+      expect(strengthWaveWeek(version, blockN: 0, weekInBlock: 2), isNull);
+      expect(strengthWaveWeek(version, blockN: null, weekInBlock: 2), isNull);
+      expect(strengthWaveWeek({}, blockN: 3, weekInBlock: 2), isNull);
+    });
+
+    test('top reps: 5/3/1; light = wave-restart 5; test = the single', () {
+      int? reps(int wk, [String type = 'normal']) => strengthWaveTopReps(
+          version, blockN: 3, weekInBlock: wk, weekType: type);
+      expect(reps(1), 5);
+      expect(reps(2), 3);
+      expect(reps(3), 1);
+      expect(reps(4, 'light'), 5); // block light week IS the wave deload
+      expect(reps(8, 'test'), 1); // deload carries the block-result single
+      expect(reps(5), 5); // second wave restarts
+      expect(reps(6), 3);
+      expect(reps(7), 1);
+      // Block 1 (3-week maintenance): 5/3/1, no deload.
+      expect(strengthWaveTopReps(version, blockN: 1, weekInBlock: 3), 1);
+      // No wave (cut) → null, never guessed.
+      expect(strengthWaveTopReps(version, blockN: 0, weekInBlock: 1), isNull);
+    });
   });
 
   test('block 0 slice uses weekly_template_block_0 and carries block_0_loads note', () {

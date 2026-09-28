@@ -39,7 +39,8 @@ import '../services/program_observed.dart';
 import '../services/program_provider.dart';
 import '../services/sim_fit.dart' show ClimbAscent, buildWeeklySeries;
 import '../services/sim_program.dart' show simInitialFromSeries;
-import '../services/sim2_harness.dart' show sim2BlocksFromProgramDocs;
+import '../services/sim2_harness.dart'
+    show sim2BlocksFromProgramDocs, sim2ExpectationsFromProgramDocs;
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
 import '../services/wm_store.dart';
@@ -241,6 +242,8 @@ class _ProgramScreenState extends State<ProgramScreen> {
       stats: observedWeightStats(daily, _today),
       observedBw: observedBw,
       observedIndexTotal: observedIndexTotal,
+      // v10 expectations_1yr — faint "range, not target" band.
+      expectations: sim2ExpectationsFromProgramDocs(docs.program),
     );
   }
 

@@ -171,67 +171,183 @@ void main() {
     });
   });
 
-  // v9 (post-cut-recomp-spec 2026-09-27): from Dec 14 the post-cut
-  // weekly_template plans DUAL exposure per lift — the heavy top single
-  // plus the hypertrophy volume work (3x5 squat/bench/press, 2x5
-  // deadlift, second bench exposure Saturday). Cut weeks (block 0,
-  // through Dec 13) keep the block-0 skeleton — covered by the groups
-  // above.
-  group('live program.yaml v9 — post-cut template (Dec 14+)', () {
+  // v10 (post-cut-final-spec 2026-09-27): from Dec 14 the post-cut
+  // weekly_template plans the WAVE top set (reps 5/3/1 by week), the
+  // back-offs (3x5; deadlift 2x4) AND the concrete accessories. The
+  // volume_ramp scales accessory sets in maintenance weeks 1-2
+  // (×0.65 / ×0.85); climbing-emphasis blocks scale ALL non-top sets
+  // ×0.65; light/test weeks halve non-top volume (wave deload). Cut
+  // weeks (block 0, through Dec 13) keep the block-0 skeleton —
+  // covered by the groups above.
+  group('live program.yaml v10 — post-cut template (Dec 14+)', () {
     // Block 1 starts Mon 2026-12-14; the Sat-anchored window for that
-    // week runs Sat Dec 12 (still block 0) .. Fri Dec 18.
+    // week runs Sat Dec 12 (still block 0) .. Fri Dec 18. Maintenance
+    // week 1: wave week 1 (top 5s), accessory ramp ×0.65.
     final dec14 = DateTime.utc(2026, 12, 14);
 
-    test('reps skeleton: heavy single + volume sets per lift', () {
+    test('week 1 skeleton: wave top 5s + back-offs + ramped accessories',
+        () {
       final entries = buildWeekPlannedEntries(program, dec14);
       expect(rows(onDay(entries, dec14)), [
-        'Barbell Squat -x1',
+        'Muscle Up -x1', // 3 sets ×0.65 → 2
+        'Muscle Up -x1',
+        'Barbell Squat -x5', // wave wk1 top
+        'Barbell Squat -x5', // back-offs 3x5 (main lift: not ramped)
         'Barbell Squat -x5',
         'Barbell Squat -x5',
-        'Barbell Squat -x5',
+        'Romanian Deadlift -x6', // 3 ×0.65 → 2
+        'Romanian Deadlift -x6',
+        'Bulgarian Split Squat -x8', // 2 ×0.65 → 1
+        'Hanging Leg Raise -x8', // 3 ×0.65 → 2
+        'Hanging Leg Raise -x8',
       ]);
       final tue = onDay(entries, dec14.add(const Duration(days: 1)));
       expect(rows(tue), [
-        'Flat Barbell Bench Press -x1',
+        'Flat Barbell Bench Press -x5', // wave top
+        'Flat Barbell Bench Press -x5', // back-offs
         'Flat Barbell Bench Press -x5',
         'Flat Barbell Bench Press -x5',
-        'Flat Barbell Bench Press -x5',
+        'Seated Cable Row -x6',
+        'Seated Cable Row -x6',
+        'Lateral Dumbbell Raise -x10',
+        'Lateral Dumbbell Raise -x10',
+        'Triceps Extension -x8',
+        'Cable Face Pull -x12',
+        'Cable External Rotation -x12',
       ]);
+      // Wed now plans the pistol-squat progression (ramped 3 → 2).
+      final wed = onDay(entries, dec14.add(const Duration(days: 2)));
+      expect(rows(wed), ['Pistol Squat -x3', 'Pistol Squat -x3']);
       final fri = onDay(entries, dec14.add(const Duration(days: 4)));
       expect(rows(fri), [
-        'Barbell Deadlift -x1',
-        'Barbell Deadlift -x5',
-        'Barbell Deadlift -x5',
+        'Barbell Deadlift -x5', // wave wk1 top
+        'Barbell Deadlift -x4', // back-offs 2x4-6 low end
+        'Barbell Deadlift -x4',
+        'Leg Press -x8',
+        'Leg Press -x8',
+        'Leg Curl -x8',
+        'Leg Curl -x8',
+        'Calf Raise -x8',
+        'Calf Raise -x8',
       ]);
       // Sat Dec 12 belongs to block 0 (cut) — its template has no
       // Saturday planned lifts; the window plans nothing there.
       expect(onDay(entries, DateTime.utc(2026, 12, 12)), isEmpty);
-      // Wed (calisthenics) / Thu (4x4) / Sun (rest) plan nothing.
-      for (final offset in [2, 3, 6]) {
+      // Thu (4x4) / Sun (rest) plan nothing.
+      for (final offset in [3, 6]) {
         expect(onDay(entries, dec14.add(Duration(days: offset))), isEmpty,
             reason: 'offset $offset');
       }
+      // The wave top rows carry the marker; everything else does not.
+      final tops = entries.where((e) => e['top'] == true).toList();
+      expect(tops, hasLength(3)); // squat, bench, deadlift this window
+      expect(tops.map((e) => e['reps']), everyElement(5));
     });
 
-    test('a fully post-cut week plans the Saturday OHP + second bench '
-        'exposure', () {
+    test('the Saturday OHP day: wave top + back-offs, un-ramped second '
+        'bench exposure, ramped accessories', () {
       final dec21 = DateTime.utc(2026, 12, 21);
       final entries = buildWeekPlannedEntries(program, dec21);
-      // Window Sat Dec 19 .. Fri Dec 25; Sat Dec 19 is block 1.
+      // Window Sat Dec 19 .. Fri Dec 25; Sat Dec 19 is still block-1
+      // week 1 (wave 5s, ramp ×0.65 on accessories).
       final sat = onDay(entries, DateTime.utc(2026, 12, 19));
       expect(rows(sat), [
-        'Overhead Press -x1',
+        'Overhead Press -x5', // wave wk1 top
+        'Overhead Press -x5', // back-offs 3x5
         'Overhead Press -x5',
         'Overhead Press -x5',
-        'Overhead Press -x5',
-        'Flat Barbell Bench Press -x5',
-        'Flat Barbell Bench Press -x5',
-        'Flat Barbell Bench Press -x5',
+        'Flat Barbell Bench Press -x6', // main lift: never ramped
+        'Flat Barbell Bench Press -x6',
+        'Flat Barbell Bench Press -x6',
+        'Seated Cable Row -x8', // 3 ×0.65 → 2
+        'Seated Cable Row -x8',
+        'Lateral Dumbbell Raise -x12', // 3 ×0.65 → 2
+        'Lateral Dumbbell Raise -x12',
+        'EZ-Bar Preacher Curl -x8', // 2 ×0.65 → 1
+        'Triceps Extension -x8',
+        'Cable Face Pull -x12',
+        'Cable External Rotation -x12',
       ]);
+      // Mon Dec 21 = maintenance week 2: wave week 2 (top 3s), ramp
+      // ×0.85 (rounds accessory sets back to full here).
+      final mon = onDay(entries, dec21);
+      final squat =
+          mon.where((e) => e['exercise'] == 'Barbell Squat').toList();
+      expect(squat.map((e) => e['reps']).toList(), [3, 5, 5, 5]);
+      expect(squat.first['top'], isTrue);
+    });
+
+    test('wave week 3 tops are singles; week 3+ accessories at full '
+        'volume', () {
+      final dec28 = DateTime.utc(2026, 12, 28);
+      final entries = buildWeekPlannedEntries(program, dec28);
+      final mon = onDay(entries, dec28);
+      final squat =
+          mon.where((e) => e['exercise'] == 'Barbell Squat').toList();
+      expect(squat.map((e) => e['reps']).toList(), [1, 5, 5, 5]);
+      // Ramp over (week 3): full accessory volume.
+      expect(
+          mon.where((e) => e['exercise'] == 'Romanian Deadlift'),
+          hasLength(3));
+    });
+
+    test('climbing-emphasis block: non-top sets ×0.65, tops preserved',
+        () {
+      // Block 2 (climbing) week 1: Mon 2027-01-04, wave restarts at 5s.
+      final jan4 = DateTime.utc(2027, 1, 4);
+      final mon = onDay(buildWeekPlannedEntries(program, jan4), jan4);
+      final squat =
+          mon.where((e) => e['exercise'] == 'Barbell Squat').toList();
+      // Top preserved; back-offs 3 → 2 (×0.65).
+      expect(squat.map((e) => e['reps']).toList(), [5, 5, 5]);
+      expect(squat.first['top'], isTrue);
+      expect(mon.where((e) => e['exercise'] == 'Romanian Deadlift'),
+          hasLength(2)); // accessories ×0.65 too
+    });
+
+    test('light week = wave deload: top 5s at the RPE-6 cap, non-top '
+        'volume halved on top of the emphasis cut', () {
+      // Block 2 week 4 (light): Mon 2027-01-25.
+      final jan25 = DateTime.utc(2027, 1, 25);
+      final mon = onDay(
+          buildWeekPlannedEntries(program, jan25,
+              workingMaxes: const {'squat': 300.0}),
+          jan25);
+      final squat =
+          mon.where((e) => e['exercise'] == 'Barbell Squat').toList();
+      // Working fives only (a warm-up step is also 5 reps — exclude by
+      // weight). Wave-restart top 5 + ONE back-off (3 ×0.5×0.65 → 1),
+      // all at the light policy's RPE-6 pricing: 300 × 0.762 → 230.
+      final working = squat
+          .where((e) => e['reps'] == 5 && (e['weight'] as num) > 200)
+          .toList();
+      expect(working, hasLength(2));
+      for (final e in working) {
+        expect(e['weight'], 230);
+      }
+      // Accessories collapse to min 1 set (×0.5 ×0.65).
+      expect(mon.where((e) => e['exercise'] == 'Hanging Leg Raise'),
+          hasLength(1));
+    });
+
+    test('test week: the top is the block-result single', () {
+      // Block 2 week 8 (test): Mon 2027-02-22.
+      final feb22 = DateTime.utc(2027, 2, 22);
+      final mon = onDay(
+          buildWeekPlannedEntries(program, feb22,
+              workingMaxes: const {'squat': 300.0}),
+          feb22);
+      final squat =
+          mon.where((e) => e['exercise'] == 'Barbell Squat').toList();
+      final single =
+          squat.where((e) => e['reps'] == 1 && e['top'] == true).toList();
+      // Test policy target 8: 300 × 0.922 = 276.6 → 275.
+      expect(single, hasLength(1));
+      expect(single.single['weight'], 275);
     });
 
     test('working-max fill: block-1 reverse policy caps at RPE 7 — '
-        'single at chart[7][1], fives at chart[7][5]', () {
+        'wave top 5 and back-off fives at chart[7][5]', () {
       final entries = buildWeekPlannedEntries(
         program,
         dec14,
@@ -240,17 +356,17 @@ void main() {
       final squat = onDay(entries, dec14)
           .where((e) => e['exercise'] == 'Barbell Squat')
           .toList();
-      final working =
-          squat.where((e) => e['reps'] == 1 || e['reps'] == 5).toList();
-      // Warm-ups precede: ramp to the 270 top single.
-      expect(squat.length, greaterThan(working.length));
-      // 300 × 0.892 = 267.6 → 270; 300 × 0.786 = 235.8 → 235.
-      final single = working.firstWhere(
-          (e) => e['reps'] == 1 && (e['weight'] as num) > 250);
-      expect(single['weight'], 270);
-      final fives = working.where((e) => e['reps'] == 5 &&
-          e['weight'] == 235);
-      expect(fives.length, 3);
+      // 300 × 0.786 = 235.8 → 235 for top + back-offs; warm-ups ramp
+      // toward 235 (45x10, 95x5, 140x3, 190x1 — the 95x5 step is why
+      // working fives are filtered by weight).
+      final working = squat
+          .where((e) => e['reps'] == 5 && (e['weight'] as num) > 200)
+          .toList();
+      expect(working, hasLength(4));
+      for (final e in working) {
+        expect(e['weight'], 235);
+      }
+      expect(squat.length, working.length + 4); // + the warm-up ramp
     });
 
     test('reference fallback prices fives at pct_by_reps[5] = 0.80', () {
@@ -264,9 +380,34 @@ void main() {
       final fives = onDay(entries, dec14)
           .where((e) => e['reps'] == 5 && (e['weight'] as num) > 200)
           .toList();
-      expect(fives, hasLength(3));
+      expect(fives, hasLength(4)); // wave top + 3 back-offs
       for (final e in fives) {
         expect(e['weight'], 240); // 300 × 0.80
+      }
+    });
+
+    test('accessories never get weights (no main-lift reference)', () {
+      final entries = buildWeekPlannedEntries(
+        program,
+        dec14,
+        references: const {
+          'squat': 300.0,
+          'bench': 250.0,
+          'press': 150.0,
+          'deadlift': 400.0,
+        },
+      );
+      for (final e in entries) {
+        final lift = e['exercise'] as String;
+        const mains = {
+          'Barbell Squat',
+          'Barbell Deadlift',
+          'Flat Barbell Bench Press',
+          'Overhead Press',
+        };
+        if (!mains.contains(lift)) {
+          expect(e.containsKey('weight'), isFalse, reason: '$e');
+        }
       }
     });
   });
@@ -274,13 +415,17 @@ void main() {
   group('live program.yaml v4 — weight fill + warmup ramp', () {
     test(
         'key lockdown: generated keys drawn from exactly '
-        '{date, exercise, reps, weight} — never rpe/notes', () {
-      for (final monday in [anchorMonday, bMonday]) {
+        '{date, exercise, reps, weight, top} — never rpe/notes', () {
+      // Block-0 weeks + a post-cut (v10) week with wave-top markers.
+      for (final monday in [anchorMonday, bMonday,
+          DateTime.utc(2026, 12, 14)]) {
         final entries =
             buildWeekPlannedEntries(program, monday, references: refs);
         expect(entries, isNotEmpty);
         for (final e in entries) {
-          expect({'date', 'exercise', 'reps', 'weight'}.containsAll(e.keys),
+          expect(
+              {'date', 'exercise', 'reps', 'weight', 'top'}
+                  .containsAll(e.keys),
               isTrue,
               reason: 'unexpected key in $e');
           expect(e.keys.toSet().containsAll({'date', 'exercise', 'reps'}),

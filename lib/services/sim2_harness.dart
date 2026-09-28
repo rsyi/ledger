@@ -100,6 +100,69 @@ List<Sim2Block>? sim2BlocksFromProgramDocs(Map<Object?, Object?>? program) {
 }
 
 // ---------------------------------------------------------------------------
+// One-year EXPECTATION ranges (program.yaml v10 `expectations_1yr`,
+// final post-cut spec) — NOT targets. The forecast section renders them
+// as a faint band labeled "expectation range, not target"; they are
+// never fed to flags or the controller.
+// ---------------------------------------------------------------------------
+
+class Sim2Expectations {
+  final List<double>? bodyweightLb, bfPct, benchLb, squatLb, deadliftLb, ohpLb;
+  final String? climbing, vo2;
+
+  const Sim2Expectations({
+    this.bodyweightLb,
+    this.bfPct,
+    this.benchLb,
+    this.squatLb,
+    this.deadliftLb,
+    this.ohpLb,
+    this.climbing,
+    this.vo2,
+  });
+
+  /// SBD-total expectation band (the strength chart's y unit): the sum
+  /// of the three lifts' range ends. Null unless all three are present.
+  List<double>? get sbdTotalLb {
+    final s = squatLb, b = benchLb, d = deadliftLb;
+    if (s == null || b == null || d == null) return null;
+    return [s[0] + b[0] + d[0], s[1] + b[1] + d[1]];
+  }
+}
+
+/// Parses `expectations_1yr` from the CURRENT program version. Null when
+/// the key is absent (pre-v10) or carries no numeric ranges.
+Sim2Expectations? sim2ExpectationsFromProgramDocs(
+    Map<Object?, Object?>? program) {
+  final version = currentVersion(program);
+  final raw = version?['expectations_1yr'];
+  if (raw is! Map) return null;
+  List<double>? range(String key) {
+    final v = raw[key];
+    if (v is List && v.length == 2 && v[0] is num && v[1] is num) {
+      return [(v[0] as num).toDouble(), (v[1] as num).toDouble()];
+    }
+    return null;
+  }
+
+  final out = Sim2Expectations(
+    bodyweightLb: range('bodyweight_lb'),
+    bfPct: range('bf_pct'),
+    benchLb: range('bench_lb'),
+    squatLb: range('squat_lb'),
+    deadliftLb: range('deadlift_lb'),
+    ohpLb: range('ohp_lb'),
+    climbing: raw['climbing']?.toString(),
+    vo2: raw['vo2']?.toString(),
+  );
+  final any = out.bodyweightLb != null ||
+      out.bfPct != null ||
+      out.sbdTotalLb != null ||
+      out.ohpLb != null;
+  return any ? out : null;
+}
+
+// ---------------------------------------------------------------------------
 // Baseline dials per block type + week types (from tool/sim2_horizon.dart)
 // ---------------------------------------------------------------------------
 
@@ -113,27 +176,43 @@ const double sim2RecompR = 0.075;
 /// [log]
 const double sim2RecompProtein = 1.05;
 
-/// POST-CUT template dials (program.yaml v9, post-cut-recomp-spec
-/// 2026-09-27): W = the template's ~productive sets — 18 planned
-/// main-lift working sets + ~12 prose hypertrophy/accessory sets ≈ 30
-/// [log: counted from the v9 weekly_template]; N = the heavy
-/// exposures — ONE top set (1-3 @ RPE 7-8) per lift per week = 4
-/// (down from the bulk template's 6: the 8.5-9 top-set days and the
-/// Saturday singles are gone) [log].
+/// POST-CUT template dials (program.yaml v10, post-cut-final-spec
+/// 2026-09-27): N = the heavy exposures — ONE wave top set (5/3/1 @
+/// RPE 7-8) per lift per week = 4, UNCHANGED from v9 (the wave varies
+/// the top's REPS, not the heavy count) [log]. W = counted from the
+/// v10 planned lists (the final spec prescribes accessories
+/// concretely, ~tripling v9's prose estimate): 18 main-lift working
+/// sets + 39 accessory sets, EXCLUDING skill work (muscle-up, pistol —
+/// they ride the Q dial) and the spec's "easy" external rotations —
+/// 57 on a lifting-emphasis normal week [log: counted]. CAVEAT: the
+/// §2 b-slope was fitted around W≈20; W=57 is extrapolation and the
+/// horizon's volume term should be read with that in mind.
 const double sim2PostCutN = 4;
-const double sim2PostCutW = 30;
+const double sim2PostCutW = 57;
+
+/// Climbing-emphasis blocks: non-top lifting volume ×0.65
+/// (emphasis_volume, final spec "reduce lifting volume 30-40%,
+/// preserve heavy exposures") — 4 tops + 53×0.65 ≈ 38. [log]
+const double sim2PostCutWClimb = 38;
+
+/// Block 1 (maintenance calibration): volume_ramp averages the three
+/// weeks — accessories at 0.65 / 0.85 / 1.0 → (43 + 51 + 57)/3 ≈ 50.
+/// [log]
+const double sim2PostCutWReverse = 50;
 
 /// [log/assume] cut dials from current logged weeks (D~3.5, W~14, N~2-3,
 /// K=2 with the Tuesday limit session); post-cut training dials from
-/// the v9 template ([sim2PostCutN]/[sim2PostCutW]).
+/// the v10 template ([sim2PostCutN]/[sim2PostCutW] + the per-emphasis
+/// W variants).
 ///
-/// RECOMP BASELINE (v9, 2026-09-27): blocks 1-7 run the post-cut
-/// template — N=4 heavy exposures, W≈30 productive sets — with
+/// RECOMP BASELINE (v10, 2026-09-27): blocks 1-7 run the final
+/// post-cut template — N=4 heavy exposures (wave 5/3/1 tops), W per
+/// emphasis (57 lifting / 38 climbing / 50 reverse-ramp) — with
 /// r = [sim2RecompR] and p = [sim2RecompProtein] for the rated blocks
 /// (2-7). The reverse block keeps N=3 (its tops are capped at RPE 7 —
-/// sub-near-max) but carries the template's volume. The cut (block 0)
-/// is untouched. The superseded bulk trajectory is reachable via the
-/// 'Bulk plan (inactive)' preset, which restores the bulk-era
+/// sub-near-max) but carries the ramped template volume. The cut
+/// (block 0) is untouched. The superseded bulk trajectory is reachable
+/// via the 'Bulk plan (inactive)' preset, which restores the bulk-era
 /// rates/protein AND the bulk template's N/W.
 Dials sim2BaselineDials(Sim2Block b) {
   switch (b.emphasis) {
@@ -142,15 +221,15 @@ Dials sim2BaselineDials(Sim2Block b) {
           dSessions: 3.5, n: 3, w: 14, k: 2, kLim: 1, z: 1, q: 1, r: b.r);
     case 'reverse':
       return Dials(
-          dSessions: 4, n: 3, w: sim2PostCutW, k: 2, kLim: 1, z: 1, q: 1,
-          r: b.r);
+          dSessions: 4, n: 3, w: sim2PostCutWReverse, k: 2, kLim: 1, z: 1,
+          q: 1, r: b.r);
     case 'climbing':
       return Dials(
-          dSessions: 4, n: sim2PostCutN, w: sim2PostCutW, k: 3, kLim: 1,
+          dSessions: 4, n: sim2PostCutN, w: sim2PostCutWClimb, k: 3, kLim: 1,
           h: 1, z: 1, q: 1, r: sim2RecompR, p: sim2RecompProtein);
     default: // lifting
       return Dials(
-          dSessions: 4, n: sim2PostCutN, w: sim2PostCutW, k: 2, kLim: 0,
+          dSessions: 4, n: sim2PostCutN, w: sim2PostCutW, k: 2, kLim: 1,
           z: 1, q: 1, r: sim2RecompR, p: sim2RecompProtein);
   }
 }
@@ -302,6 +381,10 @@ final List<Sim2Preset> sim2Presets = [
       d.p = 0.9;
       d.w = 28;
       d.n = b.emphasis == 'climbing' ? 3 : 6;
+      // Bulk lifting blocks climbed below limit ("both below limit");
+      // the v10 baseline carries a weekly limit session, so pin the
+      // bulk shape explicitly to keep the original fit-report numbers.
+      d.kLim = b.emphasis == 'climbing' ? 1 : 0;
     }
   }),
   Sim2Preset('climb_more', 'Climb more', 'K=4, H=1 all year — the budget bites lifting',

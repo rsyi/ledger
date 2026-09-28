@@ -63,6 +63,11 @@ class ForecastInputs {
   /// starting point; null falls back to the [log] seed (878).
   final double? observedIndexTotal;
 
+  /// One-year EXPECTATION ranges (program.yaml v10 `expectations_1yr`,
+  /// final post-cut spec) — rendered as a faint band next to the sim
+  /// trajectory, labeled "expectation range, not target". Null pre-v10.
+  final Sim2Expectations? expectations;
+
   const ForecastInputs({
     required this.blocks,
     this.observedDaily = const [],
@@ -75,6 +80,7 @@ class ForecastInputs {
     ),
     this.observedBw,
     this.observedIndexTotal,
+    this.expectations,
   });
 }
 
@@ -324,6 +330,7 @@ class _ForecastSectionState extends State<ForecastSection> {
               _Sim2Chart(
                 key: const ValueKey('sim2-expressed-chart'),
                 run: _scen,
+                expectationBand: widget.inputs.expectations?.sbdTotalLb,
                 series: [
                   if (!_isBaseline)
                     _ChartSeries(
@@ -368,6 +375,18 @@ class _ForecastSectionState extends State<ForecastSection> {
                 'at $horizonLabel',
                 style: AppText.tag(context),
               ),
+              if (widget.inputs.expectations?.sbdTotalLb != null)
+                Text(
+                  key: const ValueKey('sim2-expectation-strength'),
+                  'shaded: SBD '
+                  '${_lb(widget.inputs.expectations!.sbdTotalLb![0])}–'
+                  '${_lb(widget.inputs.expectations!.sbdTotalLb![1])}'
+                  '${widget.inputs.expectations!.ohpLb != null ? ' · OHP '
+                      '${_lb(widget.inputs.expectations!.ohpLb![0])}–'
+                      '${_lb(widget.inputs.expectations!.ohpLb![1])}' : ''}'
+                  ' — expectation range, not target',
+                  style: AppText.micro(context),
+                ),
             ],
           ),
         ),
@@ -385,8 +404,18 @@ class _ForecastSectionState extends State<ForecastSection> {
                 isBaseline: _isBaseline,
                 daily: widget.inputs.observedDaily,
                 today: widget.today,
+                expectationBand: widget.inputs.expectations?.bodyweightLb,
               ),
               const SizedBox(height: 6),
+              if (widget.inputs.expectations?.bodyweightLb != null)
+                Text(
+                  key: const ValueKey('sim2-expectation-bw'),
+                  'shaded: '
+                  '${widget.inputs.expectations!.bodyweightLb![0].toStringAsFixed(0)}–'
+                  '${widget.inputs.expectations!.bodyweightLb![1].toStringAsFixed(0)} lb'
+                  ' — expectation range, not target',
+                  style: AppText.micro(context),
+                ),
               _StatsRow(stats: widget.inputs.stats),
               const SizedBox(height: 10),
               Text('BF%', style: AppText.tag(context)),
@@ -395,6 +424,7 @@ class _ForecastSectionState extends State<ForecastSection> {
                 run: _scen,
                 height: 130,
                 yDecimals: 1,
+                expectationBand: widget.inputs.expectations?.bfPct,
                 series: [
                   if (!_isBaseline)
                     _ChartSeries(
@@ -1089,6 +1119,10 @@ class _Sim2Chart extends StatelessWidget {
   final int yDecimals;
   final double redFlagAlpha;
 
+  /// Faint horizontal EXPECTATION band ([lo, hi] — program.yaml v10
+  /// expectations_1yr; "range, not target"). Included in the y-window.
+  final List<double>? expectationBand;
+
   const _Sim2Chart({
     super.key,
     required this.run,
@@ -1096,6 +1130,7 @@ class _Sim2Chart extends StatelessWidget {
     this.height = 200,
     this.yDecimals = 0,
     this.redFlagAlpha = 0.08,
+    this.expectationBand,
   });
 
   @override
@@ -1108,6 +1143,7 @@ class _Sim2Chart extends StatelessWidget {
     final ys = <double>[
       for (final s in series)
         for (final p in s.points) p.$2,
+      ...?expectationBand,
     ];
     final yMin = ys.reduce(math.min);
     final yMax = ys.reduce(math.max);
@@ -1128,6 +1164,14 @@ class _Sim2Chart extends StatelessWidget {
             rangeAnnotations: RangeAnnotations(
               verticalRangeAnnotations:
                   _annotations(scheme, run, redFlagAlpha: redFlagAlpha),
+              horizontalRangeAnnotations: [
+                if (expectationBand != null)
+                  HorizontalRangeAnnotation(
+                    y1: expectationBand![0],
+                    y2: expectationBand![1],
+                    color: scheme.tertiary.withValues(alpha: 0.09),
+                  ),
+              ],
             ),
             titlesData: _titles(
               xMin: xMin,
@@ -1164,6 +1208,9 @@ class _BwChart extends StatelessWidget {
   final List<WeightRow> daily;
   final DateTime today;
 
+  /// Faint expectation band [lo, hi] lb ("range, not target").
+  final List<double>? expectationBand;
+
   /// Observed history shown before t0.
   static const _observedDays = 91;
 
@@ -1174,6 +1221,7 @@ class _BwChart extends StatelessWidget {
     required this.isBaseline,
     required this.daily,
     required this.today,
+    this.expectationBand,
   });
 
   @override
@@ -1201,6 +1249,7 @@ class _BwChart extends StatelessWidget {
       for (final w in weeks) w.bw,
       if (!isBaseline)
         for (final w in base.weeks) w.bw,
+      ...?expectationBand,
     ];
     final yMin = ys.reduce(math.min);
     final yMax = ys.reduce(math.max);
@@ -1220,6 +1269,14 @@ class _BwChart extends StatelessWidget {
             borderData: FlBorderData(show: false),
             rangeAnnotations: RangeAnnotations(
               verticalRangeAnnotations: _annotations(scheme, scen),
+              horizontalRangeAnnotations: [
+                if (expectationBand != null)
+                  HorizontalRangeAnnotation(
+                    y1: expectationBand![0],
+                    y2: expectationBand![1],
+                    color: scheme.tertiary.withValues(alpha: 0.09),
+                  ),
+              ],
             ),
             titlesData: _titles(
               xMin: xMin,

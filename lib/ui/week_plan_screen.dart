@@ -151,6 +151,10 @@ class _LiftRx {
   final String variant;
   final bool unconfirmed;
 
+  /// Wave-prescribed top reps (program.yaml v10 strength_wave) — null
+  /// pre-wave (block 0 / older programs), where the 1/2/3 options show.
+  final int? waveTopReps;
+
   /// Last readings for the lift (up to three, newest last).
   final List<ReadingRow> readings;
 
@@ -159,6 +163,7 @@ class _LiftRx {
     required this.variant,
     required this.unconfirmed,
     required this.readings,
+    this.waveTopReps,
   });
 }
 
@@ -256,9 +261,11 @@ class _WeekView extends StatelessWidget {
     );
 
     // Heavy lifts per day from the planned skeleton (no weights needed).
+    // A day is heavy for a lift when the program plans a wave top set
+    // (`top: true`, program.yaml v10) or a top single (block 0).
     final heavy = <DateTime, Set<String>>{};
     for (final e in buildWeekPlannedEntries(program, weekStart)) {
-      if (e['reps'] != 1) continue;
+      if (e['top'] != true && e['reps'] != 1) continue;
       final lift = mainLiftByExercise[e['exercise']];
       if (lift == null) continue;
       (heavy[e['date'] as DateTime] ??= {}).add(lift);
@@ -266,8 +273,17 @@ class _WeekView extends StatelessWidget {
 
     final out = <DateTime, List<_LiftRx>>{};
     heavy.forEach((day, lifts) {
-      final policy = policyOn(day, sliceByDay[day]);
+      final slice = sliceByDay[day];
+      final policy = policyOn(day, slice);
       if (policy == null) return;
+      // Wave-prescribed top reps for this week (null pre-wave / block 0
+      // — the 1/2/3 options remain).
+      final waveReps = strengthWaveTopReps(
+        version,
+        blockN: slice?.block['number'] as int?,
+        weekInBlock: slice?.weekInBlock ?? 0,
+        weekType: slice?.weekType,
+      );
       for (final lift in lifts) {
         final max = maxes[lift];
         if (max == null) continue;
@@ -282,7 +298,9 @@ class _WeekView extends StatelessWidget {
             workingMax: max,
             warmupProtocol: version['warmup_protocol'],
             activeCapRpe: caps[lift],
+            topReps: waveReps,
           ),
+          waveTopReps: waveReps,
           variant: currentWorkingMax(wm.workingMax, lift)?.variant ??
               defaultVariantByLift[lift] ??
               '',
@@ -583,8 +601,9 @@ class _RxBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final p = rx.rx;
+    final topReps = p.topSetOptions.keys.toList()..sort();
     final tops = [
-      for (final reps in const [1, 2, 3])
+      for (final reps in topReps)
         if (p.topSetOptions[reps] != null)
           '${_n(p.topSetOptions[reps]!)}×$reps',
     ].join(' · ');
@@ -611,12 +630,21 @@ class _RxBlock extends StatelessWidget {
                 ?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 2),
-          Text('Top set: $tops', style: small),
           Text(
-            'Back-offs: ${p.backOffSets}×${p.backOffReps} @ '
-            '${_n(p.backOffWeight)}'
-            '${p.saturdaySingle != null ? ' · Sat single '
-                '${_n(p.saturdaySingle!)} @8.5' : ''}',
+            rx.waveTopReps != null ? 'Top set (wave): $tops' : 'Top set: $tops',
+            style: small,
+          ),
+          Text(
+            // Wave weeks (program v10): back-offs live in the planned
+            // rows (3-4×5-8 @ 1-3 RIR; deadlift 2×4-6) — the bulk-era
+            // 4×3 @ 82% line would be wrong.
+            rx.waveTopReps != null
+                ? 'Back-offs: per planned rows (3-4×5-8 @ 1-3 RIR; '
+                    'deadlift 2×4-6)'
+                : 'Back-offs: ${p.backOffSets}×${p.backOffReps} @ '
+                    '${_n(p.backOffWeight)}'
+                    '${p.saturdaySingle != null ? ' · Sat single '
+                        '${_n(p.saturdaySingle!)} @8.5' : ''}',
             style: small,
           ),
           if (rx.readings.isNotEmpty) ...[

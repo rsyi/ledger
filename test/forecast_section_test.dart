@@ -207,7 +207,9 @@ void main() {
     expect(red, isNotEmpty,
         reason: 'the baseline cut runs L=6.9 > 6.0 → red spans');
     // The §8 confidence-collapse caption with the week count.
-    expect(find.textContaining('over-budget weeks: 38'), findsOneWidget); // v9 dials
+    // v10 dials: the weekly Fri limit session tips normal lifting weeks
+    // to L 7.4 vs cap 7.0 — most weeks flag red (59).
+    expect(find.textContaining('over-budget weeks: 59'), findsOneWidget);
     expect(find.textContaining('confidence'), findsOneWidget);
   });
 
@@ -266,5 +268,65 @@ void main() {
     expect(find.byKey(const ValueKey('sim2-expressed-chart')), findsOneWidget);
     expect(find.byKey(const ValueKey('sim2-f-chart')), findsOneWidget);
     // Reaching here without a RenderFlex overflow report = pass.
+  });
+
+  testWidgets('expectation bands (v10 expectations_1yr): faint band + '
+      '"range, not target" labels; absent pre-v10', (tester) async {
+    // Absent (the default inputs): no band, no labels.
+    await pumpSection(tester);
+    expect(chartData(tester, 'sim2-expressed-chart')
+        .rangeAnnotations.horizontalRangeAnnotations, isEmpty);
+    expect(find.textContaining('expectation range, not target'),
+        findsNothing);
+
+    // Present: strength + bw + BF% bands and both labels.
+    const exp = Sim2Expectations(
+      bodyweightLb: [158, 163],
+      bfPct: [12, 14],
+      benchLb: [260, 280],
+      squatLb: [345, 375],
+      deadliftLb: [370, 405],
+      ohpLb: [150, 165],
+    );
+    expect(exp.sbdTotalLb, [975, 1060]);
+    tester.view.physicalSize = const Size(800, 5200);
+    tester.view.devicePixelRatio = 1.0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: ForecastSection(
+            inputs: ForecastInputs(
+              blocks: sim2DefaultBlocks(),
+              observedDaily: observedDaily(),
+              stats: observedWeightStats(observedDaily(), _today),
+              expectations: exp,
+            ),
+            today: _today,
+            mcRunner: testMcRunner,
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    await tester.pump();
+    final strength = chartData(tester, 'sim2-expressed-chart')
+        .rangeAnnotations.horizontalRangeAnnotations;
+    expect(strength, hasLength(1));
+    expect(strength.single.y1, 975);
+    expect(strength.single.y2, 1060);
+    // The chart window stretches to include the band.
+    expect(chartData(tester, 'sim2-expressed-chart').maxY,
+        greaterThanOrEqualTo(1060));
+    expect(find.byKey(const ValueKey('sim2-expectation-strength')),
+        findsOneWidget);
+    final bw = chartData(tester, 'sim2-bw-chart')
+        .rangeAnnotations.horizontalRangeAnnotations;
+    expect(bw, hasLength(1));
+    expect(bw.single.y1, 158);
+    final bf = chartData(tester, 'sim2-bf-chart')
+        .rangeAnnotations.horizontalRangeAnnotations;
+    expect(bf, hasLength(1));
+    expect(find.textContaining('expectation range, not target'),
+        findsNWidgets(2));
   });
 }

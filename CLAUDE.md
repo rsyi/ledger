@@ -185,6 +185,39 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   NOT wired from coach_flags (volume flags are bulk-calibrated and
   fire every block-0 cut week — would freeze all lifts vs §3); app
   on-log evaluation + MCP/TS twin = WM-3.
+- **Post-cut recomp program (v9, 2026-09-27)**: coach/program.yaml v9
+  integrates the user's `coach/post-cut-recomp-spec.md` (user-authored;
+  where it conflicts with program-2026-27-source.md THE SPEC WINS).
+  Post-cut (Dec 14+, blocks 1-7): NEW weekly template (Mon squat / Tue
+  bench+limit-climb / Wed calisthenics / Thu 4x4 / Fri deadlift+
+  volume-climb / Sat OHP+bench2 / Sun rest) with `planned` volume work
+  the week planner auto-plans (weight_fill gained pct_by_reps[5]=0.80;
+  wm path prices 5s off rpe_chart); DUAL exposure per lift — heavy 1-3
+  @ RPE 7-8 (load_policies lifting_block retargeted 8.5-9 → 7.5-8,
+  raise at ≤7; climbing_block UNFROZEN, raises need 2 consecutive ≤7;
+  saturday_single retired) AND hypertrophy 3-8 @ RPE 7-9; FIRST-CLASS
+  hypertrophy: `hypertrophy_targets` (8-12 sets/muscle/wk, ~10) +
+  `exercise_muscle_map` (per-set fractional credits, prefix-matched
+  names, per-climbing-session pulling credit — ALL credits are
+  best-judgment defaults the user should review/edit); ABSOLUTE
+  nutrition (protein 160-175 g/day, fat floor 55-65, carbs 225-300
+  biased to training days); weight goes SOFT — advisory band 154-165 +
+  conditioned `weight_rules` (flat scale = SUCCESS, never auto +100;
+  154 is NOT the long-term target — glycogen-replete maintenance sits
+  higher; maintenance = 7d-avg stable 2-3 wk); DEXA cadence 3-4 mo;
+  climbing 2x differentiated (limit vs technique/volume, track V5+
+  sends/onsights); calisthenics = skill list. Block-0 cut slice pinned
+  IDENTICAL (targets_block_0 nulls the new keys). Resolvers expose
+  protein_g_day/fat_g_day_min/carbs_g_day/hypertrophy_sets_per_muscle/
+  bodyweight_band_advisory (program_current.dart + ledger-mcp
+  program.ts, shared fixtures). Home recomp drivers (week_drivers.dart):
+  `dual_exposure` (heavy reading + ≥3 hyp sets per lift) +
+  `hypertrophy_volume` (per-muscle weekly sets vs the 8-12 band, over
+  = red) + absolute `protein_floor` (floor_g 160) + bike_4x4; recomp
+  weight_hold eigenvector softened ([-0.1,0.25], act at ±0.5). Sim2
+  v9 baseline N=4/W=30: deterministic 988 / over-budget 38 / MC 986,
+  P(V8) 0.80; bulk preset restores the bulk template and still pins
+  1023/1022/0.45 (test/sim2_model_test.dart).
 - **Coach** (the big feature, v3 architecture):
   - `coach_chat` synced view rendered ONLY as chat: pinned tinted
     Coach row (unread accent via meta `coach_chat_last_read_ts`) +
@@ -381,25 +414,37 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   ~/repos/airledger-fitness. The sheet columns + backfilled data are
   ALREADY live (harmless to the old app — unknown columns are
   ignored).
-- **Recomposition year (2026-09-26, program.yaml v8)**: the 2026-27
-  year runs the RECOMP variant from Dec 14, not the bulk — maintenance
-  food, band 152-162 (hold 158-161, cap 165), rate 0..+0.15 (alarm 0.3
-  ×2wk), protein 1.0-1.1 ×4 feedings; blocks/training week/loads
-  unchanged; WEIGHT_FLAT retired (flat scale is the plan); bulk
-  numbers preserved under `inactive_bulk_variant` + the sim's "Bulk
-  plan (inactive)" preset. Source doc:
-  airledger-fitness/coach/program-2026-27-source.md. Follow-ups from
-  it:
+- **Post-cut recomp year (program.yaml v9, 2026-09-27 — supersedes the
+  v8 recomp entry)**: the 2026-27 year runs the post-cut recomp per
+  the user's `airledger-fitness/coach/post-cut-recomp-spec.md` from
+  Dec 14 (see feature state). Follow-ups from it:
+  - USER REVIEW WANTED: the v9 `exercise_muscle_map` credits (incl.
+    the per-climbing-session pulling credit back 3 / forearms 3 /
+    biceps 1.5 / core 1 and every per-exercise fraction) are Claude's
+    best-judgment defaults — correct them in program.yaml; the
+    hypertrophy counters re-read on next sync. Same for the climb-day
+    assignment (Tue = limit, Fri = technique/volume — swap freely).
   - User: book a DEXA for the week of Nov 2-8 (at ~157 lb); repeat
-    every 16 weeks (late Apr / mid Aug / early Dec 2027).
+    every 3-4 months per the spec.
   - Daily-note gap: the one-line daily note (fingers, elbows, back,
-    sleep) is the doc's fifth tracked number and daily_notes is
-    still mostly empty — start it during the cut.
-  - Waist tracking gap: the recomp fat gauge is a weekly navel-waist
-    7-day average and NO data source exists (no view/field). The app
-    surfaces "waist gauge: not tracked yet" via program.yaml v8
-    gauges + the dashboards recomp comment; needs a waist view or a
-    weight-view field, then a real eigenvector.
+    sleep) — daily_notes is still mostly empty; start it during the
+    cut.
+  - Waist tracking gap: the spec's PRIMARY fat gauge is a weekly
+    navel-waist 7-day average and NO data source exists (no
+    view/field). program.yaml v9 gauges + dashboards still say "not
+    tracked yet"; the conditioned weight_rules (allow rise if waist
+    stable etc.) can only run on judgment until a waist source lands —
+    then wire a real eigenvector.
+  - Hypertrophy accessories in the v9 template are PROSE-only (RDL /
+    leg press / pull-ups / curls / laterals) — the planner plans main
+    lifts only; consider planned accessory rows or a template once
+    the user settles the exercise selection.
+  - meals dashboard `protein_series` still shades goal_band_per_lb
+    0.8-1.0 (cut-correct). Post-cut the spec's target is ABSOLUTE
+    160-175 g/day — the driver carries it; flip the meals metric to
+    an absolute band (or ~1.02-1.11 per-lb) when the cut ends.
+  - tool/sim2_horizon.dart CLI still carries the v8 dials (header
+    note added); the harness (sim2_harness.dart) is authoritative.
   - User: confirm hangboard access at Belmont, or get one for home
     (20mm edge, add/remove load) — needed from block 2 (Jan 2027).
   - User: ask Glo to screen shoulders + elbows before block 2 (early

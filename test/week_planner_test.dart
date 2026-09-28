@@ -171,6 +171,106 @@ void main() {
     });
   });
 
+  // v9 (post-cut-recomp-spec 2026-09-27): from Dec 14 the post-cut
+  // weekly_template plans DUAL exposure per lift — the heavy top single
+  // plus the hypertrophy volume work (3x5 squat/bench/press, 2x5
+  // deadlift, second bench exposure Saturday). Cut weeks (block 0,
+  // through Dec 13) keep the block-0 skeleton — covered by the groups
+  // above.
+  group('live program.yaml v9 — post-cut template (Dec 14+)', () {
+    // Block 1 starts Mon 2026-12-14; the Sat-anchored window for that
+    // week runs Sat Dec 12 (still block 0) .. Fri Dec 18.
+    final dec14 = DateTime.utc(2026, 12, 14);
+
+    test('reps skeleton: heavy single + volume sets per lift', () {
+      final entries = buildWeekPlannedEntries(program, dec14);
+      expect(rows(onDay(entries, dec14)), [
+        'Barbell Squat -x1',
+        'Barbell Squat -x5',
+        'Barbell Squat -x5',
+        'Barbell Squat -x5',
+      ]);
+      final tue = onDay(entries, dec14.add(const Duration(days: 1)));
+      expect(rows(tue), [
+        'Flat Barbell Bench Press -x1',
+        'Flat Barbell Bench Press -x5',
+        'Flat Barbell Bench Press -x5',
+        'Flat Barbell Bench Press -x5',
+      ]);
+      final fri = onDay(entries, dec14.add(const Duration(days: 4)));
+      expect(rows(fri), [
+        'Barbell Deadlift -x1',
+        'Barbell Deadlift -x5',
+        'Barbell Deadlift -x5',
+      ]);
+      // Sat Dec 12 belongs to block 0 (cut) — its template has no
+      // Saturday planned lifts; the window plans nothing there.
+      expect(onDay(entries, DateTime.utc(2026, 12, 12)), isEmpty);
+      // Wed (calisthenics) / Thu (4x4) / Sun (rest) plan nothing.
+      for (final offset in [2, 3, 6]) {
+        expect(onDay(entries, dec14.add(Duration(days: offset))), isEmpty,
+            reason: 'offset $offset');
+      }
+    });
+
+    test('a fully post-cut week plans the Saturday OHP + second bench '
+        'exposure', () {
+      final dec21 = DateTime.utc(2026, 12, 21);
+      final entries = buildWeekPlannedEntries(program, dec21);
+      // Window Sat Dec 19 .. Fri Dec 25; Sat Dec 19 is block 1.
+      final sat = onDay(entries, DateTime.utc(2026, 12, 19));
+      expect(rows(sat), [
+        'Overhead Press -x1',
+        'Overhead Press -x5',
+        'Overhead Press -x5',
+        'Overhead Press -x5',
+        'Flat Barbell Bench Press -x5',
+        'Flat Barbell Bench Press -x5',
+        'Flat Barbell Bench Press -x5',
+      ]);
+    });
+
+    test('working-max fill: block-1 reverse policy caps at RPE 7 — '
+        'single at chart[7][1], fives at chart[7][5]', () {
+      final entries = buildWeekPlannedEntries(
+        program,
+        dec14,
+        workingMaxes: const {'squat': 300.0},
+      );
+      final squat = onDay(entries, dec14)
+          .where((e) => e['exercise'] == 'Barbell Squat')
+          .toList();
+      final working =
+          squat.where((e) => e['reps'] == 1 || e['reps'] == 5).toList();
+      // Warm-ups precede: ramp to the 270 top single.
+      expect(squat.length, greaterThan(working.length));
+      // 300 × 0.892 = 267.6 → 270; 300 × 0.786 = 235.8 → 235.
+      final single = working.firstWhere(
+          (e) => e['reps'] == 1 && (e['weight'] as num) > 250);
+      expect(single['weight'], 270);
+      final fives = working.where((e) => e['reps'] == 5 &&
+          e['weight'] == 235);
+      expect(fives.length, 3);
+    });
+
+    test('reference fallback prices fives at pct_by_reps[5] = 0.80', () {
+      final entries = buildWeekPlannedEntries(
+        program,
+        dec14,
+        references: const {'squat': 300.0},
+      );
+      // Working fives only (the 0.4×top warm-up step is also 5 reps —
+      // exclude it by weight).
+      final fives = onDay(entries, dec14)
+          .where((e) => e['reps'] == 5 && (e['weight'] as num) > 200)
+          .toList();
+      expect(fives, hasLength(3));
+      for (final e in fives) {
+        expect(e['weight'], 240); // 300 × 0.80
+      }
+    });
+  });
+
   group('live program.yaml v4 — weight fill + warmup ramp', () {
     test(
         'key lockdown: generated keys drawn from exactly '

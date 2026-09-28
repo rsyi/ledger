@@ -262,6 +262,64 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   data flows; detail sheet ends on the spec's closing question);
   other phases keep the driver checklist (test-pinned). Hidden until
   the phase flips (cut → effective key stays cut).
+- **Cut-training revision (program.yaml v11, 2026-09-28 — user-approved,
+  effective now)**: block-0 training REWRITTEN as a hypertrophy-
+  maximizing deficit program; cut NUTRITION/WEIGHT targets UNCHANGED
+  (protein stays 0.8-1.0 g/lb until Dec 14); v10 post-cut tail copied
+  verbatim (Dec 14+ untouched). NEW `strength_wave_cut`: CALENDAR-
+  anchored (anchor_monday 2026-09-28, ((weeks since anchor) mod 4)+1 —
+  unlike the block-anchored post-cut wave) 4-week wave on ALL FOUR
+  lifts — wk1 1x5@0.811 / wk2 1x4@0.837 / wk3 1x3@0.863 (pcts ARE
+  chart[8][reps], the approved "81/84/86%") / wk4 deload 1x5@0.70 +
+  non-top sets ×0.5 (min 1). TM = live working_max tab, never
+  hard-coded; completion never moves the TM. NEW `backoff_rule`
+  {target_rpe 8, hold_if_rpe_lte 8, drop_pct [2.5,5], purpose "prevent
+  RPE drift, not normal fatigue"}; no AMRAPs. weekly_template_block_0
+  rewritten verbatim from the approved schedule: Mon squat-top + BSS +
+  bench 4x8@68%TM + laterals + triceps / Tue AM-4x4 + PM HARD climb,
+  NO lifting (climb intensity SWAPPED vs old cut AND vs post-cut) /
+  Wed bench-top + 3x6-8@72% + squat 3x8@65% + OHP 3x8-10@62% +
+  pull-ups / Thu muscle-ups FIRST (skill) + dips + EZ curls (optional
+  row/triceps stay prose — planner never plans optionals) / Fri
+  DL-top + 2x4-6@75% + RDL 2x8-12 + bench 3x8-10@65% + PM LIGHT climb
+  / Sat OHP-top + 3x6-8@72% + row + pull-ups + laterals + face pulls
+  + ext rot / Sun rest. planned_alternation RETIRED (every lift tops
+  weekly — driver (H)/(L) parity tags disappear). targets_block_0:
+  bench_days 3 / squat 2 / press 2 / hypertrophy band [8,12] ACTIVE
+  for the cut. All new-template movements already had
+  exercise_muscle_map entries (dips = "Parallel Bar Triceps Dip") —
+  no new credits. PLANNER plan_v5: planned items may carry `pct`
+  (%TM — priced wm × min(pct, chart[policy-target-after-caps][reps]);
+  caps (pain / post-drop / cut_late's 7 from Nov 16) always undercut;
+  %TM rows NEVER fall back to reference e1rm); block-0 `reps: top` →
+  strengthWaveCutFor (program_current.dart, CutWaveWeekSpec); cut
+  deload halves non-top sets. Rx: buildPrescription gained `topPct`;
+  week-plan blocks show "Top set (wave)" + the backoff_rule drift-
+  guard annotation. WM: cut_early/cut_late policies VERBATIM —
+  extraction stays rep-agnostic, so %TM volume-day tops (Wed squat,
+  Fri bench) also produce readings and an easy pair can raise
+  (accepted, documented in v11). DRIVERS (dashboards.yaml cut):
+  dual_exposure (hyp_sets_min 2 — deadlift's 2x4-6; hyp_reps [4,12])
+  + hypertrophy_volume [8,12] now ACTIVE in the cut; bench_frequency
+  3; heavy_single_max_days RETIRED (wave tops are 3-5 reps — the
+  ≤2-rep recency line would never refresh). REVIEW: recomp_review
+  gained the fatigue-match readout (backoffComplianceOf — per
+  day+main-lift consecutive productive pairs; RPE > 8.5 with next
+  load held = flagged; missing RPE = unknown; renders in the Strength
+  markdown section). SIM: cut dials recounted D 4.5 / N 4 / W 49
+  (wave-avg of 55 normal / 30 deload; ext-rot "easy" excluded) — cut
+  runs L 7.9 vs deficit cap 6.0, all 11 weeks over budget, F → ~1.0
+  by Dec: end-of-cut capacity +6.5 but expressed −10 vs the old cut;
+  full-horizon det 1003 (+4.5) / over-budget 59 / MC 1001, P(V8)
+  0.73 (was 0.79 — fatigue-driven injury hazard, 2.6→2.9 wk); bulk
+  preset shares the cut so its pins moved too (1029/1027/0.38 — no
+  longer the original fit-report 1023/1022/0.45). MCP: tools.ts
+  heavy-day detection accepts `reps: top` (+ fixed post-cut heavy-day
+  map corrected to mon/tue/fri/sat), deployed; resolver slice shape
+  unchanged, fixtures pin v11. NOT built (follow-ups): live next-set
+  suggester (in-gym RPE-reactive backoff weights), double-progression
+  prompts for accessories, wave-aware MCP prescriptions (TS §4 still
+  prints 1/2/3-rep chart options).
 - **Post-cut recomp program (v9, 2026-09-27, superseded by v10 above)**:
   coach/program.yaml v9
   integrates the user's `coach/post-cut-recomp-spec.md` (user-authored;
@@ -425,6 +483,16 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
+- Cut revision (2026-09-28): NOT built — (1) live next-set suggester
+  (in-gym: read the just-logged RPE, propose the next set's load per
+  backoff_rule), (2) double-progression prompts (accessory at top of
+  range at target RIR → suggest +load next week), (3) wave-aware MCP
+  §4 prescriptions (ledger-mcp still prints 1/2/3-rep chart options —
+  correct pricing, wrong reps on wave days). The weekly review's
+  fatigue-match readout needs RPE logged on back-off sets to say
+  anything (missing RPE = unknown). Sim W=49 extrapolates the b-slope
+  (fitted ~W≈20) — same caveat as post-cut W=57; watch real block-0
+  fatigue (model says F≈1.0 by Dec, all cut weeks over budget).
 - Recomp tracking (2026-09-28): user should start TAGGING set_type on
   new strength rows (legacy rows stay effort-inferred), take the first
   weekly waist measurement, and log sleep/fatigue/soreness in daily

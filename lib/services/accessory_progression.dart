@@ -191,7 +191,7 @@ AccessorySuggestion? suggestAccessoryLoad({
       weightLb: _roundTo(last + step, 0.5),
       lastWeightLb: _roundTo(last, 0.5),
       lastDate: lastDay,
-      reason: 'all sets at ${repRangeHigh}+ reps at <= '
+      reason: 'all sets at $repRangeHigh+ reps at <= '
           '${_fmt(rule.targetRirMax)} RIR → +${_fmt(step)} lb',
     );
   }

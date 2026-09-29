@@ -47,13 +47,75 @@ double rpePct(double rpe, int reps) {
 double impliedMax(double weightLb, int reps, double rpe) =>
     weightLb / rpePct(rpe, reps);
 
-/// Rounds DOWN to the nearest 5 (test resets: wm = weight/0.922 round
-/// DOWN 5).
+/// Rounds DOWN to the nearest 5 (legacy test resets: wm = weight/0.922
+/// round DOWN 5).
 double roundDown5(num x) => (x / 5).floor() * 5.0;
 
 num _roundTo(num x, num step) {
   final r = (x / step).round() * step;
   return r == r.roundToDouble() ? r.round() : r;
+}
+
+// ---------------------------------------------------------------------------
+// TM rule (program.yaml v12 `tm_rule`) — guarded implied-max
+// ---------------------------------------------------------------------------
+
+/// The guarded implied-max TM rule (program.yaml v12 `tm_rule`,
+/// user-approved 2026-09-28): after every evaluable top-set reading,
+/// TM = weight ÷ chart[rpe][reps] (the implied max), rounded to
+/// [roundingLb] — but RAISES are capped at [raiseCapLb] per session
+/// while drops apply in full immediately. Replaces the per-policy
+/// raise/hold/drop band rules for every phase; policies keep only
+/// their frozen/cap semantics (light weeks, pain caps, post-drop caps,
+/// cut_late's RPE-7 ceiling).
+///
+/// Guards (each declared + editable in the YAML):
+///   * [minTopFraction] — a reading lighter than this fraction of the
+///     current TM is sub-top-set work (%TM volume slots, hypertrophy
+///     exposures); it is recorded but never moves the TM. Without this
+///     the Wed squat 3x8@65% day-top would imply ~0.92×TM and crater
+///     the TM weekly. Grinders/misses bypass the guard (a grinder is a
+///     real signal at any load).
+///   * grinder/missed still DROPS: at least [minDropLbOnGrinder], and
+///     all the way to the implied max when that is lower ("the implied
+///     max of a grinder is already low").
+///   * the legacy test-single reset (weight / 0.922 round-down-5) is
+///     RETIRED as a special case: under implied-max the test single IS
+///     just a reading — an @8 single implies weight/0.922 through the
+///     same one rule, with the raise cap applying (the TM converges
+///     over the following sessions instead of jumping).
+///   * pain caps freeze as before; a capped session counts "clean"
+///     when rpe < [cleanRpeLt] with no grinder/miss.
+class TmRule {
+  final double raiseCapLb;
+  final double roundingLb;
+  final double minTopFraction;
+  final double minDropLbOnGrinder;
+  final double cleanRpeLt;
+
+  const TmRule({
+    this.raiseCapLb = 5,
+    this.roundingLb = 5,
+    this.minTopFraction = 0.78,
+    this.minDropLbOnGrinder = 5,
+    this.cleanRpeLt = 9,
+  });
+}
+
+/// Parses `tm_rule` from a program VERSION map. Null unless the mode is
+/// `guarded_implied_max` (pre-v12 programs keep the legacy band rules).
+TmRule? tmRuleOf(Map<Object?, Object?>? version) {
+  final raw = version?['tm_rule'];
+  if (raw is! Map) return null;
+  if (raw['mode']?.toString() != 'guarded_implied_max') return null;
+  double numOr(Object? v, double d) => v is num ? v.toDouble() : d;
+  return TmRule(
+    raiseCapLb: numOr(raw['raise_cap_lb'], 5),
+    roundingLb: numOr(raw['rounding_lb'], 5),
+    minTopFraction: numOr(raw['min_top_fraction'], 0.78),
+    minDropLbOnGrinder: numOr(raw['min_drop_lb_on_grinder'], 5),
+    cleanRpeLt: numOr(raw['clean_rpe_lt'], 9),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -259,11 +321,16 @@ class Reading {
 final RegExp _grinderNotes =
     RegExp(r'grind|slow|stall|miss', caseSensitive: false);
 
+String _fmtLb(num v) =>
+    v == v.roundToDouble() ? v.round().toString() : v.toString();
+
 /// Reading kind from week type + day + controller state (spec §1.2 "from
 /// week type + day template"):
-///   light week -> light_week; test week -> test; an active top-set cap
-///   (post-drop / pain) -> capped; Saturday bench/squat when the policy
-///   prescribes Saturday singles -> saturday_single; else heavy_top.
+///   light week -> light_week; cut-wave deload week -> deload (v12: the
+///   block-0 wave's week 4 — recorded + ignored like a light week);
+///   test week -> test; an active top-set cap (post-drop / pain) ->
+///   capped; Saturday bench/squat when the policy prescribes Saturday
+///   singles -> saturday_single; else heavy_top.
 String classifyKind({
   required String lift,
   required DateTime date,
@@ -272,6 +339,7 @@ String classifyKind({
   bool saturdaySingle = false,
 }) {
   if (weekType == 'light') return 'light_week';
+  if (weekType == 'deload') return 'deload';
   if (weekType == 'test') return 'test';
   if (capActive) return 'capped';
   if (saturdaySingle &&
@@ -567,14 +635,28 @@ List<String> painCapLiftsForNote(String note) {
 /// reading-creating log and nightly.
 ///
 /// Overrides run FIRST, in spec order: PAIN_CAP, TWO_SIGNALS,
-/// VARIANT_MISMATCH, MANUAL. Then: no reading (two readingless weeks ->
-/// NO_READING flag), test reset, light week (recorded + ignored), the
-/// drop rule (grinder / missed / rpe >= drop threshold — runs even when
-/// the policy is frozen), frozen -> hold, and finally the raise rule
-/// (kind in readings_that_raise, rpe <= raise threshold; cut_early needs
-/// TWO qualifying readings in a row — the streak lives on
-/// [WmDecision.raiseEligible] of the last prior decision and is consumed
-/// by a raise or broken by anything else).
+/// VARIANT_MISMATCH, MANUAL. Then, LEGACY band rules ([tmRule] null —
+/// pre-v12 programs): no reading (two readingless weeks -> NO_READING
+/// flag), test reset, light week (recorded + ignored), the drop rule
+/// (grinder / missed / rpe >= drop threshold — runs even when the
+/// policy is frozen), frozen -> hold, and finally the raise rule (kind
+/// in readings_that_raise, rpe <= raise threshold; cut_early needs TWO
+/// qualifying readings in a row — the streak lives on
+/// [WmDecision.raiseEligible] of the last prior decision and is
+/// consumed by a raise or broken by anything else).
+///
+/// GUARDED IMPLIED-MAX (program.yaml v12 [tmRule] non-null): ONE rule
+/// for every phase — TM tracks the reading's implied max
+/// (weight ÷ chart[rpe][reps], rounded to `rounding_lb`) with raises
+/// capped at `raise_cap_lb` per session and drops applied in full.
+/// Kept semantics: light/deload readings recorded + ignored; frozen
+/// policies hold; grinders/misses drop at least
+/// `min_drop_lb_on_grinder` (bypassing the sub-top guard); sub-top
+/// readings (< `min_top_fraction` × TM — the %TM volume slots) hold;
+/// drops still cap the next top set at the policy's
+/// `cap_after_drop_rpe` and two in a row still trigger
+/// `consecutive_drops_action`. The test single is just a reading here
+/// (its @8 implied max IS weight/0.922 — the old reset, now guarded).
 WmDecision evaluate({
   required String lift,
   required LoadPolicy policy,
@@ -587,6 +669,7 @@ WmDecision evaluate({
   double? manualValue,
   String? manualReason,
   int weeksWithoutReading = 0,
+  TmRule? tmRule,
 }) {
   final wm = workingMax;
   final prior = priorDecisions.isEmpty ? null : priorDecisions.last;
@@ -617,11 +700,19 @@ WmDecision evaluate({
 
   // --- Overrides, checked first (spec §2 order) ---
   if (painCapActive) {
+    // "Clean" heavy session under a pain cap: legacy uses the policy's
+    // drop threshold; the v12 tm_rule declares its own clean_rpe_lt
+    // (the band thresholds no longer exist).
+    final cleanRpeOk = reading != null &&
+        (tmRule != null
+            ? reading.rpe < tmRule.cleanRpeLt
+            : (policy.dropIfRpeGte == null ||
+                reading.rpe < policy.dropIfRpeGte!));
     final clean = reading != null &&
         (reading.kind == 'heavy_top' || reading.kind == 'capped') &&
         !reading.grinder &&
         !reading.missed &&
-        (policy.dropIfRpeGte == null || reading.rpe < policy.dropIfRpeGte!);
+        cleanRpeOk;
     final priorClean = prior?.flags.contains('PAIN_CAP_CLEAN') ?? false;
     final lifted = clean && priorClean;
     return decision(
@@ -682,7 +773,101 @@ WmDecision evaluate({
     );
   }
 
-  // --- Test reset ---
+  // --- Guarded implied-max (program.yaml v12 tm_rule) ---
+  if (tmRule != null) {
+    // Light/deload weeks: recorded + ignored (frozen semantics kept).
+    // NOTE: test readings deliberately fall THROUGH — the test single
+    // is just a reading under the one rule.
+    if (reading.kind == 'light_week' ||
+        reading.kind == 'deload' ||
+        policy.readingsIgnored) {
+      return decision(
+        action: 'hold',
+        wmAfter: wm,
+        reason: reading.kind == 'deload'
+            ? 'deload week — reading recorded and ignored'
+            : 'light week — reading recorded and ignored',
+      );
+    }
+    if (policy.frozen) {
+      return decision(
+        action: 'hold',
+        wmAfter: wm,
+        reason: '${policy.name} is frozen — hold',
+      );
+    }
+
+    final implied = reading.impliedMax;
+    final candidate = _roundTo(implied, tmRule.roundingLb).toDouble();
+    final impliedStr = implied.toStringAsFixed(1);
+
+    // Grinder/missed: always a drop — at least min_drop_lb_on_grinder,
+    // in full to the implied max when that is lower.
+    if (reading.grinder || reading.missed) {
+      final floor = wm - tmRule.minDropLbOnGrinder;
+      final next = candidate < floor ? candidate : floor;
+      final consecutive = prior?.action == 'drop';
+      final why = reading.grinder ? 'grinder' : 'missed prescribed reps';
+      return decision(
+        action: 'drop',
+        wmAfter: next,
+        capNextTopSetRpe: policy.capAfterDropRpe,
+        noTopSetsNextWeek: consecutive &&
+            policy.consecutiveDropsAction == 'no_top_sets_next_week',
+        reason: '$why (implied $impliedStr) → ${_fmtLb(next)}; next top '
+            'set capped at RPE ${policy.capAfterDropRpe}'
+            '${consecutive ? '; second drop in a row → '
+                '${policy.consecutiveDropsAction}' : ''}',
+      );
+    }
+
+    // Sub-top-set guard: %TM volume slots / hypertrophy exposures are
+    // recorded but never move the TM.
+    if (reading.weightLb < tmRule.minTopFraction * wm) {
+      return decision(
+        action: 'hold',
+        wmAfter: wm,
+        reason: 'sub-top intensity (${_fmtLb(reading.weightLb)} < '
+            '${(tmRule.minTopFraction * 100).round()}% of TM) — recorded, '
+            'not evaluated',
+      );
+    }
+
+    if (candidate > wm) {
+      final capped = wm + tmRule.raiseCapLb;
+      final next = candidate < capped ? candidate : capped;
+      return decision(
+        action: 'raise',
+        wmAfter: next,
+        reason: 'implied max $impliedStr > TM ${_fmtLb(wm)} → '
+            '${_fmtLb(next)}'
+            '${candidate > capped ? ' (raise capped at '
+                '+${_fmtLb(tmRule.raiseCapLb)}/session)' : ''}',
+      );
+    }
+    if (candidate < wm) {
+      final consecutive = prior?.action == 'drop';
+      return decision(
+        action: 'drop',
+        wmAfter: candidate,
+        capNextTopSetRpe: policy.capAfterDropRpe,
+        noTopSetsNextWeek: consecutive &&
+            policy.consecutiveDropsAction == 'no_top_sets_next_week',
+        reason: 'implied max $impliedStr < TM ${_fmtLb(wm)} → '
+            '${_fmtLb(candidate)} (drops apply in full); next top set '
+            'capped at RPE ${policy.capAfterDropRpe}'
+            '${consecutive ? '; second drop in a row → '
+                '${policy.consecutiveDropsAction}' : ''}',
+      );
+    }
+    return decision(
+      action: 'hold',
+      wmAfter: wm,
+      reason: 'implied max $impliedStr ≈ TM ${_fmtLb(wm)} — hold',
+    );
+  }
+
+  // --- Test reset (legacy band rules only) ---
   if (reading.kind == 'test' && policy.resetOnTest) {
     final next = roundDown5(reading.weightLb / 0.922);
     return decision(
@@ -786,6 +971,7 @@ List<WmDecision> replayLift({
   required LoadPolicy Function(DateTime date) policyFor,
   String? Function(DateTime date)? weekTypeOf,
   int? Function(DateTime date, String lift)? prescribedReps,
+  TmRule? tmRule,
 }) {
   final liftRows = [
     for (final r in rows)
@@ -831,6 +1017,7 @@ List<WmDecision> replayLift({
       date: r.date,
       reading: reading,
       priorDecisions: decisions,
+      tmRule: tmRule,
     );
     decisions.add(d);
     wm = d.wmAfter;

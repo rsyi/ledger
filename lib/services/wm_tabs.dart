@@ -519,6 +519,7 @@ WmChainResult runWmChain({
   DateTime? today,
   Set<DateTime> twoSignalsWeeks = const {},
   List<({DateTime date, String text})> painNotes = const [],
+  TmRule? tmRule,
 }) {
   final newReadings = <ReadingRow>[];
   final newWm = <WorkingMaxRow>[];
@@ -635,6 +636,7 @@ WmChainResult runWmChain({
         priorDecisions: [?prior],
         painCapActive: painCap,
         twoSignalsThisWeek: twoSignalsWeeks.contains(_mondayOf(r.date)),
+        tmRule: tmRule,
       );
       final id = readingIdOf(r.date, lift);
       newReadings.add(ReadingRow(

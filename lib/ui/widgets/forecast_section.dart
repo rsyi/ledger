@@ -462,9 +462,9 @@ class _ForecastSectionState extends State<ForecastSection> {
         ),
         const SizedBox(height: 2),
         Text(
-          'S ${_lb(_run.last.squat)} · B ${_lb(_run.last.bench)} · '
-          'D ${_lb(_run.last.deadlift)} · P ${_lb(_run.last.press)} '
-          'at $horizonLabel',
+          'Squat ${_lb(_run.last.squat)} · Bench ${_lb(_run.last.bench)} · '
+          'Deadlift ${_lb(_run.last.deadlift)} · '
+          'Press ${_lb(_run.last.press)} at $horizonLabel',
           style: AppText.tag(context),
         ),
         if (widget.inputs.expectations?.sbdTotalLb != null)
@@ -590,9 +590,20 @@ class _ForecastSectionState extends State<ForecastSection> {
           ],
         ),
         const SizedBox(height: 4),
+        // Steady-routine honesty (2026-09-29): the 4x4 stays at one
+        // session per week in every block, forever — in the model that
+        // holds absolute aerobic capacity level, so the projected score
+        // is driven by body weight alone. Observed workload gains at
+        // the same heart rate live in the weekly review (tracking
+        // layer), deliberately NOT in this projection.
         Text(
-          'score = Vabs / bw — weight changes move it on their own; '
-          '${_run.last.vo2.toStringAsFixed(1)} at horizon (§4 priors)',
+          'The plan keeps the 4x4 at one session per week, always — '
+          'that holds absolute aerobic capacity level in this model, '
+          'so the projected score '
+          '(${_run.last.vo2.toStringAsFixed(1)} at the horizon) moves '
+          'with body weight alone. Doing more work at the same heart '
+          'rate is real progress the weekly review tracks — this '
+          'projection does not claim it.',
           style: AppText.micro(context),
         ),
       ],
@@ -721,8 +732,8 @@ class _NutritionCard extends StatelessWidget {
 
   String _avg(NutritionAvg? a) => a == null
       ? '—'
-      : '${a.kcal.round()} kcal · P ${a.proteinG.round()} · '
-            'C ${a.carbsG.round()} (${a.loggedDays}d logged)';
+      : '${a.kcal.round()} kcal · protein ${a.proteinG.round()} · '
+            'carbs ${a.carbsG.round()} (${a.loggedDays}d logged)';
 
   @override
   Widget build(BuildContext context) {
@@ -825,8 +836,8 @@ class _NutritionCard extends StatelessWidget {
                 Text(
                   'projection at ${n.projectedIntakeKcal!.round()} kcal: '
                   '${_signed(n.rProjectedLbWk!)} lb/wk · '
-                  'P ${n.projectedProteinG!.round()} · '
-                  'C ${n.projectedCarbsG!.round()} g '
+                  'protein ${n.projectedProteinG!.round()} g · '
+                  'carbs ${n.projectedCarbsG!.round()} g '
                   '(macros scaled proportionally)',
                   key: const ValueKey('nutrition-whatif'),
                   style: AppText.micro(context),

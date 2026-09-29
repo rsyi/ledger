@@ -5,24 +5,26 @@
 //     carries the documented Bulk-C data-basis anomaly, err ≈ −47);
 //     median level |err| 31 lb over 68 obs points. HISTORY — these
 //     pins never move with plan changes.
-//   • §9.3 horizon, V11 CUT-REVISION BASELINE (program.yaml v11 on
-//     top of the v10 post-cut plan): block 0 now runs the approved
-//     cut-training revision — cut dials recounted D=4.5 / N=4 (wave
-//     tops) / W=49 (wave-averaged 55-normal/30-deload; was 3.5/3/14).
-//     The cut runs L=7.9 vs the deficit cap 6.0 (Tue AM-4x4 + PM-hard-
-//     climb double session + 4.5 lifting days) — every cut week over
-//     budget (they already were at L=6.9), F climbing to ~1.0 by Dec:
-//     end-of-cut CAPACITY +6.5 (967.7 vs 961.2) but EXPRESSED −10
-//     (879.8 vs 889.6) — the volume buys muscle, the fatigue masks
-//     it until the post-cut deload. Full-horizon deterministic total
-//     1003.2 (v10 pin 998.7, +4.5); over-budget weeks stay 59; MC
-//     median ~1001 with P(V8 sent) ~0.73 (was 0.79 — the fatigue-
-//     driven injury hazard, mean injury weeks 2.6→2.9). W=49 carries
-//     the same b-slope extrapolation caveat as the post-cut W=57.
-//     The 'Bulk plan (inactive)' preset shares the revised cut block,
-//     so its pins move too (1028.9 det / MC 1027 / P(V8) 0.38 —
-//     no longer the original fit-report 1023/1022/0.45); the recomp
-//     gap holds ≈ 25 lb SBD by Dec 2027.
+//   • §9.3 horizon, V13 ROUTINE-AUDIT BASELINE (2026-09-29, user
+//     directive: dials read off the ACTUAL v13 week, not superseded
+//     plans). Two corrections on the v11 pins: cut D 4.5→4 (the short
+//     Thu skill/arms day rides Q only — it was half-counted in BOTH
+//     dials) and reverse-block N 3→4 (one wave top per lift happens
+//     every week; the RPE-7 cap governs intensity, not the count).
+//     Z=1 in EVERY block type forever (the 4x4 never changes) and
+//     K=2/kLim=1 (cut Tue-hard, post-cut Fri-limit; climbing blocks
+//     K=3) were already right. The cut now runs L=7.4 vs the deficit
+//     cap 6.0 — still every cut week over budget, but F peaks ~0.77
+//     (was ~1.04): end-of-cut EXPRESSED 889.3 (was 879.8), capacity
+//     969.5. Full-horizon deterministic total 1006.2 (v11 pin
+//     1003.2, +3.0); over-budget weeks stay 59; VO2 stays 53.4 (Z=1
+//     holds absolute capacity — the score is bodyweight-driven); MC
+//     median ~1004 with P(V8 sent) ~0.76 (less fatigue → fewer
+//     injuries, mean injury weeks 2.9→2.75). W=49 carries the same
+//     b-slope extrapolation caveat as the post-cut W=57.
+//     The 'Bulk plan (inactive)' preset shares the corrected cut +
+//     reverse blocks, so its pins move too (1031.6 det / MC 1030 /
+//     P(V8) 0.39); the recomp gap holds ≈ 25 lb SBD by Dec 2027.
 // Fixtures: tool/calibration/*.csv (tests run from the package root).
 import 'dart:math';
 
@@ -106,11 +108,11 @@ void main() {
     final blocks = sim2DefaultBlocks();
     final start = DateTime.utc(2026, 9, 28);
 
-    test('v11 baseline: deterministic expressed total ~1003, BW '
+    test('v13 baseline: deterministic expressed total ~1006, BW '
         'holds ~158.8 inside the soft band', () {
       final run = sim2Run(params: p, blocks: blocks, start: start);
-      expect(run.end.s, closeTo(1003.2, 1.5));
-      expect(run.end.sCap, closeTo(1020.7, 2));
+      expect(run.end.s, closeTo(1006.2, 1.5));
+      expect(run.end.sCap, closeTo(1023.7, 2));
       // The weekly limit session (final spec: Fri = limit, year-round)
       // costs +0.4 load — normal lifting weeks run 7.4 vs cap 7.0, so
       // most are (slightly) over budget: the plan's honest red flag.
@@ -119,7 +121,7 @@ void main() {
       expect(run.end.bw, lessThan(165)); // advisory tripwire untouched
       expect(run.end.vo2, closeTo(53.4, 0.3)); // lighter year helps VO2
       expect(run.end.bfPct, closeTo(15.6, 0.3)); // §5 rule μ=0.30 branch
-      expect(run.end.c, closeTo(7.69, 0.1)); // and the climbing
+      expect(run.end.c, closeTo(7.70, 0.1)); // and the climbing
       // start state: RPE basis 917, capacity 968, E 0.947
       expect(run.start.s, closeTo(917, 1));
       expect(run.start.sCap, closeTo(968, 1));
@@ -136,16 +138,16 @@ void main() {
     });
 
     test("'Bulk plan (inactive)' preset — now on the SHARED revised cut "
-        'block (v11), so the original fit-report pins shift up ~5; '
+        'block + reverse (v13 audit), so the fit-report pins shift; '
         'recomp gap ≈ 25 lb SBD', () {
       final bulk = sim2Run(
           params: p, blocks: blocks, start: start, presetId: 'bulk_plan');
-      expect(bulk.end.s, closeTo(1028.9, 1.5)); // was 1023 pre-revision
-      expect(bulk.end.sCap, closeTo(1019.4, 2));
+      expect(bulk.end.s, closeTo(1031.6, 1.5)); // was 1023 pre-revision
+      expect(bulk.end.sCap, closeTo(1022.1, 2));
       expect(bulk.end.bw, closeTo(171.2, 0.3));
       expect(bulk.end.vo2, closeTo(49.6, 0.3));
       expect(bulk.end.bfPct, closeTo(17.6, 0.3));
-      expect(bulk.end.c, closeTo(6.97, 0.1));
+      expect(bulk.end.c, closeTo(6.95, 0.1));
       // The recomp cost on the SBD total — still ~25 lb (both arms
       // gained the cut revision's capacity).
       final base = sim2Run(params: p, blocks: blocks, start: start);
@@ -157,19 +159,19 @@ void main() {
       expect(bulkMu0.end.bfPct, closeTo(16.1, 0.3));
     });
 
-    test('Monte Carlo (v11 baseline) median ~1001, P(V8 sent) ~0.73, '
-        'injuries ~2.9; bulk preset (shared cut) median 1027 / 0.38', () {
+    test('Monte Carlo (v13 baseline) median ~1004, P(V8 sent) ~0.76, '
+        'injuries ~2.75; bulk preset (shared cut) median 1030 / 0.39', () {
       final mc = sim2MonteCarlo(params: p, blocks: blocks, start: start);
-      expect(mc.medianTotal, closeTo(1001, 2));
-      expect(mc.p20Total, closeTo(993, 3));
-      expect(mc.p80Total, closeTo(1010, 3));
-      expect(mc.pV8Sent, closeTo(0.73, 0.04));
-      expect(mc.pV8Touch, closeTo(0.33, 0.05));
-      expect(mc.injuryWeeksMean, closeTo(2.9, 0.5));
+      expect(mc.medianTotal, closeTo(1004, 2));
+      expect(mc.p20Total, closeTo(996, 3));
+      expect(mc.p80Total, closeTo(1015, 3));
+      expect(mc.pV8Sent, closeTo(0.76, 0.04));
+      expect(mc.pV8Touch, closeTo(0.35, 0.05));
+      expect(mc.injuryWeeksMean, closeTo(2.75, 0.5));
       final bulkMc = sim2MonteCarlo(
           params: p, blocks: blocks, start: start, presetId: 'bulk_plan');
-      expect(bulkMc.medianTotal, closeTo(1027, 2));
-      expect(bulkMc.pV8Sent, closeTo(0.38, 0.03));
+      expect(bulkMc.medianTotal, closeTo(1030, 2));
+      expect(bulkMc.pV8Sent, closeTo(0.39, 0.03));
     });
 
     test('Cardio up pushes VO2 toward ~55; Cardio off drops it toward ~46',
@@ -222,17 +224,17 @@ void main() {
           params: p, blocks: blocks, start: start, presetId: 'drop_cal');
       expect(drop.end.m, lessThan(base.end.m - 0.5));
       // Global N override (the dials row) moves the strength horizon.
-      // At the v11 baseline (already over budget on the cut + normal
+      // At the v13 baseline (already over budget on the cut + normal
       // lifting weeks) forcing N=10 deepens the overage — the load
-      // cost OUTWEIGHS the saturating near-max gain (~-7 lb; v10 was
-      // ~-5, v9 ~-2, v8's N=6 baseline ~+3).
+      // cost OUTWEIGHS the saturating near-max gain (~-8 lb; v11 was
+      // ~-7, v10 ~-5, v9 ~-2, v8's N=6 baseline ~+3).
       final n10 = sim2Run(
           params: p,
           blocks: blocks,
           start: start,
           overrides: const Sim2DialOverrides(n: 10));
       expect(n10.end.s, lessThan(base.end.s));
-      expect(n10.end.s, closeTo(base.end.s - 7.4, 2));
+      expect(n10.end.s, closeTo(base.end.s - 8.4, 2));
     });
   });
 

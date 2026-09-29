@@ -220,37 +220,42 @@ const double sim2PostCutWClimb = 38;
 /// [log]
 const double sim2PostCutWReverse = 50;
 
-/// CUT dials (program.yaml v11, approved cut-training revision
-/// 2026-09-28 — supersedes the logged-weeks estimate D~3.5/N~3/W~14):
-/// N = 4 (one wave top per lift per week, 5/4/3/deload @ RPE 7-8);
-/// W counted from the v11 block-0 planned lists — Mon 13 (top + BSS 3
-/// + bench 4 + laterals 3 + triceps 2) / Wed 13 (top + bench 3 +
-/// squat 3 + OHP 3 + pull-ups 3) / Thu 6 (dips 3 + curls 3; muscle-up
-/// skill rides Q) / Fri 8 (top + DL 2 + RDL 2 + bench 3) / Sat 15
-/// (top + OHP 3 + row 3 + pull-ups 3 + laterals 3 + face pulls 2;
-/// "easy" external rotations excluded, v10 convention) = 55 on normal
-/// weeks; the sim has no block-0 week types, so W carries the
-/// 4-week-wave AVERAGE with the deload's halved non-top volume
-/// ((3×55 + 30)/4 ≈ 49). D = 4.5 lifting sessions (4 full days + the
-/// short Thu arms/skill day) [assume]. K=2 with Tue now the HARD
-/// session (kLim=1 unchanged); Z=1 (Tue AM 4x4) + Q=1. The Tue
-/// AM-4x4 + PM-hard-climb double session plus 4.5 lifting days runs
-/// L ≈ 7.9 vs the deficit cap 6.0 — every cut week is over budget by
-/// construction; the fatigue term (not the calendar) is where that
-/// honesty lands. [log: counted]
+/// CUT dials (program.yaml v13 routine audit, 2026-09-29 — user
+/// directive: dials read off the ACTUAL steady week, not superseded
+/// plans): N = 4 (one wave top per lift per week, 5/4/3/deload @
+/// RPE 7-8); W counted from the v13 base-week planned lists (verbatim
+/// the v11 cut week) — Mon 13 (top + BSS 3 + bench 4 + laterals 3 +
+/// triceps 2) / Wed 13 (top + bench 3 + squat 3 + OHP 3 + pull-ups 3)
+/// / Thu 6 (dips 3 + curls 3; muscle-up skill rides Q) / Fri 8 (top +
+/// DL 2 + RDL 2 + bench 3) / Sat 15 (top + OHP 3 + row 3 + pull-ups 3
+/// + laterals 3 + face pulls 2; "easy" external rotations excluded,
+/// v10 convention) = 55 on normal weeks; the sim has no block-0 week
+/// types, so W carries the 4-week-wave AVERAGE with the deload's
+/// halved non-top volume ((3×55 + 30)/4 ≈ 49). D = 4 (Mon/Wed/Fri/Sat
+/// — the short Thu skill/arms day rides Q, not D; the 2026-09-28
+/// D=4.5 half-counted it in BOTH dials). K=2 with Tue the HARD
+/// session (kLim=1); Z=1 (Tue AM 4x4 — the one weekly 4x4, held
+/// forever) + Q=1 (Thu). The Tue AM-4x4 + PM-hard-climb double
+/// session plus 4 lifting days runs L ≈ 7.4 vs the deficit cap 6.0 —
+/// every cut week is over budget by construction; the fatigue term
+/// (not the calendar) is where that honesty lands. [log: counted]
 const double sim2CutN = 4;
 const double sim2CutW = 49;
-const double sim2CutD = 4.5;
+const double sim2CutD = 4;
 
-/// Post-cut training dials from the v10 template
-/// ([sim2PostCutN]/[sim2PostCutW] + the per-emphasis W variants).
+/// Post-cut training dials from the v13 routine (unchanged from the
+/// v10/v11 counts — the routine carried over verbatim).
 ///
-/// RECOMP BASELINE (v10, 2026-09-27): blocks 1-7 run the final
-/// post-cut template — N=4 heavy exposures (wave 5/3/1 tops), W per
-/// emphasis (57 lifting / 38 climbing / 50 reverse-ramp) — with
-/// r = [sim2RecompR] and p = [sim2RecompProtein] for the rated blocks
-/// (2-7). The reverse block keeps N=3 (its tops are capped at RPE 7 —
-/// sub-near-max) but carries the ramped template volume. The cut
+/// RECOMP BASELINE (v13 audit, 2026-09-29): blocks 1-7 run the
+/// post-cut week — D=4 lifting days (Mon/Tue/Fri/Sat), N=4 heavy
+/// exposures (one wave top per lift, EVERY block including the
+/// reverse: its RPE-7 cap governs intensity, not the count — the
+/// 2026-09-27 N=3 understated it), W per emphasis (57 lifting / 38
+/// climbing / 50 reverse-ramp), K=2 (Tue technique + Fri limit,
+/// kLim=1; climbing blocks add the 3rd session), Z=1 (Thu 4x4 — one
+/// weekly session in EVERY block type, forever; no block varies it)
+/// and Q=1 (Wed calisthenics) — with r = [sim2RecompR] and
+/// p = [sim2RecompProtein] for the rated blocks (2-7). The cut
 /// (block 0) is untouched. The superseded bulk trajectory is reachable
 /// via the 'Bulk plan (inactive)' preset, which restores the bulk-era
 /// rates/protein AND the bulk template's N/W.
@@ -262,8 +267,8 @@ Dials sim2BaselineDials(Sim2Block b) {
           z: 1, q: 1, r: b.r);
     case 'reverse':
       return Dials(
-          dSessions: 4, n: 3, w: sim2PostCutWReverse, k: 2, kLim: 1, z: 1,
-          q: 1, r: b.r);
+          dSessions: 4, n: sim2PostCutN, w: sim2PostCutWReverse, k: 2,
+          kLim: 1, z: 1, q: 1, r: b.r);
     case 'climbing':
       return Dials(
           dSessions: 4, n: sim2PostCutN, w: sim2PostCutWClimb, k: 3, kLim: 1,

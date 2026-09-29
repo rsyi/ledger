@@ -3,7 +3,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:airledger/services/forecast_calibration.dart';
 import 'package:airledger/services/forecast_tab.dart';
+import 'package:airledger/services/nutrition_model.dart';
 import 'package:airledger/services/program_current.dart';
 import 'package:airledger/services/program_metrics.dart';
 import 'package:airledger/services/recomp_review.dart';
@@ -713,21 +715,29 @@ Future<void> main(List<String> args) async {
   }
 
   // -------------------------------------------------------------------------
-  // Program-sim forecast — sim2 v2.1 baseline (2026-09-26 spec §8/§9.3):
-  // baseline dials on the program.yaml block calendar from the current
-  // Monday, capacity seeded from the Sep-2026 RPE readings [log], with
-  // the observed bw + app Epley index refreshed from workbook history
-  // when present. Tab SHAPE is unchanged from v1 (the MCP forecast
-  // block keeps parsing): per-lift columns now carry TRUE expressed
-  // strength, `phase` = block emphasis, `grade_p75` = sim2 continuous C.
-  // Missing config degrades to "skipped" — never blocks the status write.
+  // Program-sim forecast — SINGLE TRAJECTORY (2026-09-28 directive):
+  // the declared program.yaml calendar EXTENDED with the flat recomp
+  // steady-state (no auto bulk/cut cycles), with r + protein DERIVED
+  // from actual Macrofactor logging (nutrition_model adaptive
+  // maintenance) when projectable, else the declared block rates.
+  // AUTO-RECALIBRATION (forecast_calibration): replay the trailing
+  // weeks against actuals; persistent error (3+ weekly checks outside
+  // band) triggers a guarded refit (±50% on the capacity gains, ±500
+  // kcal maintenance offset); state + events land in `forecast_meta`.
+  // Tab SHAPE unchanged from v1 (the MCP forecast block keeps
+  // parsing): per-lift = TRUE expressed strength, `phase` = block
+  // emphasis, `grade_p75` = continuous C. Missing config degrades to
+  // "skipped" — never blocks the status write.
   // -------------------------------------------------------------------------
   List<List<Object?>>? forecastRows;
+  List<List<Object?>>? forecastMetaRows;
   try {
     final s2Blocks = sim2BlocksFromProgramDocs(programYaml);
     if (s2Blocks == null) {
       print('forecast: skipped (program docs missing)');
     } else {
+      final now = DateTime.now();
+      final blocks = sim2ExtendSteadyState(s2Blocks);
       double? observedBw;
       double? observedIndexTotal;
       final series = buildWeeklySeries(
@@ -745,15 +755,108 @@ Future<void> main(List<String> args) async {
           observedIndexTotal = e['squat']! + e['bench']! + e['deadlift']!;
         }
       }
+
+      // Nutrition inputs (the only lever): actual Macrofactor days vs
+      // the weigh-in trend → adaptive maintenance + implied rate.
+      final prevMeta = ForecastMeta.fromTab(await tab(forecastMetaTabName));
+      final nutritionBase = buildNutritionForecast(
+        meals: mealRows,
+        weighIns: weightRows,
+        today: now,
+      );
+      final bwForP = observedBw ?? 163.0;
+
+      // Tracking replay runs what was PUBLISHED last night: the
+      // previously adjusted params + the previous maintenance offset.
+      final prevParams = Sim2Params.fitted()
+        ..a *= prevMeta.aScale
+        ..b *= prevMeta.bScale;
+      final nutritionPrev =
+          nutritionBase.withMaintenanceOffset(prevMeta.maintenanceOffsetKcal);
+      final idxTotals = observedIndexTotals(
+        mondays: series.mondays,
+        squat: series.e1rm['squat'] ?? const [],
+        bench: series.e1rm['bench'] ?? const [],
+        deadlift: series.e1rm['deadlift'] ?? const [],
+      );
+      final cal = calibrateForecast(
+        params: prevParams,
+        blocks: blocks,
+        dailyWeighIns: weightRows,
+        observedIndexByMonday: idxTotals,
+        today: now,
+        rReplayLbWk:
+            nutritionPrev.canProject ? nutritionPrev.rProjectedLbWk : null,
+        pReplay: nutritionPrev.canProject
+            ? nutritionPrev.proteinGPerLb(bwForP)
+            : null,
+      );
+      final refit = cal == null ? const RefitResult() : guardedRefit(cal);
+      final merged = mergeRecalibration(
+        previous: prevMeta,
+        refit: refit,
+        today: now,
+      );
+      final nutrition =
+          nutritionBase.withMaintenanceOffset(merged.maintenanceOffsetKcal);
+
+      final metaOut = ForecastMeta(
+        generatedAt: now,
+        maintenanceKcal: nutritionBase.maintenance?.kcal,
+        maintenanceBandKcal: nutritionBase.maintenance?.bandKcal,
+        maintenanceMethod: nutritionBase.maintenance?.method,
+        maintenancePairedDays: nutritionBase.maintenance?.pairedDays,
+        intake14Kcal: nutritionBase.avg14?.kcal,
+        protein14G: nutritionBase.avg14?.proteinG,
+        carbs14G: nutritionBase.avg14?.carbsG,
+        rProjectedLbWk:
+            nutrition.canProject ? nutrition.rProjectedLbWk : null,
+        tracking: merged.tracking,
+        aScale: merged.aScale,
+        bScale: merged.bScale,
+        maintenanceOffsetKcal: merged.maintenanceOffsetKcal,
+        events: merged.events,
+      );
+      forecastMetaRows = metaOut.toRows();
+
+      final params = Sim2Params.fitted()
+        ..a *= merged.aScale
+        ..b *= merged.bScale;
+      // Nutrition r/P scoped to the CURRENT block — later blocks run
+      // the declared calendar ("phase declarations stay").
+      final currentN = sim2CurrentBlockN(blocks, now) ?? blocks.first.n;
       final run = sim2Run(
-        params: Sim2Params.fitted(),
-        blocks: s2Blocks,
-        start: sim2StartMonday(DateTime.now()),
+        params: params,
+        blocks: blocks,
+        start: sim2StartMonday(now),
+        blockOverrides: {
+          if (nutrition.canProject)
+            currentN: Sim2DialOverrides(
+              r: nutrition.rProjectedLbWk,
+              p: nutrition.proteinGPerLb(bwForP),
+            ),
+        },
         observedBw: observedBw,
         observedIndexTotal: observedIndexTotal,
       );
       forecastRows = sim2ForecastTabRows(run);
-      print('forecast: sim2 baseline — horizon expressed '
+      final m = nutritionBase.maintenance;
+      print('forecast: single trajectory — '
+          '${nutrition.canProject ? 'nutrition-driven r '
+              '${nutrition.rProjectedLbWk!.toStringAsFixed(2)} lb/wk '
+              '(maintenance ~${nutrition.effectiveMaintenanceKcal!.round()}'
+              ' ± ${m!.bandKcal.round()} kcal, ${m.method}, '
+              '${m.pairedDays}d; 14d intake '
+              '${nutritionBase.avg14!.kcal.round()} kcal)'
+              : 'declared block rates (nutrition not projectable yet)'}');
+      print('forecast: tracking ${merged.tracking}'
+          '${refit.any ? ' — ${refit.moved.join(', ')}' : ''}'
+          '${cal == null ? ' (no replay window yet)' : ' (bw MAE '
+              '${cal.bwMae.toStringAsFixed(2)} lb over '
+              '${cal.bw.length} wks, strength MAE '
+              '${cal.strengthMae.toStringAsFixed(1)} lb over '
+              '${cal.strength.length} wks)'}');
+      print('forecast: horizon expressed '
           '${run.last.sTrue.toStringAsFixed(0)} '
           '(index ${run.last.sIdx.toStringAsFixed(0)}) at '
           '${ymd(run.weeks.last.monday)}, C ${run.last.c.toStringAsFixed(1)}, '
@@ -799,6 +902,9 @@ Future<void> main(List<String> args) async {
     print('readings: would append ${chain.newReadings.length} rows');
     if (forecastRows != null) {
       print('forecast: would write ${forecastRows.length} weekly rows');
+    }
+    if (forecastMetaRows != null) {
+      print('forecast_meta: would write ${forecastMetaRows.length} rows');
     }
     _printCurrentWeekRow(filteredWeeks, flagsByWeek, psHeaders);
     return;
@@ -886,6 +992,21 @@ Future<void> main(List<String> args) async {
       rows: forecastRows,
     );
     print('wrote forecast: ${forecastRows.length} weekly rows');
+  }
+
+  // -------------------------------------------------------------------------
+  // REPLACE-ALL write forecast_meta (nutrition inputs + recalibration
+  // state the Plan tab and the MCP forecast block read)
+  // -------------------------------------------------------------------------
+  if (forecastMetaRows != null) {
+    await _replaceTab(
+      api: api,
+      spreadsheetId: config.spreadsheetId,
+      tabName: forecastMetaTabName,
+      headers: forecastMetaHeaders,
+      rows: forecastMetaRows,
+    );
+    print('wrote forecast_meta: ${forecastMetaRows.length} rows');
   }
 
   // -------------------------------------------------------------------------

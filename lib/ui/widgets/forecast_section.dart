@@ -103,7 +103,7 @@ class Sim2McJob {
   final Sim2Params params;
   final List<Sim2Block> blocks;
   final DateTime start;
-  final Sim2DialOverrides overrides;
+  final Map<int, Sim2DialOverrides> blockOverrides;
   final double? observedBw;
   final double? observedIndexTotal;
 
@@ -111,7 +111,7 @@ class Sim2McJob {
     required this.params,
     required this.blocks,
     required this.start,
-    required this.overrides,
+    required this.blockOverrides,
     required this.observedBw,
     required this.observedIndexTotal,
   });
@@ -123,7 +123,7 @@ Future<Sim2McSummary> _isolateMcRunner(Sim2McJob j) => sim2MonteCarloInIsolate(
   params: j.params,
   blocks: j.blocks,
   start: j.start,
-  overrides: j.overrides,
+  blockOverrides: j.blockOverrides,
   observedBw: j.observedBw,
   observedIndexTotal: j.observedIndexTotal,
 );
@@ -191,20 +191,27 @@ class _ForecastSectionState extends State<ForecastSection> {
         .withDelta(_calorieDelta);
   }
 
-  /// The nutrition-derived dial overrides (r + P) — empty when the
-  /// data can't project (the declared block rates then apply).
-  Sim2DialOverrides get _overrides {
+  /// The nutrition-derived dial overrides (r + P), scoped to the
+  /// CURRENT block only — later blocks keep the declared calendar
+  /// rates ("phase declarations stay": today's eating predicts the
+  /// current phase, it doesn't rewrite next year's plan). Empty when
+  /// the data can't project (declared block rates apply throughout).
+  Map<int, Sim2DialOverrides> get _blockOverrides {
     final n = _nutrition;
-    if (n == null || !n.canProject) return const Sim2DialOverrides();
+    if (n == null || !n.canProject) return const {};
     final bw =
         widget.inputs.observedBw ?? widget.inputs.stats.bw7dAvg ?? sim2SeedBw;
-    return Sim2DialOverrides(
-      r: n.rProjectedLbWk,
-      p: n.proteinGPerLb(bw),
-    );
+    final currentN =
+        sim2CurrentBlockN(_blocks, widget.today) ?? _blocks.first.n;
+    return {
+      currentN: Sim2DialOverrides(
+        r: n.rProjectedLbWk,
+        p: n.proteinGPerLb(bw),
+      ),
+    };
   }
 
-  bool get _nutritionDriven => !_overrides.isEmpty;
+  bool get _nutritionDriven => _blockOverrides.isNotEmpty;
 
   @override
   void initState() {
@@ -237,7 +244,7 @@ class _ForecastSectionState extends State<ForecastSection> {
       params: _params,
       blocks: _blocks,
       start: _start,
-      overrides: _overrides,
+      blockOverrides: _blockOverrides,
       observedBw: widget.inputs.observedBw,
       observedIndexTotal: widget.inputs.observedIndexTotal,
     );
@@ -255,7 +262,7 @@ class _ForecastSectionState extends State<ForecastSection> {
             params: _params.copy(),
             blocks: _blocks,
             start: _start,
-            overrides: _overrides,
+            blockOverrides: _blockOverrides,
             observedBw: widget.inputs.observedBw,
             observedIndexTotal: widget.inputs.observedIndexTotal,
           ),

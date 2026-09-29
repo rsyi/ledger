@@ -337,6 +337,18 @@ Sim2State sim2InitialState(Sim2Params p, {double? observedBw}) {
   return st;
 }
 
+/// The block containing [day] (the last block started on/before it,
+/// same lookup the run loop uses); null before the calendar starts or
+/// on an empty calendar.
+int? sim2CurrentBlockN(List<Sim2Block> blocks, DateTime day) {
+  final d = DateTime.utc(day.year, day.month, day.day);
+  int? n;
+  for (final b in blocks) {
+    if (!d.isBefore(b.start)) n = b.n;
+  }
+  return n;
+}
+
 /// The Monday the sim steps from: [today] if it is a Monday, else the
 /// next one.
 DateTime sim2StartMonday(DateTime today) {
@@ -535,6 +547,13 @@ Sim2Run sim2Run({
   DateTime? horizon,
   String presetId = 'baseline',
   Sim2DialOverrides overrides = const Sim2DialOverrides(),
+
+  /// Per-block overrides (block n → dials), applied AFTER the global
+  /// [overrides]. The nutrition-driven forecast (2026-09-28) scopes
+  /// its observed-intake r/P to the CURRENT block this way — later
+  /// blocks keep the DECLARED calendar rates ("phase declarations
+  /// stay"; current eating shouldn't rewrite next year's plan).
+  Map<int, Sim2DialOverrides> blockOverrides = const {},
   double? muDeficit, // §5 deficit μ branch (0.30 rule vs ≈0), pending DEXA
   double? observedBw,
   double? observedIndexTotal,
@@ -567,6 +586,7 @@ Sim2Run sim2Run({
     final x = sim2BaselineDials(b);
     preset.apply(b, x, st);
     overrides.apply(x);
+    blockOverrides[b.n]?.apply(x);
     if (muDeficit != null && x.r < 0) x.muOverride = muDeficit;
 
     // §7 injury effects
@@ -677,6 +697,7 @@ Sim2McSummary sim2MonteCarlo({
   DateTime? horizon,
   String presetId = 'baseline',
   Sim2DialOverrides overrides = const Sim2DialOverrides(),
+  Map<int, Sim2DialOverrides> blockOverrides = const {},
   double? muDeficit,
   double? observedBw,
   double? observedIndexTotal,
@@ -692,6 +713,7 @@ Sim2McSummary sim2MonteCarlo({
       horizon: horizon,
       presetId: presetId,
       overrides: overrides,
+      blockOverrides: blockOverrides,
       muDeficit: muDeficit,
       observedBw: observedBw,
       observedIndexTotal: observedIndexTotal,
@@ -731,6 +753,7 @@ Future<Sim2McSummary> sim2MonteCarloInIsolate({
   DateTime? horizon,
   String presetId = 'baseline',
   Sim2DialOverrides overrides = const Sim2DialOverrides(),
+  Map<int, Sim2DialOverrides> blockOverrides = const {},
   double? muDeficit,
   double? observedBw,
   double? observedIndexTotal,
@@ -744,6 +767,7 @@ Future<Sim2McSummary> sim2MonteCarloInIsolate({
         horizon: horizon,
         presetId: presetId,
         overrides: overrides,
+        blockOverrides: blockOverrides,
         muDeficit: muDeficit,
         observedBw: observedBw,
         observedIndexTotal: observedIndexTotal,

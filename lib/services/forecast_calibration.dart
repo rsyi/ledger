@@ -137,12 +137,19 @@ ForecastCalibration? calibrateForecast({
   final anchorIdx = observedIndexByMonday[startMonday];
   if (anchorBw == null) return null;
 
+  // The replay override is scoped to the block containing today —
+  // matching the published forecast's current-block scoping. A replay
+  // window spanning a block boundary validates the older weeks against
+  // the declared rates (documented approximation; the window is short).
+  final currentN = sim2CurrentBlockN(blocks, today) ?? blocks.first.n;
   final run = sim2Run(
     params: params,
     blocks: blocks,
     start: startMonday,
     horizon: _mondayOnOrBefore(today),
-    overrides: Sim2DialOverrides(r: rReplayLbWk, p: pReplay),
+    blockOverrides: {
+      currentN: Sim2DialOverrides(r: rReplayLbWk, p: pReplay),
+    },
     observedBw: anchorBw,
     observedIndexTotal: anchorIdx,
   );

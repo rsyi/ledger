@@ -66,7 +66,7 @@ Future<Sim2McSummary> testMcRunner(Sim2McJob j) async => sim2MonteCarlo(
       params: j.params,
       blocks: j.blocks,
       start: j.start,
-      overrides: j.overrides,
+      blockOverrides: j.blockOverrides,
       observedBw: j.observedBw,
       observedIndexTotal: j.observedIndexTotal,
       paths: 20,

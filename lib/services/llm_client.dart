@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -9,12 +10,26 @@ import '../models/model_config.dart';
 /// a new vendor is a switch arm + a request shape.
 class LlmClient {
   final Map<String, ModelConfig> _byName;
+  final http.Client _http;
 
-  LlmClient(List<ModelConfig> models)
-      : _byName = {for (final m in models) m.name: m};
+  LlmClient(List<ModelConfig> models, {http.Client? httpClient})
+      : _byName = {for (final m in models) m.name: m},
+        _http = httpClient ?? http.Client();
 
   bool get isEmpty => _byName.isEmpty;
   bool has(String name) => _byName.containsKey(name);
+
+  /// Name of the model the vision path should use: prefers the entry
+  /// named `sonnet` (the post-log hooks' configured Anthropic model —
+  /// all current Claude 3.5+ models are vision-capable), else the
+  /// first Anthropic entry. Null when no Anthropic model is configured.
+  String? visionModelName() {
+    if (_byName['sonnet']?.vendor == ModelVendor.anthropic) return 'sonnet';
+    for (final m in _byName.values) {
+      if (m.vendor == ModelVendor.anthropic) return m.name;
+    }
+    return null;
+  }
 
   /// Sends [prompt] to the model named [modelName] and returns its
   /// response as a plain string. Throws if the model isn't registered
@@ -33,9 +48,63 @@ class LlmClient {
     };
   }
 
+  /// Vision completion: [jpegImages] (chronological) + [prompt] in one
+  /// user turn. Anthropic-only — the app has no OpenAI vision use and
+  /// the request shapes differ; extend the switch if that changes.
+  Future<String> completeVision(
+    String modelName,
+    String prompt,
+    List<Uint8List> jpegImages, {
+    int maxTokens = 1024,
+  }) async {
+    final cfg = _byName[modelName];
+    if (cfg == null) {
+      throw StateError(
+        'Model "$modelName" not configured. Add an entry to config.yml '
+        'models:. Known: ${_byName.keys.join(', ')}',
+      );
+    }
+    if (cfg.vendor != ModelVendor.anthropic) {
+      throw UnsupportedError(
+          'completeVision supports Anthropic models only ("$modelName" is '
+          '${cfg.vendor.name})');
+    }
+    final uri = Uri.parse('${cfg.apiUrl}/messages');
+    final resp = await _http.post(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': cfg.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: jsonEncode({
+        'model': cfg.modelRef,
+        'max_tokens': maxTokens,
+        'messages': [
+          {
+            'role': 'user',
+            'content': [
+              for (final img in jpegImages)
+                {
+                  'type': 'image',
+                  'source': {
+                    'type': 'base64',
+                    'media_type': 'image/jpeg',
+                    'data': base64Encode(img),
+                  },
+                },
+              {'type': 'text', 'text': prompt},
+            ],
+          },
+        ],
+      }),
+    );
+    return _anthropicText(resp);
+  }
+
   Future<String> _openai(ModelConfig cfg, String prompt) async {
     final uri = Uri.parse('${cfg.apiUrl}/chat/completions');
-    final resp = await http.post(
+    final resp = await _http.post(
       uri,
       headers: {
         'Content-Type': 'application/json',
@@ -70,7 +139,7 @@ class LlmClient {
 
   Future<String> _anthropic(ModelConfig cfg, String prompt) async {
     final uri = Uri.parse('${cfg.apiUrl}/messages');
-    final resp = await http.post(
+    final resp = await _http.post(
       uri,
       headers: {
         'Content-Type': 'application/json',
@@ -85,6 +154,10 @@ class LlmClient {
         ],
       }),
     );
+    return _anthropicText(resp);
+  }
+
+  String _anthropicText(http.Response resp) {
     if (resp.statusCode != 200) {
       throw LlmCallException(
         vendor: 'Anthropic',

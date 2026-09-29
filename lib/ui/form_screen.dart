@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
@@ -284,6 +286,27 @@ class _FormScreenState extends State<FormScreen> {
           _shared[idField] = res.mediaId;
         }
       });
+      // Kick the RPE estimate NOW — the picker's download URL dies
+      // ~60 min after the pick. Fire-and-forget; the chip below the
+      // field tracks pending/ready/failed via the service listener.
+      // PROPOSE-ONLY: nothing here (or in the service) writes rpe.
+      if (svc.canEstimate) {
+        final exercise = _shared['exercise']?.toString();
+        unawaited(svc.estimate(
+          video: res,
+          ctx: RpeRowContext(
+            exercise: exercise,
+            weight: num.tryParse('${_shared['weight'] ?? ''}'),
+            reps: num.tryParse('${_shared['reps'] ?? ''}'),
+            setType: _shared['set_type']?.toString(),
+            recentHistory: recentRpeLines(
+              _recentRows ?? const [],
+              exercise: exercise,
+              dateField: widget.view.dateField ?? 'date',
+            ),
+          ),
+        ));
+      }
     } on VideoAttachCancelled {
       // User closed the picker — nothing to report.
     } catch (e) {
@@ -300,6 +323,39 @@ class _FormScreenState extends State<FormScreen> {
     // is app-global but only one form runs a pick at a time).
     VideoRpeService.instance?.flow.cancel();
     super.dispose();
+  }
+
+  /// Chip row under a `widget: video` field. Null when there's nothing
+  /// to show (no service, no attached media id, or no rpe dim to fill).
+  Widget? _buildRpeChip(Dimension dim) {
+    final svc = VideoRpeService.instance;
+    if (svc == null || !svc.canEstimate) return null;
+    if (widget.view.dimensionByName('rpe') == null) return null;
+    final mid = _shared[mediaIdFieldFor(dim.name)]?.toString();
+    if (mid == null || mid.isEmpty) return null;
+    return _VideoRpeChip(
+      service: svc,
+      mediaId: mid,
+      currentRpe: _shared['rpe'],
+      onAccept: (v) => setState(() {
+        _shared['rpe'] = v;
+        _missingRequired.remove('rpe');
+      }),
+    );
+  }
+
+  /// After a successful save: pair the logged rpe with any video
+  /// estimate (accepted vs overridden — coach calibration signal).
+  /// Fire-and-forget; never blocks the save.
+  void _recordVideoRpeOutcomes() {
+    final svc = VideoRpeService.instance;
+    if (svc == null) return;
+    for (final dim in widget.view.editableDimensions) {
+      if (dim.input?.widget != WidgetType.video) continue;
+      final mid = _shared[mediaIdFieldFor(dim.name)]?.toString();
+      if (mid == null || mid.isEmpty) continue;
+      unawaited(svc.recordOutcome(mid, _shared['rpe']));
+    }
   }
 
   @override
@@ -373,6 +429,17 @@ class _FormScreenState extends State<FormScreen> {
               setState(() => _shared[target] = value),
         ),
       ));
+      // AI RPE chip under the video field: propose-only — renders the
+      // estimate; ONLY the user's tap fills the rpe field (still
+      // editable after). Hidden until a video with a media id is
+      // attached and the view actually has an rpe dim.
+      if (dim.input?.widget == WidgetType.video) {
+        final chip = _buildRpeChip(dim);
+        if (chip != null) {
+          children.add(const SizedBox(height: 6));
+          children.add(chip);
+        }
+      }
       children.add(const SizedBox(height: 12));
     }
     if (_saving) {
@@ -592,6 +659,7 @@ class _FormScreenState extends State<FormScreen> {
           }
         }
       }
+      _recordVideoRpeOutcomes();
       await _persistAdHocValues();
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -622,5 +690,131 @@ class _FormScreenState extends State<FormScreen> {
         await AutocompleteCache.add(widget.view, dim, v.toString());
       }
     }
+  }
+}
+
+/// "AI estimate: ~8.5 (8–9) — tap to accept" chip under the video
+/// field. PROPOSE-ONLY: the tap is the one and only path from estimate
+/// to the rpe field, and the user can still edit afterwards. States:
+/// pending spinner, failure line (form stays fully usable), estimate
+/// chip + one-line reasoning, or an honest "couldn't judge" line when
+/// the model declined. Falls back to the persisted estimate when the
+/// row is reopened in a later session.
+class _VideoRpeChip extends StatefulWidget {
+  final VideoRpeService service;
+  final String mediaId;
+  final Object? currentRpe;
+  final ValueChanged<double> onAccept;
+
+  const _VideoRpeChip({
+    required this.service,
+    required this.mediaId,
+    required this.currentRpe,
+    required this.onAccept,
+  });
+
+  @override
+  State<_VideoRpeChip> createState() => _VideoRpeChipState();
+}
+
+class _VideoRpeChipState extends State<_VideoRpeChip> {
+  @override
+  void initState() {
+    super.initState();
+    widget.service.addListener(_onService);
+  }
+
+  @override
+  void dispose() {
+    widget.service.removeListener(_onService);
+    super.dispose();
+  }
+
+  void _onService() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final st = widget.service.stateFor(widget.mediaId);
+    if (st == null) {
+      // Not estimated this session — a past session may have (edit
+      // mode reopen); show that estimate if it exists.
+      return FutureBuilder<RpeEstimate?>(
+        future: widget.service.load(widget.mediaId),
+        builder: (context, snap) {
+          final est = snap.data;
+          if (est == null) return const SizedBox.shrink();
+          return _ready(context, est);
+        },
+      );
+    }
+    final scheme = Theme.of(context).colorScheme;
+    return switch (st) {
+      RpeEstimatePending() => Row(
+          children: [
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Estimating RPE from video…',
+              style:
+                  TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      RpeEstimateFailed(message: final msg) => Text(
+          'RPE estimate failed: $msg',
+          style: TextStyle(fontSize: 12, color: scheme.error),
+        ),
+      RpeEstimateReady(estimate: final est) => _ready(context, est),
+    };
+  }
+
+  Widget _ready(BuildContext context, RpeEstimate est) {
+    final scheme = Theme.of(context).colorScheme;
+    final rpe = est.rpe;
+    if (rpe == null) {
+      return Text(
+        "AI couldn't judge RPE from this video"
+        '${est.reasoning.isEmpty ? '' : ' — ${est.reasoning}'}',
+        style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+      );
+    }
+    final accepted =
+        num.tryParse('${widget.currentRpe ?? ''}')?.toDouble() == rpe;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: ActionChip(
+            avatar: Icon(
+              accepted ? Icons.check : Icons.auto_awesome,
+              size: 16,
+              color: scheme.primary,
+            ),
+            label: Text(
+              accepted
+                  ? 'AI estimate accepted: ${est.display}'
+                  : 'AI estimate: ${est.display} — tap to accept',
+            ),
+            onPressed: accepted ? null : () => widget.onAccept(rpe),
+          ),
+        ),
+        if (est.reasoning.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              est.reasoning,
+              style:
+                  TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+            ),
+          ),
+      ],
+    );
   }
 }

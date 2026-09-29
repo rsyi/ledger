@@ -312,6 +312,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final photosClientId = assetConfig.kayaGmail?.isConfigured == true
         ? assetConfig.kayaGmail!.serverClientId
         : null;
+    final engineRepo = repo is EngineLedgerConnector ? repo.repo : null;
     VideoRpeService.instance = photosClientId == null
         ? null
         : VideoRpeService(
@@ -320,6 +321,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 serverClientId: photosClientId,
               ),
             ),
+            llm: llm,
+            modelName: llm?.visionModelName(),
+            metaGet: engineRepo?.metaGet,
+            metaSet: engineRepo?.metaSet,
           );
     // AnalyticsEngine = airlayer compiler + LocalDb SQLite cache. Used by
     // the chat's run_query tool. Best-effort: if the native lib fails to

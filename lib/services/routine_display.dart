@@ -241,10 +241,17 @@ class TmSignal {
   /// driving reading (or seed/manual edit).
   final DateTime changedOn;
 
+  /// Source of the driving row (seed | rule | manual | test |
+  /// pain_cap). v13: `rule` rows are the slow loop's recomputes —
+  /// labeled "auto"; `manual` values pin until outvoted — labeled
+  /// "manual".
+  final String source;
+
   const TmSignal({
     required this.current,
     required this.previous,
     required this.changedOn,
+    this.source = '',
   });
 }
 
@@ -276,6 +283,7 @@ TmSignal? tmSignal(
     current: current.valueLb,
     previous: before?.valueLb,
     changedOn: current.effectiveFrom,
+    source: current.source,
   );
 }
 
@@ -284,12 +292,23 @@ TmSignal? tmSignal(
 String tmSignalLabel(TmSignal s) => '${_n(s.current)} · ${tmSignalSuffix(s)}';
 
 /// The label's tail (the value is rendered separately at value scale):
-/// `was 320 ↓ · Oct 1` / `since Sep 21`.
+/// `was 320 ↓ · Oct 1 · auto` / `since Sep 21` / `260 · manual`.
+///
+/// Source labels (v13 two-loop TM): slow-loop recomputes (`rule` rows)
+/// read `auto`; user-pinned values (`manual` rows) read `manual`;
+/// seeds/others stay bare.
 String tmSignalSuffix(TmSignal s) {
   final when = DateFormat('MMM d').format(s.changedOn);
-  if (s.previous == null || s.previous == s.current) return 'since $when';
+  final tag = switch (s.source) {
+    'manual' => ' · manual',
+    'rule' => ' · auto',
+    _ => '',
+  };
+  if (s.previous == null || s.previous == s.current) {
+    return 'since $when$tag';
+  }
   final arrow = s.current > s.previous! ? '↑' : '↓';
-  return 'was ${_n(s.previous!)} $arrow · $when';
+  return 'was ${_n(s.previous!)} $arrow · $when$tag';
 }
 
 /// The lift's full TM history for the trend plot: (day, value) in tab

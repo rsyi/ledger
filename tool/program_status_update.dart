@@ -587,6 +587,13 @@ Future<void> main(List<String> args) async {
   for (final e in chain.flagsByLift.entries) {
     print('  flags ${e.key}: ${e.value.toSet().join(',')}');
   }
+  // v13 slow-loop nightly recomputes (working_max rows not tied to a
+  // new reading — rule-change reconciles, outvoted manual pins).
+  for (final w in chain.newWorkingMaxRows) {
+    if (w.readingId.isEmpty && w.source == 'rule') {
+      print('  slow-loop ${w.lift} → ${w.valueLb} (${w.reason})');
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Read existing coach_flags tab to preserve acknowledged values

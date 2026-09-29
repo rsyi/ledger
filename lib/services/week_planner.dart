@@ -495,8 +495,10 @@ class WeekPlanner {
   /// v4: strength-wave top reps + planned accessories + volume
   /// multipliers, program.yaml v10; v5: cut wave `strength_wave_cut` +
   /// %TM `pct` rows + cut deload halving, program.yaml v11; v6: v12
-  /// routine merge + accessory double-progression weights).
-  static const planVersion = 'plan_v6';
+  /// routine merge + accessory double-progression weights; v7: v13
+  /// two-loop TM — regenerate the week's loads off the slow-loop
+  /// recomputed training maxes).
+  static const planVersion = 'plan_v7';
 
   /// Ledger meta key the runner writes the last swallowed error into.
   static const metaErrorKey = 'week_planner_error';

@@ -561,17 +561,19 @@ void main() {
   // ---------------------------------------------------------------------
   // runWmChain under the live v12 tm_rule (guarded implied-max)
   // ---------------------------------------------------------------------
-  group('runWmChain under tm_rule (program.yaml v12)', () {
-    final v12 = currentVersion(program)!;
-    final v12Policies = loadPolicies(v12);
-    final v12CutEarly = v12Policies.firstWhere((p) => p.name == 'cut_early');
-    final rule = tmRuleOf(v12)!;
+  group('runWmChain under tm_rule (program.yaml v13)', () {
+    final v13 = currentVersion(program)!;
+    final v13Policies = loadPolicies(v13);
+    final v12CutEarly = v13Policies.firstWhere((p) => p.name == 'cut_early');
+    final rule = tmRuleOf(v13)!;
     final seeds = seedWorkingMaxRows();
     WmSnapshot snap(List<WorkingMaxRow> wm, [List<ReadingRow>? r]) =>
         (workingMax: wm, readings: r ?? const []);
 
-    test('easy wave top raises +5 (capped); hard top drops in full', () {
-      // Bench seed 240. 195×5@7 → implied 248.1 → 250 capped → 245.
+    test('easy wave top raises in full (median, no session cap); hard top '
+        'drops in full', () {
+      // Bench seed 240. 195×5@7 → implied 248.1 → median (n=1) → 250,
+      // applied in full (the v12 ±5 cap is superseded by the median).
       final raise = runWmChain(
         snapshot: snap(seeds),
         strengthRows: [bench('2026-10-05', 195, 5, 7)],
@@ -580,7 +582,7 @@ void main() {
         tmRule: rule,
       );
       expect(raise.newReadings.single.decision, 'raise');
-      expect(raise.newWorkingMaxRows.single.valueLb, 245);
+      expect(raise.newWorkingMaxRows.single.valueLb, 250);
 
       // 195×5@9 → implied 233.0 → 235: full drop.
       final drop = runWmChain(

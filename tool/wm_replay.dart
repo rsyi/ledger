@@ -132,7 +132,8 @@ Future<void> main() async {
     if (lift == 'bench') {
       print('');
       if (tmRule != null) {
-        print('  NOTE: replay ran under the v12 GUARDED IMPLIED-MAX '
+        print('  NOTE: replay ran under the '
+            '${tmRule.slowLoop ? 'v13 SLOW-LOOP MEDIAN' : 'v12 GUARDED IMPLIED-MAX'} '
             'tm_rule — the §7.1 table below is the LEGACY band-rule '
             'trace and is expected to diverge.');
       }

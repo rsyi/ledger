@@ -340,16 +340,28 @@ void main() {
       expect(tmSignal(rows, 'press', DateTime.utc(2026, 10, 5)), isNull);
     });
 
-    test('labels: drop, raise, steady', () {
+    test('labels: drop, raise, steady — slow-loop rows read auto', () {
+      // v13 source labels: `rule` rows (slow-loop recomputes) → auto;
+      // `manual` rows (pinned values) → manual; seeds stay bare.
       final drop = tmSignal(rows, 'squat', DateTime.utc(2026, 10, 5))!;
-      expect(tmSignalLabel(drop), '310 · was 320 ↓ · Oct 1');
-      expect(tmSignalSuffix(drop), 'was 320 ↓ · Oct 1');
+      expect(tmSignalLabel(drop), '310 · was 320 ↓ · Oct 1 · auto');
+      expect(tmSignalSuffix(drop), 'was 320 ↓ · Oct 1 · auto');
       final steady = tmSignal(rows, 'bench', DateTime.utc(2026, 10, 5))!;
       expect(tmSignalLabel(steady), '240 · since Sep 21');
       expect(tmSignalSuffix(steady), 'since Sep 21');
       final raise = tmSignal(
           [..._raiseRows()], 'press', DateTime.utc(2026, 10, 5))!;
-      expect(tmSignalLabel(raise), '145 · was 140 ↑ · Oct 3');
+      expect(tmSignalLabel(raise), '145 · was 140 ↑ · Oct 3 · auto');
+    });
+
+    test('manual values are labeled — the pin is visible', () {
+      final manual = tmSignal([
+        _wm('deadlift', 330, DateTime.utc(2026, 9, 21),
+            source: 'seed', confirmed: false),
+        _wm('deadlift', 340, DateTime.utc(2026, 10, 2),
+            source: 'manual', confirmed: true),
+      ], 'deadlift', DateTime.utc(2026, 10, 5))!;
+      expect(tmSignalSuffix(manual), 'was 330 ↑ · Oct 2 · manual');
     });
   });
 

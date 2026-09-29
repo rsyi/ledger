@@ -34,8 +34,9 @@ void main() {
       _loadYamlFile('$_fitnessRepo/program.yaml') as Map<Object?, Object?>;
   final version = currentVersion(program)!;
   final policies = loadPolicies(version);
-  // v12: TM movement is the guarded implied-max tm_rule; the fixtures
-  // pin it (and the kept freeze/cap semantics) for both twins.
+  // v13: TM movement is the two-loop rule — median slow loop over the
+  // qualifying reading history + the kept fast-loop safeties; the
+  // fixtures pin it for both twins.
   final tmRule = tmRuleOf(version);
   LoadPolicy byName(String n) => policies.firstWhere((p) => p.name == n);
 
@@ -57,15 +58,13 @@ void main() {
 
       // Reading (optional): variant + grinder derived exactly like the
       // production pipeline (§1.2/§1.4).
-      Reading? reading;
-      final r = c['reading'];
-      if (r is Map) {
+      Reading readingOf(Map r, DateTime day) {
         final weight = (r['weight'] as num).toDouble();
         final rpe = (r['rpe'] as num).toDouble();
         final notes = r['notes']?.toString();
         final variant = parseVariant(lift, notes);
-        reading = Reading(
-          date: date,
+        return Reading(
+          date: day,
           lift: lift,
           variant: variant.variant,
           weightLb: weight / variant.factor,
@@ -79,6 +78,37 @@ void main() {
           variantMismatch: variant.mismatch,
         );
       }
+
+      Reading? reading;
+      final r = c['reading'];
+      if (r is Map) reading = readingOf(r, date);
+
+      // Slow-loop inputs (v13): the sample history (history + the
+      // reading itself) and the manual-pin state, exactly as
+      // runWmChain builds them.
+      final samples = <Reading>[
+        for (final h in (c['history'] as List? ?? const []))
+          readingOf(h as Map, DateTime.parse((h)['date'].toString())),
+        ?reading,
+      ];
+      ManualPin? pin;
+      final mp = c['manual_pin'];
+      if (mp is Map) {
+        pin = (
+          since: DateTime.parse(mp['since'].toString()),
+          newSets: (mp['new_sets'] as num).toInt(),
+          needed: (mp['needed'] as num).toInt(),
+        );
+      }
+      final slowTm = tmRule?.slowLoop == true && reading != null
+          ? slowTmEstimate(
+              samples: samples,
+              currentTm: wm,
+              rule: tmRule!,
+              asOf: date,
+              notBefore: pin?.since,
+            )
+          : null;
 
       // Prior decision state (streak / consecutive drop / pain-cap clean).
       final priors = <WmDecision>[];
@@ -109,6 +139,8 @@ void main() {
         weeksWithoutReading:
             (c['weeks_without_reading'] as num?)?.toInt() ?? 0,
         tmRule: tmRule,
+        slowTm: slowTm,
+        manualPin: pin,
       );
 
       final expected = c['expect'] as Map;

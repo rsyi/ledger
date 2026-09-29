@@ -587,10 +587,18 @@ class _HomeScreenState extends State<HomeScreen> {
               // Read-only views show in a separate "Read-only" section
               // backed by a direct sheet read (no ledger writes). Only
               // rendered when the bootstrap established a readOnlyRepo.
+              // program_status is coach/dashboard plumbing (nightly-written
+              // weekly metrics the Progress/Goals/Plan tabs + MCP read);
+              // its raw rows have no purpose as a browsable Log ledger, so
+              // it's excluded here. The dashboard still reads it via its
+              // own statusView + direct-sheet repo.
               final readOnlyViews = data.readOnlyRepo == null
                   ? const <ViewSchema>[]
                   : data.views
-                        .where((v) => v.hasInputOverlay && v.readOnly)
+                        .where((v) =>
+                            v.hasInputOverlay &&
+                            v.readOnly &&
+                            v.name != 'program_status')
                         .toList();
               ViewSchema? coachView;
               for (final v in data.views) {

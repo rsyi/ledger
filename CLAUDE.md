@@ -285,6 +285,53 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     recorded §4 gap fixed): TS buildPrescription gained topReps/topPct;
     heavyLiftsForDate reads the merged routine. Worker DEPLOYED +
     smoke-tested (serves version 12, wave top 5@260 for Mon squat).
+- **v13: two-loop TM + Saturday display fix (2026-09-28, user-directed
+  corrections, LIVE — fitness pushed, MCP deployed, tabs recomputed)**:
+  - SATURDAY REGRESSION (root cause): the new Program screen displays
+    a Monday-anchored week (buildWeekPlan) but buildWeekPlannedEntries
+    snapped its 7-day window to the Sat-start ACCOUNTING week
+    (`week_start: saturday` → Sat–Fri), so the DISPLAYED Saturday fell
+    outside the priced window → zero session lines → daySummary read
+    'Rest'. The v12 routine merge itself was correct (routine.week.sat
+    has the full OHP day). Fix: `snapToWeekStart: false` param — the
+    screen prices exactly the displayed Mon–Sun; PlanStore/rollup
+    callers keep the snapped window. test/cut_week_structure_test.dart
+    pins ALL SEVEN cut-week days verbatim + both window shapes;
+    program_screen_test pins Saturday = full OHP session, one Rest day.
+  - TWO-LOOP TM (`tm_rule: median_implied_max`, program.yaml v13 —
+    user-specified: history → deterministic TM estimate → %-based
+    program → workout → observed RPE → existing small auto-adjust).
+    SLOW LOOP: TM = round5(median(implied maxes of qualifying top
+    sets)) — day-max per lift, logged RPE, reps ≤ `max_reps` 8,
+    variant-converted, ≥ 0.78×TM, non-light/deload — over the last
+    `window_days` 21 ANCHORED AT THE NEWEST QUALIFYING SET (not the
+    clock: identical history ⇒ identical TM), or the last `min_sets` 5
+    sets, whichever holds MORE data. Median not trimmed-mean (at N=5
+    they collapse; no trim params); grinder sets INCLUDED as evidence.
+    The v12 ±5 raise cap is SUPERSEDED BY DESIGN (outlier-damping
+    pinned by test: a +15 lb outlier day moves the TM 0 ≤ 5 lb);
+    `raise_cap_lb` stays declared but is guarded-mode-only. FAST LOOP
+    unchanged: backoff_rule, grinder/missed immediate drops (≥5, in
+    full when implied is lower — and THROUGH manual pins), pain caps,
+    sub-top guard, post-drop caps, consecutive-drop rule. MANUAL PIN:
+    set_working_max pins until `manual_outvote_sets` 3 qualifying sets
+    land after it; the estimator then runs on post-manual sets ONLY
+    (overridden history never resurrects). runWmChain gained a NIGHTLY
+    RECOMPUTE reconcile: TM converges to the estimate even with no new
+    readings (rule changes, edited history, outvoted pins), writes a
+    row only on change, idempotent (gate fixed-point ≤3 iterations),
+    never raises past a freshest-qualifying grinder. Code:
+    working_max.dart slowTmEstimate/qualifyingTmSamples/ManualPin +
+    evaluate median branch; wm_tabs runWmChain samples from FULL
+    strength history; TS twin working_max.ts + tools.ts log_rows path
+    (samples = stored readings tab + the new reading) — fixtures
+    REWRITTEN (history/manual_pin case keys, 34 cases, both twins
+    green). Planner plan_v7 (regenerate with recomputed TMs); routine
+    screen TM rows show source labels (rule → '· auto', manual →
+    '· manual'). First live recompute 2026-09-28: press 140→145 (slow
+    loop, 5 sets 08-08..09-26 median 145.6); squat 320 confirmed by
+    the median; bench 245 + deadlift 340 manual-pinned (0 of 3
+    post-manual sets). tool/wm_replay's §7.1 note is mode-aware.
 - **Recomp TRACKING layer (2026-09-28, coach/recomp-tracking-spec.md —
   canonical, user-authored)**: adherence INPUTS vs generated OUTCOMES.
   SCHEMAS (existing keys only — NO Rust/dylib change; engine's

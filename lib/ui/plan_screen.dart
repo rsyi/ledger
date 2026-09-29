@@ -7,11 +7,12 @@
 ///
 /// Default view (decluttered per user feedback — the old Program tab
 /// was "overwrought"): the phase declaration + block timeline with the
-/// you-are-here marker, ONE combined progress chart (expressed +
-/// capacity, capacity ON by default during cuts) with its summary
-/// line, and the verdict banner. Everything else — scenarios/levers,
-/// body comp, climbing, VO2, fatigue budget, parameter sheet — is
-/// behind expandable sections (ForecastSection compact mode).
+/// you-are-here marker, then the SINGLE-TRAJECTORY forecast (2026-09-28
+/// directive): the NUTRITION card (Macrofactor intake → adaptive
+/// maintenance → the sim's rate; calorie-delta what-if is the ONLY
+/// lever), the summary + model-tracking line, ONE combined progress
+/// chart, and the verdict banner. Body comp / climbing / VO2 / fatigue
+/// and the provenance parameter sheet fold behind expandables.
 library;
 
 import 'package:flutter/material.dart';
@@ -19,7 +20,10 @@ import 'package:intl/intl.dart';
 
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
+import '../services/forecast_meta_store.dart';
 import '../services/home_synthesis.dart' show strengthRowFromRecord;
+import '../services/nutrition_model.dart'
+    show buildNutritionForecast, mealRowsFromRecords;
 import '../services/program_current.dart';
 import '../services/program_metrics.dart' show StrengthRow, WeightRow;
 import '../services/program_observed.dart';
@@ -56,6 +60,16 @@ class PlanScreen extends StatefulWidget {
   final WarehouseConnector? climbingRepo;
   final ViewSchema? climbingView;
 
+  /// Connector + schema for the `meals` view (Macrofactor) — the
+  /// forecast's NUTRITION input. Null → the nutrition card shows the
+  /// no-data note and the sim runs the declared block rates.
+  final WarehouseConnector? mealsRepo;
+  final ViewSchema? mealsView;
+
+  /// Nightly recalibration state reader (forecast_meta tab). Null →
+  /// tracking shows "on" with no adjustment applied.
+  final ForecastMetaStore? metaStore;
+
   /// Routine (Program screen) opener. Non-null (the bottom-nav shell
   /// passes it) → the app bar gets the routine action; the Program
   /// screen itself pushes on the root navigator.
@@ -74,6 +88,9 @@ class PlanScreen extends StatefulWidget {
     this.strengthView,
     this.climbingRepo,
     this.climbingView,
+    this.mealsRepo,
+    this.mealsView,
+    this.metaStore,
     this.onOpenRoutine,
     this.today,
   });
@@ -153,6 +170,15 @@ class _PlanScreenState extends State<PlanScreen> {
       } catch (_) {}
     }
 
+    // Meals (Macrofactor) — the forecast's nutrition input. Errors
+    // degrade to empty (the nutrition card says "no data" honestly).
+    var meals = const <Map<String, Object?>>[];
+    if (widget.mealsRepo != null && widget.mealsView != null) {
+      try {
+        meals = await widget.mealsRepo!.list(widget.mealsView!);
+      } catch (_) {}
+    }
+
     // Climbing ascents (kaya_ascents) — dates + numeric V grades for
     // the observed p75 anchor. Missing plumbing → no climbing forecast.
     final climbs = <ClimbAscent>[];
@@ -179,7 +205,13 @@ class _PlanScreenState extends State<PlanScreen> {
       docs: docs,
       daily: series.daily,
       observedError: series.error,
-      forecast: await _buildForecast(docs, series.daily, strengthRows, climbs),
+      forecast: await _buildForecast(
+        docs,
+        series.daily,
+        strengthRows,
+        climbs,
+        meals,
+      ),
     );
   }
 
@@ -193,6 +225,7 @@ class _PlanScreenState extends State<PlanScreen> {
     List<WeightRow> daily,
     List<StrengthRow> strengthRows,
     List<ClimbAscent> climbs,
+    List<Map<String, Object?>> mealRecords,
   ) async {
     final blocks = sim2BlocksFromProgramDocs(docs.program);
     if (blocks == null) return null;
@@ -216,6 +249,8 @@ class _PlanScreenState extends State<PlanScreen> {
         }
       }
     } catch (_) {} // history anchors are optional
+    // Nightly recalibration state — optional, degrades to null.
+    final meta = await widget.metaStore?.load();
     return ForecastInputs(
       blocks: blocks,
       observedDaily: daily,
@@ -224,6 +259,14 @@ class _PlanScreenState extends State<PlanScreen> {
       observedIndexTotal: observedIndexTotal,
       // v10 expectations_1yr — faint "range, not target" band.
       expectations: sim2ExpectationsFromProgramDocs(docs.program),
+      // NUTRITION as the input (the only lever): actual Macrofactor
+      // days + weigh-in trend → adaptive maintenance + implied rate.
+      nutrition: buildNutritionForecast(
+        meals: mealRowsFromRecords(mealRecords),
+        weighIns: daily,
+        today: _today,
+      ),
+      meta: meta,
     );
   }
 
@@ -312,9 +355,9 @@ class _PlanView extends StatelessWidget {
         const SizedBox(height: 16),
         _SectionLabel('Progress'),
         if (data.forecast != null)
-          // Compact: summary + the ONE combined progress chart up
-          // front; scenarios/body/climbing/VO2/fatigue fold away.
-          ForecastSection(inputs: data.forecast!, today: today, compact: true)
+          // Single trajectory: nutrition card + summary + the ONE
+          // progress chart up front; body/climbing/VO2/fatigue fold.
+          ForecastSection(inputs: data.forecast!, today: today)
         else
           Card(
             elevation: 0,

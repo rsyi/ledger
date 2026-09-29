@@ -206,6 +206,15 @@ void main() {
       expect(f.proteinGPerLb(160)!, closeTo(160 * scale / 160, 0.01));
     });
 
+    test('recalibration maintenance offset shifts the projection', () {
+      final f = forecast().withMaintenanceOffset(175);
+      // Maintenance 2275 + 175 = 2450 → r = (2100−2450)/3500×7 = −0.7.
+      expect(f.effectiveMaintenanceKcal!, closeTo(2450, 5));
+      expect(f.rProjectedLbWk!, closeTo(-0.7, 0.02));
+      // The raw estimate stays untouched (provenance).
+      expect(f.maintenance!.kcal, closeTo(2275, 5));
+    });
+
     test('withDelta round-trips', () {
       final f = forecast().withDelta(-200);
       expect(f.calorieDelta, -200);

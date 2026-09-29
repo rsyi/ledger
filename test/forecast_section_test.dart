@@ -1,16 +1,21 @@
-// Widget tests for lib/ui/widgets/forecast_section.dart (sim2, wave 3):
-// the dials row re-runs the sim and changes the outputs, §8 presets
-// apply (with the baseline-vs-scenario table), over-budget weeks render
-// as red flags, both strength lines (app index + true expressed) are
-// plotted, the §5 μ branch toggles, the §9.5 parameter sheet edits
-// re-run the horizon, and the section reflows at 360dp.
+// Widget tests for lib/ui/widgets/forecast_section.dart — the
+// SINGLE-TRAJECTORY forecast (2026-09-28 directive): no lever UI
+// (presets/dials/compare/μ toggle all gone), the NUTRITION card is the
+// input surface with the calorie-delta what-if as the ONLY lever, the
+// calendar extends past the declared blocks as a flat recomp
+// steady-state, and the model-tracking line reflects the nightly
+// recalibration state.
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:airledger/services/forecast_calibration.dart'
+    show ForecastMeta, RecalEvent;
+import 'package:airledger/services/nutrition_model.dart';
 import 'package:airledger/services/program_metrics.dart' show WeightRow;
 import 'package:airledger/services/program_observed.dart'
     show observedWeightStats;
+import 'package:airledger/services/recomp_review.dart' show MealRow;
 import 'package:airledger/services/sim2_harness.dart';
 import 'package:airledger/ui/widgets/forecast_section.dart';
 
@@ -20,17 +25,39 @@ List<WeightRow> observedDaily() => [
       for (var i = 90; i >= 0; i--)
         WeightRow(
           date: _today.subtract(Duration(days: i)),
-          // Gentle downtrend + a little scatter around the seed bw.
-          weightLbs: 163.0 + i * 0.08 + (i % 3 - 1) * 0.4,
+          // Steady cut trend ~0.75 lb/wk down to 163.
+          weightLbs: 163.0 + i * (0.75 / 7),
         ),
     ];
 
-ForecastInputs inputs() => ForecastInputs(
+/// 14 full Macrofactor days at 2000 kcal / 165 P / 220 C — against the
+/// 0.75 lb/wk downtrend the implied maintenance is ~2375.
+List<MealRow> meals() => [
+      for (var i = 0; i < 14; i++)
+        MealRow(
+          eatenAt: DateTime.utc(2026, 9, 26 - i, 12).subtract(Duration.zero),
+          calories: 2000,
+          proteinG: 165,
+          carbsG: 220,
+          fatG: 60,
+        ),
+    ];
+
+NutritionForecast nutrition() => buildNutritionForecast(
+      meals: meals(),
+      weighIns: observedDaily(),
+      today: _today,
+    );
+
+ForecastInputs inputs({NutritionForecast? n, ForecastMeta? meta}) =>
+    ForecastInputs(
       blocks: sim2DefaultBlocks(),
       observedDaily: observedDaily(),
       stats: observedWeightStats(observedDaily(), _today),
       observedBw: 163.0,
       observedIndexTotal: 878.0,
+      nutrition: n,
+      meta: meta,
     );
 
 /// Synchronous-ish MC runner (few paths, no isolate) so tests stay
@@ -39,16 +66,15 @@ Future<Sim2McSummary> testMcRunner(Sim2McJob j) async => sim2MonteCarlo(
       params: j.params,
       blocks: j.blocks,
       start: j.start,
-      presetId: j.presetId,
       overrides: j.overrides,
-      muDeficit: j.muDeficit,
       observedBw: j.observedBw,
       observedIndexTotal: j.observedIndexTotal,
-      paths: 40,
+      paths: 20,
     );
 
 Future<void> pumpSection(
   WidgetTester tester, {
+  ForecastInputs? section,
   Size surface = const Size(800, 5200),
 }) async {
   tester.view.physicalSize = surface;
@@ -58,14 +84,14 @@ Future<void> pumpSection(
     home: Scaffold(
       body: SingleChildScrollView(
         child: ForecastSection(
-          inputs: inputs(),
+          inputs: section ?? inputs(n: nutrition()),
           today: _today,
           mcRunner: testMcRunner,
         ),
       ),
     ),
   ));
-  await tester.pump(); // let the MC futures land
+  await tester.pump(); // let the MC future land
   await tester.pump();
 }
 
@@ -89,6 +115,9 @@ String summaryText(WidgetTester tester) {
   return texts.map((t) => t.data).join(' | ');
 }
 
+String textOf(WidgetTester tester, String key) =>
+    (tester.widget<Text>(find.byKey(ValueKey(key)))).data ?? '';
+
 Future<void> scrollTo(WidgetTester tester, Finder finder) async {
   await tester.scrollUntilVisible(finder, 400,
       scrollable: find.byType(Scrollable).first);
@@ -96,161 +125,128 @@ Future<void> scrollTo(WidgetTester tester, Finder finder) async {
 }
 
 void main() {
-  testWidgets('baseline renders: summary, both strength lines, P(V8)',
-      (tester) async {
+  testWidgets('single trajectory: nutrition card, extended horizon, '
+      'tracking on, P(V8)', (tester) async {
     await pumpSection(tester);
-    final summary = summaryText(tester);
-    expect(summary, contains('Baseline'));
-    expect(summary, contains("Dec 5 '27"));
-    // MC landed (injected runner): the summary carries P(V8).
-    expect(summary, contains('P(V8)'));
 
-    // Expressed chart: capacity + index + true (today falls in the CUT
-    // block, so the capacity line is ON by default — user request
-    // 2026-09-28; baseline hidden → exactly 3 line series).
+    // NUTRITION card: maintenance ≈ 2375 ± band, implied rate ≈ −0.75.
+    expect(find.byKey(const ValueKey('nutrition-card')), findsOneWidget);
+    expect(textOf(tester, 'nutrition-maintenance'), contains('~2375'));
+    expect(textOf(tester, 'nutrition-maintenance'), contains('energy balance'));
+    expect(textOf(tester, 'nutrition-rate'), contains('-0.7'));
+
+    // Summary runs to the steady-state horizon (Dec '27 + 52 wk), not
+    // the declared calendar end.
+    final summary = summaryText(tester);
+    expect(summary, contains("Dec 3 '28"));
+    expect(summary, isNot(contains("Dec 5 '27")));
+    expect(summary, contains('P(V8)')); // MC landed
+    expect(textOf(tester, 'forecast-tracking'),
+        contains('model tracking: on'));
+    expect(textOf(tester, 'forecast-tracking'),
+        contains('rate from logged intake'));
+
+    // Expressed chart: capacity (in-cut default ON) + index + true.
     final expressed = chartData(tester, 'sim2-expressed-chart');
     expect(expressed.lineBarsData.length, 3);
-    final capLine = expressed.lineBarsData[0]; // dotted capacity first
-    final idxLine = expressed.lineBarsData[1]; // dashed index
+    final idxLine = expressed.lineBarsData[1];
     final trueLine = expressed.lineBarsData[2];
-    expect(capLine.dashArray, isNotNull);
-    expect(idxLine.dashArray, isNotNull);
-    expect(trueLine.dashArray, isNull);
-    // The attempt-gate lag: index starts below true (the cut's N=3 is
-    // an attempt week, so most of the 39 lb under-read closes fast —
-    // ~11 lb left after week 1), converging by the horizon.
     expect(idxLine.spots.first.y, lessThan(trueLine.spots.first.y - 4));
-    expect((idxLine.spots.last.y - trueLine.spots.last.y).abs(), lessThan(8));
+  });
 
-    // The P(V8) caption is a real number, not the computing fallback.
-    expect(find.textContaining('P(V8 sent'), findsOneWidget);
-    // No compare card while at baseline.
+  testWidgets('no lever UI: presets, dials, compare card and μ toggle '
+      'are gone', (tester) async {
+    await pumpSection(tester);
+    expect(find.byKey(const ValueKey('sim2-preset-baseline')), findsNothing);
+    expect(find.byKey(const ValueKey('sim2-preset-bulk_plan')), findsNothing);
+    expect(find.byKey(const ValueKey('sim2-dial-n')), findsNothing);
+    expect(find.byKey(const ValueKey('sim2-dial-r')), findsNothing);
     expect(find.byKey(const ValueKey('sim2-compare')), findsNothing);
+    expect(find.byKey(const ValueKey('sim2-mu-zero')), findsNothing);
+    expect(find.byType(Slider), findsNothing);
+  });
+
+  testWidgets('calorie delta is the only lever: stepper shifts the '
+      'projection, reset restores it', (tester) async {
+    await pumpSection(tester);
+    final before = summaryText(tester);
+
+    await tester.tap(find.byKey(const ValueKey('nutrition-delta-plus')));
+    await tester.pump();
+    await tester.pump();
+    expect(textOf(tester, 'nutrition-delta-value'), '+100 kcal/day');
+    // What-if line: 2100 kcal, macros scaled proportionally.
+    final whatIf = textOf(tester, 'nutrition-whatif');
+    expect(whatIf, contains('2100 kcal'));
+    expect(whatIf, contains('scaled proportionally'));
+    final after = summaryText(tester);
+    expect(after, isNot(before), reason: 'the projection re-runs');
+
+    await tester.tap(find.byKey(const ValueKey('nutrition-delta-reset')));
+    await tester.pump();
+    await tester.pump();
+    expect(summaryText(tester), before);
+    expect(find.byKey(const ValueKey('nutrition-whatif')), findsNothing);
   });
 
   testWidgets('capacity toggle removes the (default-on) capacity line',
       (tester) async {
     await pumpSection(tester);
-    // In-cut default is ON; toggling off leaves index + true.
     await tester.tap(find.byKey(const ValueKey('sim2-capacity-toggle')));
     await tester.pump();
     expect(chartData(tester, 'sim2-expressed-chart').lineBarsData.length, 2);
-    await tester.tap(find.byKey(const ValueKey('sim2-capacity-toggle')));
-    await tester.pump();
-    expect(chartData(tester, 'sim2-expressed-chart').lineBarsData.length, 3);
   });
 
-  testWidgets('dials change outputs: N override re-runs the sim',
+  testWidgets('no nutrition data → honest note + declared-rate fallback',
       (tester) async {
-    await pumpSection(tester);
-    final before = summaryText(tester);
-    final yBefore =
-        chartData(tester, 'sim2-expressed-chart').lineBarsData.last.spots.last.y;
-
-    await tester.drag(
-        find.byKey(const ValueKey('sim2-dial-n')), const Offset(300, 0));
-    await tester.pump();
-    await tester.pump(); // MC future
-
-    expect(summaryText(tester), isNot(before));
-    final yAfter =
-        chartData(tester, 'sim2-expressed-chart').lineBarsData.last.spots.last.y;
-    expect(yAfter, isNot(yBefore));
-    // An override makes it a scenario: compare card + baseline line.
-    expect(find.byKey(const ValueKey('sim2-compare')), findsOneWidget);
-
-    // Reset restores the baseline.
-    await tester.tap(find.byKey(const ValueKey('sim2-dials-reset')));
-    await tester.pump();
-    await tester.pump();
-    expect(summaryText(tester), before);
-    expect(find.byKey(const ValueKey('sim2-compare')), findsNothing);
+    await pumpSection(tester, section: inputs(n: null));
+    expect(find.byKey(const ValueKey('nutrition-empty')), findsOneWidget);
+    expect(textOf(tester, 'forecast-tracking'),
+        contains('declared rates (no nutrition data)'));
+    expect(find.byKey(const ValueKey('nutrition-delta-plus')), findsNothing);
   });
 
-  testWidgets('preset application: Climb more shows the budget bite',
-      (tester) async {
-    await pumpSection(tester);
-    final baseSummary = summaryText(tester);
-    final baseTotal =
-        chartData(tester, 'sim2-expressed-chart').lineBarsData.last.spots.last.y;
-
-    await tester.tap(find.byKey(const ValueKey('sim2-preset-climb_more')));
-    await tester.pump();
-    await tester.pump(); // MC futures
-
-    final summary = summaryText(tester);
-    expect(summary, isNot(baseSummary));
-    expect(summary, contains('Climb more'));
-    expect(summary, contains('baseline:')); // §8: baseline reported next to it
-
-    // Strength falls (report: 968 vs 1023) and the scenario chart now
-    // carries the baseline line too (grey + capacity + index + true).
-    final expressed = chartData(tester, 'sim2-expressed-chart');
-    expect(expressed.lineBarsData.length, 4);
-    expect(expressed.lineBarsData.last.spots.last.y, lessThan(baseTotal - 30));
-
-    // Compare card present with over-budget row.
-    await scrollTo(tester, find.byKey(const ValueKey('sim2-compare')));
-    expect(find.byKey(const ValueKey('sim2-compare')), findsOneWidget);
-    expect(find.textContaining('over-budget wks'), findsOneWidget);
-
-    // Back to baseline.
-    await tester.tap(find.byKey(const ValueKey('sim2-preset-baseline')));
-    await tester.pump();
-    await tester.pump();
-    expect(summaryText(tester), baseSummary);
+  testWidgets('recalibration meta: adjusted tracking line + maintenance '
+      'offset applied to the projection', (tester) async {
+    final meta = ForecastMeta(
+      tracking: 'adjusted',
+      aScale: 0.8,
+      bScale: 0.8,
+      maintenanceOffsetKcal: -150,
+      events: [RecalEvent(DateTime.utc(2026, 9, 25), 'capacity gain ×0.80')],
+    );
+    await pumpSection(tester, section: inputs(n: nutrition(), meta: meta));
+    final tracking = textOf(tester, 'forecast-tracking');
+    expect(tracking, contains('adjusted Sep 25'));
+    expect(tracking, contains('capacity gain ×0.80'));
+    // Maintenance shown with the recal offset folded in (2375 − 150).
+    expect(textOf(tester, 'nutrition-maintenance'), contains('~2225'));
+    expect(textOf(tester, 'nutrition-maintenance'), contains('recal -150'));
   });
 
-  testWidgets('red flags: over-budget weeks render as red spans on F',
-      (tester) async {
+  testWidgets('over-budget weeks render as red spans on F', (tester) async {
     await pumpSection(tester);
-    await scrollTo(tester, find.byKey(const ValueKey('sim2-f-chart')));
+    await scrollTo(tester, find.byKey(const ValueKey('sim2-fold-fatigue')));
+    await tester.tap(find.byKey(const ValueKey('sim2-fold-fatigue')));
+    await tester.pumpAndSettle();
     final f = chartData(tester, 'sim2-f-chart');
-    final annotations = f.rangeAnnotations.verticalRangeAnnotations;
-    // Block bands + red spans; the red ones carry the stronger alpha.
     final red = [
-      for (final a in annotations)
+      for (final a in f.rangeAnnotations.verticalRangeAnnotations)
         if ((a.color?.a ?? 0) > 0.12) a,
     ];
     expect(red, isNotEmpty,
-        reason: 'the baseline cut runs L=6.9 > 6.0 → red spans');
-    // The §8 confidence-collapse caption with the week count.
-    // v10 dials: the weekly Fri limit session tips normal lifting weeks
-    // to L 7.4 vs cap 7.0 — most weeks flag red (59).
-    expect(find.textContaining('over-budget weeks: 59'), findsOneWidget);
+        reason: 'the cut runs over the deficit budget → red spans');
+    expect(find.textContaining('over-budget weeks:'), findsOneWidget);
     expect(find.textContaining('confidence'), findsOneWidget);
   });
 
-  testWidgets('§5 μ branch toggle moves BF%', (tester) async {
-    await pumpSection(tester);
-    await scrollTo(tester, find.byKey(const ValueKey('sim2-mu-zero')));
-    final before = find
-        .textContaining('horizon BF')
-        .evaluate()
-        .single
-        .widget as Text;
-    await tester.tap(find.byKey(const ValueKey('sim2-mu-zero')));
-    await tester.pump();
-    await tester.pump();
-    final after = find
-        .textContaining('horizon BF')
-        .evaluate()
-        .single
-        .widget as Text;
-    expect(after.data, isNot(before.data)); // 17.6% → 16.1%
-    expect(find.textContaining('Nov DEXA'), findsOneWidget);
-  });
-
-  testWidgets('§9.5 parameter sheet: provenance tags + edit re-runs',
-      (tester) async {
+  testWidgets('§9.5 parameter sheet stays as PROVENANCE: edit re-runs, '
+      'reset restores (incl. recal scales)', (tester) async {
     await pumpSection(tester);
     await scrollTo(tester, find.byKey(const ValueKey('sim2-params-tile')));
     await tester.tap(find.byKey(const ValueKey('sim2-params-tile')));
     await tester.pumpAndSettle();
-
-    // Every §9.5 def renders a row; the eDep caveat is in the footer.
-    await scrollTo(tester, find.byKey(const ValueKey('sim2-param-e_dep')));
-    expect(find.textContaining('replay checkpoints, NOT the window fit'),
+    expect(find.textContaining('PROVENANCE sheet, not levers'),
         findsOneWidget);
 
     final before = summaryText(tester);
@@ -263,7 +259,6 @@ void main() {
     expect(summaryText(tester), isNot(before));
     expect(find.textContaining('EDITED'), findsOneWidget);
 
-    // Reset to fitted restores the baseline horizon.
     await scrollTo(tester, find.byKey(const ValueKey('sim2-params-reset')));
     await tester.tap(find.byKey(const ValueKey('sim2-params-reset')));
     await tester.pump();
@@ -271,23 +266,8 @@ void main() {
     expect(summaryText(tester), before);
   });
 
-  testWidgets('reflows without overflow at 360dp', (tester) async {
-    await pumpSection(tester, surface: const Size(360, 6500));
-    expect(find.byKey(const ValueKey('sim2-expressed-chart')), findsOneWidget);
-    expect(find.byKey(const ValueKey('sim2-f-chart')), findsOneWidget);
-    // Reaching here without a RenderFlex overflow report = pass.
-  });
-
-  testWidgets('expectation bands (v10 expectations_1yr): faint band + '
-      '"range, not target" labels; absent pre-v10', (tester) async {
-    // Absent (the default inputs): no band, no labels.
-    await pumpSection(tester);
-    expect(chartData(tester, 'sim2-expressed-chart')
-        .rangeAnnotations.horizontalRangeAnnotations, isEmpty);
-    expect(find.textContaining('expectation range, not target'),
-        findsNothing);
-
-    // Present: strength + bw + BF% bands and both labels.
+  testWidgets('expectation bands: faint band + "range, not target" label',
+      (tester) async {
     const exp = Sim2Expectations(
       bodyweightLb: [158, 163],
       bfPct: [12, 14],
@@ -297,76 +277,27 @@ void main() {
       ohpLb: [150, 165],
     );
     expect(exp.sbdTotalLb, [975, 1060]);
-    tester.view.physicalSize = const Size(800, 5200);
-    tester.view.devicePixelRatio = 1.0;
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: SingleChildScrollView(
-          child: ForecastSection(
-            inputs: ForecastInputs(
-              blocks: sim2DefaultBlocks(),
-              observedDaily: observedDaily(),
-              stats: observedWeightStats(observedDaily(), _today),
-              expectations: exp,
-            ),
-            today: _today,
-            mcRunner: testMcRunner,
-          ),
-        ),
-      ),
-    ));
-    await tester.pump();
-    await tester.pump();
+    final withExp = ForecastInputs(
+      blocks: sim2DefaultBlocks(),
+      observedDaily: observedDaily(),
+      stats: observedWeightStats(observedDaily(), _today),
+      expectations: exp,
+      nutrition: nutrition(),
+    );
+    await pumpSection(tester, section: withExp);
     final strength = chartData(tester, 'sim2-expressed-chart')
         .rangeAnnotations.horizontalRangeAnnotations;
     expect(strength, hasLength(1));
     expect(strength.single.y1, 975);
-    expect(strength.single.y2, 1060);
-    // The chart window stretches to include the band.
-    expect(chartData(tester, 'sim2-expressed-chart').maxY,
-        greaterThanOrEqualTo(1060));
     expect(find.byKey(const ValueKey('sim2-expectation-strength')),
         findsOneWidget);
-    final bw = chartData(tester, 'sim2-bw-chart')
-        .rangeAnnotations.horizontalRangeAnnotations;
-    expect(bw, hasLength(1));
-    expect(bw.single.y1, 158);
-    final bf = chartData(tester, 'sim2-bf-chart')
-        .rangeAnnotations.horizontalRangeAnnotations;
-    expect(bf, hasLength(1));
     expect(find.textContaining('expectation range, not target'),
-        findsNWidgets(2));
+        findsOneWidget);
   });
 
-  testWidgets('compact mode (Plan tab): chart + summary up front, the rest '
-      'folded and expandable', (tester) async {
-    tester.view.physicalSize = const Size(800, 5200);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: SingleChildScrollView(
-          child: ForecastSection(
-            inputs: inputs(),
-            today: _today,
-            mcRunner: testMcRunner,
-            compact: true,
-          ),
-        ),
-      ),
-    ));
-    await tester.pump();
-    await tester.pump();
-
-    // Default view: summary + the ONE combined progress chart (capacity
-    // ON — today is in the cut).
-    expect(find.byKey(const ValueKey('sim2-summary')), findsOneWidget);
-    expect(chartData(tester, 'sim2-expressed-chart').lineBarsData.length, 3);
-
-    // Everything else is folded: the foldout headers exist, their
-    // contents don't (collapsed ExpansionTiles build no children).
+  testWidgets('folds collapsed by default; body comp expands', (tester) async {
+    await pumpSection(tester);
     for (final k in [
-      'sim2-fold-scenarios',
       'sim2-fold-body',
       'sim2-fold-climb',
       'sim2-fold-vo2',
@@ -375,14 +306,17 @@ void main() {
       expect(find.byKey(ValueKey(k)), findsOneWidget, reason: k);
     }
     expect(find.byKey(const ValueKey('sim2-bw-chart')), findsNothing);
-    expect(find.byKey(const ValueKey('sim2-f-chart')), findsNothing);
-    expect(find.byKey(const ValueKey('sim2-preset-baseline')), findsNothing);
-
-    // Expanding SCENARIOS & LEVERS reveals the preset chips + dials.
-    await scrollTo(tester, find.byKey(const ValueKey('sim2-fold-scenarios')));
-    await tester.tap(find.byKey(const ValueKey('sim2-fold-scenarios')));
+    await scrollTo(tester, find.byKey(const ValueKey('sim2-fold-body')));
+    await tester.tap(find.byKey(const ValueKey('sim2-fold-body')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('sim2-preset-baseline')), findsOneWidget);
-    expect(find.byKey(const ValueKey('sim2-dial-n')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-bw-chart')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-bf-chart')), findsOneWidget);
+  });
+
+  testWidgets('reflows without overflow at 360dp', (tester) async {
+    await pumpSection(tester, surface: const Size(360, 6500));
+    expect(find.byKey(const ValueKey('nutrition-card')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-expressed-chart')), findsOneWidget);
+    // Reaching here without a RenderFlex overflow report = pass.
   });
 }

@@ -1,31 +1,32 @@
-/// FORECAST section for the Program tab — training simulator v2.1
-/// (spec `airledger/docs/superpowers/specs/2026-09-26-training-simulator-spec.md`
-/// §8 + §9.5, fit report §6). SUPERSEDES the v1 sim (sim_core/world_model)
-/// section; the chart/layout patterns are kept, the model layer is
-/// lib/services/sim2_model.dart + sim2_harness.dart.
+/// FORECAST section for the Plan tab — the SINGLE-TRAJECTORY program
+/// forecast (user directive 2026-09-28: "remove this whole lever-based
+/// computation… I want to just stick with this program long-term …
+/// the only lever really be based on my caloric intake").
 ///
-/// Surfaces, top to bottom:
-///   * summary line (horizon numbers, baseline + scenario);
-///   * §8 preset chips (Climb more / Lift more / Cardio up / Cardio off /
-///     Drop calisthenics / Fast bulk / Stay light);
-///   * the dials row (N, W, K, K_lim, H, Z, Z2, Q, r, P) as GLOBAL
-///     overrides — per-block overrides are a later wave;
-///   * expressed-strength chart: the app-INDEX line AND the true
-///     expressed line (the attempt-gate lag is the point — the index
-///     catching up is measurement, not physiology), optional capacity
-///     line, baseline next to the scenario;
-///   * body composition (observed + forecast bw; BF% with the §5 μ
-///     branch toggle, pending the Nov DEXA);
-///   * climbing C with P(V8) from the §7 Monte Carlo (200 paths OFF the
-///     UI thread; the deterministic line shows while it computes);
-///   * VO2; fatigue F with over-budget weeks RED-FLAGGED (spec §8:
-///     "the model's confidence collapses there");
-///   * baseline-vs-scenario horizon table (§8: always report the
-///     baseline next to the scenario);
-///   * §9.5 parameter sheet: every constant with value + provenance tag
-///     ([fit]/[log]/[lit]/[assume]) + prior, editable; §3-§6 are priors
-///     (the log only calibrates strength + the budget); eDep carries
-///     the replay-pinned caveat (edits are NOT re-validated in-app).
+/// What changed from the scenario simulator (sim2 §8 UI):
+///   * NO levers — the preset chips, the global dials row, the
+///     baseline-vs-scenario compare card and the §5 μ branch toggle are
+///     REMOVED. The sim runs ONE trajectory: the declared program
+///     calendar, extended past its last block as a flat recomp
+///     steady-state (sim2ExtendSteadyState — no auto-generated
+///     bulk/cut cycles).
+///   * NUTRITION IS THE INPUT: the sim's bodyweight rate r and protein
+///     dial P come from actual Macrofactor logging (nutrition_model:
+///     adaptive maintenance from intake vs the weigh-in trend; r =
+///     (14d intake − maintenance)/3500 × 7). The NUTRITION card on top
+///     shows 7/14d averages, the maintenance estimate ± band and the
+///     implied rate — and carries the ONE what-if lever: a calorie
+///     delta stepper (projection only; protein/carbs scale
+///     proportionally). No nutrition data → the block-declared rates
+///     with an honest note.
+///   * MODEL TRACKING: the nightly recalibration (forecast_calibration
+///     via the forecast_meta tab) surfaces as "model tracking: on /
+///     adjusted `<date>` (`<what moved>`)"; its guarded scales/offset are
+///     applied to the local run so app and nightly agree.
+///   * The §9.5 parameter sheet STAYS behind its expandable — it is
+///     PROVENANCE (every constant with value/prior/source), not a
+///     lever; edits remain possible for inspection but there is no
+///     scenario machinery around them.
 library;
 
 import 'dart:math' as math;
@@ -34,6 +35,8 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../services/forecast_calibration.dart' show ForecastMeta;
+import '../../services/nutrition_model.dart';
 import '../../services/program_metrics.dart' show WeightRow;
 import '../../services/program_observed.dart'
     show ObservedWeightStats, sevenDayAvgSeries;
@@ -46,9 +49,10 @@ import 'chart_bottom_axis.dart';
 // Inputs
 // ---------------------------------------------------------------------------
 
-/// Everything the section needs, assembled by the Program screen.
+/// Everything the section needs, assembled by the Plan screen.
 class ForecastInputs {
   /// Block calendar from coach/program.yaml (sim2BlocksFromProgramDocs).
+  /// The section extends it with the steady-state continuation.
   final List<Sim2Block> blocks;
 
   /// Observed daily weigh-ins (full history; the chart windows it).
@@ -63,10 +67,17 @@ class ForecastInputs {
   /// starting point; null falls back to the [log] seed (878).
   final double? observedIndexTotal;
 
-  /// One-year EXPECTATION ranges (program.yaml v10 `expectations_1yr`,
-  /// final post-cut spec) — rendered as a faint band next to the sim
-  /// trajectory, labeled "expectation range, not target". Null pre-v10.
+  /// One-year EXPECTATION ranges (program.yaml v10 `expectations_1yr`)
+  /// — faint band, "range, not target". Null pre-v10.
   final Sim2Expectations? expectations;
+
+  /// Nutrition summary from local Macrofactor meals (nutrition_model).
+  /// Null/empty → projection falls back to the declared block rates.
+  final NutritionForecast? nutrition;
+
+  /// Nightly recalibration state (forecast_meta tab). Null → tracking
+  /// simply reads "on".
+  final ForecastMeta? meta;
 
   const ForecastInputs({
     required this.blocks,
@@ -81,6 +92,8 @@ class ForecastInputs {
     this.observedBw,
     this.observedIndexTotal,
     this.expectations,
+    this.nutrition,
+    this.meta,
   });
 }
 
@@ -90,9 +103,7 @@ class Sim2McJob {
   final Sim2Params params;
   final List<Sim2Block> blocks;
   final DateTime start;
-  final String presetId;
   final Sim2DialOverrides overrides;
-  final double? muDeficit;
   final double? observedBw;
   final double? observedIndexTotal;
 
@@ -100,9 +111,7 @@ class Sim2McJob {
     required this.params,
     required this.blocks,
     required this.start,
-    required this.presetId,
     required this.overrides,
-    required this.muDeficit,
     required this.observedBw,
     required this.observedIndexTotal,
   });
@@ -114,9 +123,7 @@ Future<Sim2McSummary> _isolateMcRunner(Sim2McJob j) => sim2MonteCarloInIsolate(
   params: j.params,
   blocks: j.blocks,
   start: j.start,
-  presetId: j.presetId,
   overrides: j.overrides,
-  muDeficit: j.muDeficit,
   observedBw: j.observedBw,
   observedIndexTotal: j.observedIndexTotal,
 );
@@ -133,20 +140,16 @@ class ForecastSection extends StatefulWidget {
   /// the 200 paths via Isolate.run — never on the UI thread.
   final Sim2McRunner mcRunner;
 
-  /// Decluttered mode (the Plan tab, 2026-09-28 tab split): the default
-  /// view is the summary line + the ONE combined progress chart
-  /// (expressed + capacity, capacity ON by default during cuts);
-  /// scenarios/levers, body comp, climbing, VO2 and the fatigue budget
-  /// fold into expandable sections. False = the original flat layout
-  /// (widget tests exercise every control there).
-  final bool compact;
+  /// Weeks of flat recomp continuation appended after the declared
+  /// calendar ("stick with this program long-term").
+  final int steadyStateWeeks;
 
   const ForecastSection({
     super.key,
     required this.inputs,
     required this.today,
     this.mcRunner = _isolateMcRunner,
-    this.compact = false,
+    this.steadyStateWeeks = 52,
   });
 
   @override
@@ -155,28 +158,62 @@ class ForecastSection extends StatefulWidget {
 
 class _ForecastSectionState extends State<ForecastSection> {
   late Sim2Params _params;
-  String _preset = 'baseline';
-  Sim2DialOverrides _overrides = const Sim2DialOverrides();
-
-  /// §5 deficit μ branch: null = the §5 rule (μ=0.30 at the cut's
-  /// r=−0.75), 0.0 = the spec's own 13%-at-154 anchor. Pending Nov DEXA.
-  double? _mu;
-
+  late List<Sim2Block> _blocks;
   bool _showCapacity = false;
 
+  /// The ONE lever: kcal/day what-if on the projection.
+  double _calorieDelta = 0;
+  static const _deltaStepKcal = 100.0;
+
   late DateTime _start;
-  late Sim2Run _base;
-  late Sim2Run _scen;
-  Sim2McSummary? _mcBase;
-  Sim2McSummary? _mcScen;
+  late Sim2Run _run;
+  Sim2McSummary? _mc;
   int _mcToken = 0;
 
-  bool get _isBaseline => _preset == 'baseline' && _overrides.isEmpty;
+  /// Fitted params with the nightly recalibration scales applied —
+  /// the baseline the param sheet's EDITED marker compares against.
+  Sim2Params _recalibratedFitted() {
+    final p = Sim2Params.fitted();
+    final meta = widget.inputs.meta;
+    if (meta != null) {
+      p.a *= meta.aScale;
+      p.b *= meta.bScale;
+    }
+    return p;
+  }
+
+  /// Nutrition with the nightly maintenance offset + the local delta.
+  NutritionForecast? get _nutrition {
+    final n = widget.inputs.nutrition;
+    if (n == null) return null;
+    return n
+        .withMaintenanceOffset(widget.inputs.meta?.maintenanceOffsetKcal ?? 0)
+        .withDelta(_calorieDelta);
+  }
+
+  /// The nutrition-derived dial overrides (r + P) — empty when the
+  /// data can't project (the declared block rates then apply).
+  Sim2DialOverrides get _overrides {
+    final n = _nutrition;
+    if (n == null || !n.canProject) return const Sim2DialOverrides();
+    final bw =
+        widget.inputs.observedBw ?? widget.inputs.stats.bw7dAvg ?? sim2SeedBw;
+    return Sim2DialOverrides(
+      r: n.rProjectedLbWk,
+      p: n.proteinGPerLb(bw),
+    );
+  }
+
+  bool get _nutritionDriven => !_overrides.isEmpty;
 
   @override
   void initState() {
     super.initState();
-    _params = Sim2Params.fitted();
+    _params = _recalibratedFitted();
+    _blocks = sim2ExtendSteadyState(
+      widget.inputs.blocks,
+      extraWeeks: widget.steadyStateWeeks,
+    );
     _start = sim2StartMonday(widget.today);
     // During a cut the EXPRESSED line sags by design (deficit +
     // attempt-gate); the capacity line is the honest progress signal —
@@ -193,65 +230,43 @@ class _ForecastSectionState extends State<ForecastSection> {
     _recompute();
   }
 
-  Sim2Run _run({required String presetId, required Sim2DialOverrides ov}) =>
-      sim2Run(
-        params: _params,
-        blocks: widget.inputs.blocks,
-        start: _start,
-        presetId: presetId,
-        overrides: ov,
-        muDeficit: _mu,
-        observedBw: widget.inputs.observedBw,
-        observedIndexTotal: widget.inputs.observedIndexTotal,
-      );
-
   void _recompute() {
-    // Deterministic runs are synchronous — ~120 weekly steps, safe on
-    // slider drag (the W2 contract carried over from v1).
-    _base = _run(presetId: 'baseline', ov: const Sim2DialOverrides());
-    _scen = _isBaseline ? _base : _run(presetId: _preset, ov: _overrides);
+    // Deterministic runs are synchronous — ~170 weekly steps, safe on
+    // stepper taps.
+    _run = sim2Run(
+      params: _params,
+      blocks: _blocks,
+      start: _start,
+      overrides: _overrides,
+      observedBw: widget.inputs.observedBw,
+      observedIndexTotal: widget.inputs.observedIndexTotal,
+    );
     _kickMc();
   }
 
   /// 200-path MC off the UI thread; deterministic lines render
-  /// immediately, the P(V8)/median chips fill in when it lands.
+  /// immediately, the P(V8) chip fills in when it lands.
   void _kickMc() {
     final token = ++_mcToken;
-    _mcBase = null;
-    _mcScen = null;
-    Sim2McJob job(String presetId, Sim2DialOverrides ov) => Sim2McJob(
-      params: _params.copy(),
-      blocks: widget.inputs.blocks,
-      start: _start,
-      presetId: presetId,
-      overrides: ov,
-      muDeficit: _mu,
-      observedBw: widget.inputs.observedBw,
-      observedIndexTotal: widget.inputs.observedIndexTotal,
-    );
-    widget.mcRunner(job('baseline', const Sim2DialOverrides())).then((s) {
-      if (mounted && token == _mcToken) setState(() => _mcBase = s);
-    });
-    if (_isBaseline) return; // scenario == baseline, one run is enough
-    widget.mcRunner(job(_preset, _overrides)).then((s) {
-      if (mounted && token == _mcToken) setState(() => _mcScen = s);
-    });
+    _mc = null;
+    widget
+        .mcRunner(
+          Sim2McJob(
+            params: _params.copy(),
+            blocks: _blocks,
+            start: _start,
+            overrides: _overrides,
+            observedBw: widget.inputs.observedBw,
+            observedIndexTotal: widget.inputs.observedIndexTotal,
+          ),
+        )
+        .then((s) {
+          if (mounted && token == _mcToken) setState(() => _mc = s);
+        });
   }
 
-  Sim2McSummary? get _mcForScenario => _isBaseline ? _mcBase : _mcScen;
-
-  void _setPreset(String id) => setState(() {
-    _preset = id;
-    _recompute();
-  });
-
-  void _setOverrides(Sim2DialOverrides ov) => setState(() {
-    _overrides = ov;
-    _recompute();
-  });
-
-  void _setMu(double? mu) => setState(() {
-    _mu = mu;
+  void _setDelta(double delta) => setState(() {
+    _calorieDelta = delta.clamp(-1000, 1000);
     _recompute();
   });
 
@@ -304,174 +319,97 @@ class _ForecastSectionState extends State<ForecastSection> {
   }
 
   bool get _paramsEdited {
-    final fitted = Sim2Params.fitted();
-    return sim2ParamDefs.any((d) => d.get(_params) != d.get(fitted));
+    final base = _recalibratedFitted();
+    return sim2ParamDefs.any((d) => d.get(_params) != d.get(base));
   }
 
   @override
   Widget build(BuildContext context) {
-    final horizonLabel = DateFormat(
-      "MMM d ''yy",
-    ).format(widget.inputs.blocks.last.end);
-
-    final summary = _SummaryLine(
-      key: const ValueKey('sim2-summary'),
-      base: _base,
-      scen: _scen,
-      isBaseline: _isBaseline,
-      presetLabel: sim2PresetById(_preset).label,
-      mc: _mcForScenario,
-      horizonLabel: horizonLabel,
-    );
-    final strengthCard = _card(
-      context,
-      title: 'STRENGTH — EXPRESSED TOTAL',
-      trailing: FilterChip(
-        key: const ValueKey('sim2-capacity-toggle'),
-        label: const Text('capacity'),
-        visualDensity: VisualDensity.compact,
-        selected: _showCapacity,
-        onSelected: (v) => setState(() => _showCapacity = v),
-      ),
-      child: _strengthBody(context, horizonLabel),
-    );
-    final paramSheet = _ParamSheet(
-      params: _params,
-      edited: _paramsEdited,
-      onEdit: _editParam,
-      onReset: () => setState(() {
-        _params = Sim2Params.fitted();
-        _recompute();
-      }),
-    );
-    final footer = Text(
-      'sim2 (two-layer §2: S_obs = capacity × expression). The log '
-      'calibrates strength + the recovery budget; §3-§6 (climbing, '
-      'VO2, body comp, calisthenics) are PRIORS, labeled so. Dial '
-      'overrides are global (per-block overrides: later wave). State '
-      'seeded from the Sep 2026 RPE readings [log]'
-      '${widget.inputs.observedBw != null ? '; bw + index refreshed '
-                'from local history' : ''}.',
-      style: AppText.micro(context),
-    );
-
-    if (widget.compact) {
-      // Plan-tab declutter: summary + THE progress chart up front;
-      // everything else folds.
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          summary,
-          const SizedBox(height: 8),
-          strengthCard,
-          const SizedBox(height: 8),
-          _foldout(
-            context,
-            key: 'sim2-fold-scenarios',
-            title: 'SCENARIOS & LEVERS',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _PresetChips(selected: _preset, onSelect: _setPreset),
-                const SizedBox(height: 8),
-                _DialsCard(overrides: _overrides, onChanged: _setOverrides),
-                if (!_isBaseline) ...[
-                  const SizedBox(height: 8),
-                  _CompareCard(
-                    key: const ValueKey('sim2-compare'),
-                    base: _base,
-                    scen: _scen,
-                    mcBase: _mcBase,
-                    mcScen: _mcScen,
-                    presetLabel: sim2PresetById(_preset).label,
-                    overridden: !_overrides.isEmpty,
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          _foldout(
-            context,
-            key: 'sim2-fold-body',
-            title: 'BODY COMPOSITION',
-            child: _bodyCompBody(context),
-          ),
-          const SizedBox(height: 8),
-          _foldout(
-            context,
-            key: 'sim2-fold-climb',
-            title: 'CLIMBING',
-            child: _climbBody(context, horizonLabel),
-          ),
-          const SizedBox(height: 8),
-          _foldout(
-            context,
-            key: 'sim2-fold-vo2',
-            title: 'VO2 MAX',
-            child: _vo2Body(context),
-          ),
-          const SizedBox(height: 8),
-          _foldout(
-            context,
-            key: 'sim2-fold-fatigue',
-            title: 'FATIGUE BUDGET',
-            child: _fatigueBody(context),
-          ),
-          const SizedBox(height: 8),
-          paramSheet,
-          const SizedBox(height: 6),
-          footer,
-        ],
-      );
-    }
+    final horizonLabel = DateFormat("MMM d ''yy").format(_blocks.last.end);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        summary,
+        _NutritionCard(
+          key: const ValueKey('nutrition-card'),
+          nutrition: _nutrition,
+          delta: _calorieDelta,
+          onDelta: _setDelta,
+          stepKcal: _deltaStepKcal,
+        ),
         const SizedBox(height: 8),
-        _PresetChips(selected: _preset, onSelect: _setPreset),
-        const SizedBox(height: 8),
-        _DialsCard(overrides: _overrides, onChanged: _setOverrides),
-        const SizedBox(height: 8),
-        strengthCard,
+        _SummaryLine(
+          key: const ValueKey('sim2-summary'),
+          run: _run,
+          mc: _mc,
+          horizonLabel: horizonLabel,
+          meta: widget.inputs.meta,
+          nutritionDriven: _nutritionDriven,
+        ),
         const SizedBox(height: 8),
         _card(
           context,
-          title: 'BODY COMPOSITION — OBSERVED + FORECAST',
+          title: 'STRENGTH — EXPRESSED TOTAL',
+          trailing: FilterChip(
+            key: const ValueKey('sim2-capacity-toggle'),
+            label: const Text('capacity'),
+            visualDensity: VisualDensity.compact,
+            selected: _showCapacity,
+            onSelected: (v) => setState(() => _showCapacity = v),
+          ),
+          child: _strengthBody(context, horizonLabel),
+        ),
+        const SizedBox(height: 8),
+        _foldout(
+          context,
+          key: 'sim2-fold-body',
+          title: 'BODY COMPOSITION',
           child: _bodyCompBody(context),
         ),
         const SizedBox(height: 8),
-        _card(
+        _foldout(
           context,
-          title: 'CLIMBING — CONTINUOUS V GRADE',
+          key: 'sim2-fold-climb',
+          title: 'CLIMBING',
           child: _climbBody(context, horizonLabel),
         ),
         const SizedBox(height: 8),
-        _card(context, title: 'VO2 MAX', child: _vo2Body(context)),
-        const SizedBox(height: 8),
-        _card(
+        _foldout(
           context,
-          title: 'FATIGUE F — BUDGET RED FLAGS',
+          key: 'sim2-fold-vo2',
+          title: 'VO2 MAX',
+          child: _vo2Body(context),
+        ),
+        const SizedBox(height: 8),
+        _foldout(
+          context,
+          key: 'sim2-fold-fatigue',
+          title: 'FATIGUE BUDGET',
           child: _fatigueBody(context),
         ),
-        if (!_isBaseline) ...[
-          const SizedBox(height: 8),
-          _CompareCard(
-            key: const ValueKey('sim2-compare'),
-            base: _base,
-            scen: _scen,
-            mcBase: _mcBase,
-            mcScen: _mcScen,
-            presetLabel: sim2PresetById(_preset).label,
-            overridden: !_overrides.isEmpty,
-          ),
-        ],
         const SizedBox(height: 8),
-        paramSheet,
+        _ParamSheet(
+          params: _params,
+          edited: _paramsEdited,
+          onEdit: _editParam,
+          onReset: () => setState(() {
+            _params = _recalibratedFitted();
+            _recompute();
+          }),
+        ),
         const SizedBox(height: 6),
-        footer,
+        Text(
+          'ONE trajectory: the declared program calendar, then a flat '
+          'recomp steady-state (no auto bulk/cut cycles). '
+          '${_nutritionDriven ? 'r and protein come from logged '
+                    'Macrofactor intake (adaptive maintenance); the calorie '
+                    'delta above is the only lever.' : 'No projectable '
+                    'nutrition data yet — running the declared block rates.'} '
+          'sim2 two-layer §2 (S_obs = capacity × expression); the log '
+          'calibrates strength + the recovery budget, §3-§6 are priors. '
+          'Nightly tracking recalibrates within ±50% (guarded).',
+          style: AppText.micro(context),
+        ),
       ],
     );
   }
@@ -483,30 +421,24 @@ class _ForecastSectionState extends State<ForecastSection> {
       children: [
         _Sim2Chart(
           key: const ValueKey('sim2-expressed-chart'),
-          run: _scen,
+          run: _run,
           expectationBand: widget.inputs.expectations?.sbdTotalLb,
           series: [
-            if (!_isBaseline)
-              _ChartSeries(
-                [for (final w in _base.weeks) (w.monday, w.sTrue)],
-                scheme.outline.withValues(alpha: 0.6),
-                width: 1.4,
-              ),
             if (_showCapacity)
               _ChartSeries(
-                [for (final w in _scen.weeks) (w.monday, w.sCap)],
+                [for (final w in _run.weeks) (w.monday, w.sCap)],
                 scheme.tertiary,
                 width: 1.6,
                 dash: const [2, 4],
               ),
             _ChartSeries(
-              [for (final w in _scen.weeks) (w.monday, w.sIdx)],
+              [for (final w in _run.weeks) (w.monday, w.sIdx)],
               scheme.primary.withValues(alpha: 0.65),
               width: 1.8,
               dash: const [6, 4],
             ),
             _ChartSeries(
-              [for (final w in _scen.weeks) (w.monday, w.sTrue)],
+              [for (final w in _run.weeks) (w.monday, w.sTrue)],
               scheme.primary,
               width: 2.5,
             ),
@@ -514,18 +446,17 @@ class _ForecastSectionState extends State<ForecastSection> {
         ),
         const SizedBox(height: 4),
         Text(
-          'true expressed (solid) ${_lb(_scen.last.sTrue)} vs app '
-          'index (dashed) ${_lb(_scen.last.sIdx)} — the index lags '
+          'true expressed (solid) ${_lb(_run.last.sTrue)} vs app '
+          'index (dashed) ${_lb(_run.last.sIdx)} — the index lags '
           'through the attempt gate; the catch-up is measurement, '
           'not physiology${_showCapacity ? ' · capacity (dotted) '
-                    '${_lb(_scen.last.sCap)}' : ''}'
-          '${_isBaseline ? '' : ' · baseline in grey'}',
+                    '${_lb(_run.last.sCap)}' : ''}',
           style: AppText.micro(context),
         ),
         const SizedBox(height: 2),
         Text(
-          'S ${_lb(_scen.last.squat)} · B ${_lb(_scen.last.bench)} · '
-          'D ${_lb(_scen.last.deadlift)} · P ${_lb(_scen.last.press)} '
+          'S ${_lb(_run.last.squat)} · B ${_lb(_run.last.bench)} · '
+          'D ${_lb(_run.last.deadlift)} · P ${_lb(_run.last.press)} '
           'at $horizonLabel',
           style: AppText.tag(context),
         ),
@@ -552,9 +483,7 @@ class _ForecastSectionState extends State<ForecastSection> {
       children: [
         _BwChart(
           key: const ValueKey('sim2-bw-chart'),
-          base: _base,
-          scen: _scen,
-          isBaseline: _isBaseline,
+          run: _run,
           daily: widget.inputs.observedDaily,
           today: widget.today,
           expectationBand: widget.inputs.expectations?.bodyweightLb,
@@ -574,19 +503,13 @@ class _ForecastSectionState extends State<ForecastSection> {
         Text('BF%', style: AppText.tag(context)),
         _Sim2Chart(
           key: const ValueKey('sim2-bf-chart'),
-          run: _scen,
+          run: _run,
           height: 130,
           yDecimals: 1,
           expectationBand: widget.inputs.expectations?.bfPct,
           series: [
-            if (!_isBaseline)
-              _ChartSeries(
-                [for (final w in _base.weeks) (w.monday, w.bfPct)],
-                scheme.outline.withValues(alpha: 0.6),
-                width: 1.4,
-              ),
             _ChartSeries(
-              [for (final w in _scen.weeks) (w.monday, w.bfPct)],
+              [for (final w in _run.weeks) (w.monday, w.bfPct)],
               scheme.tertiary,
               width: 2.2,
               dash: const [6, 4],
@@ -594,33 +517,11 @@ class _ForecastSectionState extends State<ForecastSection> {
           ],
         ),
         const SizedBox(height: 4),
-        // Wrap, not Row — the two branch chips overflow at 360dp.
-        Wrap(
-          spacing: 6,
-          runSpacing: -6,
-          children: [
-            ChoiceChip(
-              key: const ValueKey('sim2-mu-rule'),
-              label: const Text('μ=0.30 (§5 rule)'),
-              visualDensity: VisualDensity.compact,
-              selected: _mu == null,
-              onSelected: (_) => _setMu(null),
-            ),
-            ChoiceChip(
-              key: const ValueKey('sim2-mu-zero'),
-              label: const Text('μ≈0 (13%@154 anchor)'),
-              visualDensity: VisualDensity.compact,
-              selected: _mu != null,
-              onSelected: (_) => _setMu(0.0),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
         Text(
-          'deficit lean-loss branch — the two readings of §5, '
-          'unresolved until the Nov DEXA · horizon BF '
-          '${_scen.last.bfPct.toStringAsFixed(1)}% at '
-          '${_scen.last.bw.toStringAsFixed(1)} lb',
+          'deficit lean-loss per the §5 rule (μ=0.30 at the cut rate; '
+          'branch resolution waits on the Nov DEXA) · horizon BF '
+          '${_run.last.bfPct.toStringAsFixed(1)}% at '
+          '${_run.last.bw.toStringAsFixed(1)} lb',
           style: AppText.micro(context),
         ),
       ],
@@ -634,18 +535,12 @@ class _ForecastSectionState extends State<ForecastSection> {
       children: [
         _Sim2Chart(
           key: const ValueKey('sim2-climb-chart'),
-          run: _scen,
+          run: _run,
           height: 150,
           yDecimals: 1,
           series: [
-            if (!_isBaseline)
-              _ChartSeries(
-                [for (final w in _base.weeks) (w.monday, w.c)],
-                scheme.outline.withValues(alpha: 0.6),
-                width: 1.4,
-              ),
             _ChartSeries(
-              [for (final w in _scen.weeks) (w.monday, w.c)],
+              [for (final w in _run.weeks) (w.monday, w.c)],
               scheme.secondary,
               width: 2.2,
             ),
@@ -654,17 +549,17 @@ class _ForecastSectionState extends State<ForecastSection> {
         const SizedBox(height: 4),
         Text(
           key: const ValueKey('sim2-pv8'),
-          _mcForScenario == null
-              ? 'C ${_scen.last.c.toStringAsFixed(1)} at horizon · '
+          _mc == null
+              ? 'C ${_run.last.c.toStringAsFixed(1)} at horizon · '
                     'P(V8) computing (200 MC paths, off-thread) — '
                     'deterministic line shown'
-              : 'C ${_scen.last.c.toStringAsFixed(1)} at horizon · '
+              : 'C ${_run.last.c.toStringAsFixed(1)} at horizon · '
                     'P(V8 sent by $horizonLabel) '
-                    '${(_mcForScenario!.pV8Sent * 100).round()}% '
-                    '(MC ${_mcForScenario!.paths} paths, +'
+                    '${(_mc!.pV8Sent * 100).round()}% '
+                    '(MC ${_mc!.paths} paths, +'
                     '${_params.sendMargin.toStringAsFixed(1)} send '
                     'margin [log]) · C p20 '
-                    '${_mcForScenario!.p20C.toStringAsFixed(1)}',
+                    '${_mc!.p20C.toStringAsFixed(1)}',
           style: AppText.micro(context),
         ),
       ],
@@ -672,23 +567,16 @@ class _ForecastSectionState extends State<ForecastSection> {
   }
 
   Widget _vo2Body(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _Sim2Chart(
           key: const ValueKey('sim2-vo2-chart'),
-          run: _scen,
+          run: _run,
           height: 130,
           series: [
-            if (!_isBaseline)
-              _ChartSeries(
-                [for (final w in _base.weeks) (w.monday, w.vo2)],
-                scheme.outline.withValues(alpha: 0.6),
-                width: 1.4,
-              ),
             _ChartSeries(
-              [for (final w in _scen.weeks) (w.monday, w.vo2)],
+              [for (final w in _run.weeks) (w.monday, w.vo2)],
               Colors.teal,
               width: 2.2,
             ),
@@ -696,9 +584,8 @@ class _ForecastSectionState extends State<ForecastSection> {
         ),
         const SizedBox(height: 4),
         Text(
-          'score = Vabs / bw — the bulk lowers it on its own; '
-          '${_scen.last.vo2.toStringAsFixed(1)} at horizon '
-          '(§4 priors; Cardio up holds ~52)',
+          'score = Vabs / bw — weight changes move it on their own; '
+          '${_run.last.vo2.toStringAsFixed(1)} at horizon (§4 priors)',
           style: AppText.micro(context),
         ),
       ],
@@ -712,19 +599,13 @@ class _ForecastSectionState extends State<ForecastSection> {
       children: [
         _Sim2Chart(
           key: const ValueKey('sim2-f-chart'),
-          run: _scen,
+          run: _run,
           height: 130,
           yDecimals: 1,
           redFlagAlpha: 0.16,
           series: [
-            if (!_isBaseline)
-              _ChartSeries(
-                [for (final w in _base.weeks) (w.monday, w.f)],
-                scheme.outline.withValues(alpha: 0.6),
-                width: 1.4,
-              ),
             _ChartSeries(
-              [for (final w in _scen.weeks) (w.monday, w.f)],
+              [for (final w in _run.weeks) (w.monday, w.f)],
               scheme.error,
               width: 2.2,
             ),
@@ -732,8 +613,7 @@ class _ForecastSectionState extends State<ForecastSection> {
         ),
         const SizedBox(height: 4),
         Text(
-          'over-budget weeks: ${_scen.overBudgetWeeks}'
-          '${_isBaseline ? '' : ' (baseline ${_base.overBudgetWeeks})'}'
+          'over-budget weeks: ${_run.overBudgetWeeks}'
           ' — red spans are L > L_cap: the model\'s confidence '
           'collapses there (it is extrapolating into the pattern '
           'that failed).',
@@ -743,7 +623,7 @@ class _ForecastSectionState extends State<ForecastSection> {
     );
   }
 
-  /// One collapsed expandable section (the Plan-tab compact mode).
+  /// One collapsed expandable section.
   Widget _foldout(
     BuildContext context, {
     required String key,
@@ -811,35 +691,187 @@ String _fmtParam(double v) {
   return s;
 }
 
+String _signed(double v, {int decimals = 2}) =>
+    '${v > 0 ? '+' : ''}${v.toStringAsFixed(decimals)}';
+
 // ---------------------------------------------------------------------------
-// Summary line
+// Nutrition card — the input surface + the ONE lever
 // ---------------------------------------------------------------------------
 
-class _SummaryLine extends StatelessWidget {
-  final Sim2Run base, scen;
-  final bool isBaseline;
-  final String presetLabel;
-  final Sim2McSummary? mc;
-  final String horizonLabel;
+class _NutritionCard extends StatelessWidget {
+  final NutritionForecast? nutrition;
+  final double delta;
+  final ValueChanged<double> onDelta;
+  final double stepKcal;
 
-  const _SummaryLine({
+  const _NutritionCard({
     super.key,
-    required this.base,
-    required this.scen,
-    required this.isBaseline,
-    required this.presetLabel,
-    required this.mc,
-    required this.horizonLabel,
+    required this.nutrition,
+    required this.delta,
+    required this.onDelta,
+    required this.stepKcal,
   });
+
+  String _avg(NutritionAvg? a) => a == null
+      ? '—'
+      : '${a.kcal.round()} kcal · P ${a.proteinG.round()} · '
+            'C ${a.carbsG.round()} (${a.loggedDays}d logged)';
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    String line(Sim2Run r) =>
-        'total ${_lb(r.last.sTrue)} (index ${_lb(r.last.sIdx)}) · '
-        '${r.last.bw.toStringAsFixed(0)} lb · '
-        'C ${r.last.c.toStringAsFixed(1)} · '
-        'VO2 ${r.last.vo2.toStringAsFixed(0)}';
+    final n = nutrition;
+    final m = n?.maintenance;
+
+    Widget row(String label, String value, {Key? key}) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 92, child: Text(label, style: AppText.tag(context))),
+          Expanded(child: Text(value, key: key, style: AppText.value(context))),
+        ],
+      ),
+    );
+
+    return Card(
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      color: scheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'NUTRITION — THE INPUT (MACROFACTOR)',
+              style: AppText.title(context),
+            ),
+            const SizedBox(height: 6),
+            if (n == null || (n.avg7 == null && n.avg14 == null))
+              Text(
+                'No logged nutrition yet — the projection runs the '
+                'program\'s declared block rates until Macrofactor '
+                'days land in meals.',
+                key: const ValueKey('nutrition-empty'),
+                style: AppText.micro(context),
+              )
+            else ...[
+              row('7d avg', _avg(n.avg7)),
+              row('14d avg', _avg(n.avg14)),
+              row(
+                'maintenance',
+                m == null
+                    ? 'not enough paired days yet (needs $minPairedDays '
+                          'logged days with weigh-ins)'
+                    : '~${n.effectiveMaintenanceKcal!.round()} ± '
+                          '${m.bandKcal.round()} kcal '
+                          '(${m.method == 'regression' ? 'regression' : 'energy balance'}, '
+                          '${m.pairedDays}d'
+                          '${n.maintenanceOffsetKcal != 0 ? ', recal '
+                                    '${_signed(n.maintenanceOffsetKcal, decimals: 0)}' : ''})',
+                key: const ValueKey('nutrition-maintenance'),
+              ),
+              row(
+                'implied rate',
+                n.rCurrentLbWk == null
+                    ? '—'
+                    : '${_signed(n.rCurrentLbWk!)} lb/wk at current intake',
+                key: const ValueKey('nutrition-rate'),
+              ),
+              const SizedBox(height: 6),
+              // The ONE what-if lever: calorie delta on the projection.
+              // Wrap, not Row — the reset chip overflows at 360dp.
+              Wrap(
+                spacing: 2,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text('what-if', style: AppText.tag(context)),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    key: const ValueKey('nutrition-delta-minus'),
+                    icon: const Icon(Icons.remove_circle_outline, size: 20),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => onDelta(delta - stepKcal),
+                  ),
+                  Text(
+                    '${_signed(delta, decimals: 0)} kcal/day',
+                    key: const ValueKey('nutrition-delta-value'),
+                    style: AppText.value(context),
+                  ),
+                  IconButton(
+                    key: const ValueKey('nutrition-delta-plus'),
+                    icon: const Icon(Icons.add_circle_outline, size: 20),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => onDelta(delta + stepKcal),
+                  ),
+                  if (delta != 0)
+                    ActionChip(
+                      key: const ValueKey('nutrition-delta-reset'),
+                      label: const Text('reset'),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => onDelta(0),
+                    ),
+                ],
+              ),
+              if (delta != 0 && n.canProject)
+                Text(
+                  'projection at ${n.projectedIntakeKcal!.round()} kcal: '
+                  '${_signed(n.rProjectedLbWk!)} lb/wk · '
+                  'P ${n.projectedProteinG!.round()} · '
+                  'C ${n.projectedCarbsG!.round()} g '
+                  '(macros scaled proportionally)',
+                  key: const ValueKey('nutrition-whatif'),
+                  style: AppText.micro(context),
+                ),
+              if (!n.canProject)
+                Text(
+                  'Projection still runs the declared block rates — the '
+                  'maintenance estimate needs more paired days.',
+                  key: const ValueKey('nutrition-fallback'),
+                  style: AppText.micro(context),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Summary line + model-tracking status
+// ---------------------------------------------------------------------------
+
+class _SummaryLine extends StatelessWidget {
+  final Sim2Run run;
+  final Sim2McSummary? mc;
+  final String horizonLabel;
+  final ForecastMeta? meta;
+  final bool nutritionDriven;
+
+  const _SummaryLine({
+    super.key,
+    required this.run,
+    required this.mc,
+    required this.horizonLabel,
+    required this.meta,
+    required this.nutritionDriven,
+  });
+
+  String _tracking() {
+    final m = meta;
+    if (m == null || !m.adjusted || m.lastEvent == null) {
+      return 'model tracking: on';
+    }
+    final e = m.lastEvent!;
+    return 'model tracking: adjusted '
+        '${DateFormat('MMM d').format(e.date)} (${e.what})';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Card(
       elevation: 0,
       margin: EdgeInsets.zero,
@@ -850,296 +882,22 @@ class _SummaryLine extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '${isBaseline ? 'Baseline' : presetLabel} → $horizonLabel: '
-              '${line(scen)}'
+              'Program → $horizonLabel: '
+              'total ${_lb(run.last.sTrue)} (index ${_lb(run.last.sIdx)}) · '
+              '${run.last.bw.toStringAsFixed(0)} lb · '
+              'C ${run.last.c.toStringAsFixed(1)} · '
+              'VO2 ${run.last.vo2.toStringAsFixed(0)}'
               '${mc != null ? ' · P(V8) ${(mc!.pV8Sent * 100).round()}%' : ''}',
               style: AppText.value(context),
             ),
-            if (!isBaseline)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text(
-                  'baseline: ${line(base)}',
-                  style: AppText.tag(context),
-                ),
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                '${_tracking()}'
+                '${nutritionDriven ? ' · rate from logged intake' : ' · declared rates (no nutrition data)'}',
+                key: const ValueKey('forecast-tracking'),
+                style: AppText.tag(context),
               ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Preset chips (§8 table)
-// ---------------------------------------------------------------------------
-
-class _PresetChips extends StatelessWidget {
-  final String selected;
-  final ValueChanged<String> onSelect;
-
-  const _PresetChips({required this.selected, required this.onSelect});
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 6,
-      runSpacing: -6,
-      children: [
-        for (final p in sim2Presets)
-          ChoiceChip(
-            key: ValueKey('sim2-preset-${p.id}'),
-            label: Text(p.label),
-            visualDensity: VisualDensity.compact,
-            selected: selected == p.id,
-            tooltip: p.blurb,
-            onSelected: (_) => onSelect(p.id),
-          ),
-      ],
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Dials row (global overrides)
-// ---------------------------------------------------------------------------
-
-class _DialsCard extends StatelessWidget {
-  final Sim2DialOverrides overrides;
-  final ValueChanged<Sim2DialOverrides> onChanged;
-
-  const _DialsCard({required this.overrides, required this.onChanged});
-
-  Sim2DialOverrides _with({
-    Object? n = _keep,
-    Object? w = _keep,
-    Object? k = _keep,
-    Object? kLim = _keep,
-    Object? h = _keep,
-    Object? z = _keep,
-    Object? z2 = _keep,
-    Object? q = _keep,
-    Object? r = _keep,
-    Object? p = _keep,
-  }) {
-    double? pick(Object? v, double? cur) =>
-        identical(v, _keep) ? cur : v as double?;
-    final o = overrides;
-    return Sim2DialOverrides(
-      n: pick(n, o.n),
-      w: pick(w, o.w),
-      k: pick(k, o.k),
-      kLim: pick(kLim, o.kLim),
-      h: pick(h, o.h),
-      z: pick(z, o.z),
-      z2: pick(z2, o.z2),
-      q: pick(q, o.q),
-      r: pick(r, o.r),
-      p: pick(p, o.p),
-    );
-  }
-
-  static const Object _keep = Object();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final o = overrides;
-
-    Widget slider({
-      required Key key,
-      required String label,
-      required double? value,
-      required double park,
-      required double min,
-      required double max,
-      required double step,
-      required ValueChanged<double> onValue,
-      String Function(double)? fmt,
-    }) {
-      final f =
-          fmt ?? (v) => v.toStringAsFixed(step < 0.1 ? 2 : (step < 1 ? 1 : 0));
-      return Row(
-        children: [
-          SizedBox(width: 56, child: Text(label, style: AppText.tag(context))),
-          Expanded(
-            child: Slider(
-              key: key,
-              value: (value ?? park).clamp(min, max),
-              min: min,
-              max: max,
-              divisions: ((max - min) / step).round(),
-              onChanged: onValue,
-            ),
-          ),
-          SizedBox(
-            width: 64,
-            child: Text(
-              value == null ? 'blocks' : f(value),
-              textAlign: TextAlign.right,
-              style: AppText.value(context),
-            ),
-          ),
-        ],
-      );
-    }
-
-    Widget chipRow({
-      required String label,
-      required String keyPrefix,
-      required List<double> values,
-      required double? current,
-      required ValueChanged<double?> onValue,
-      String Function(double)? fmt,
-    }) {
-      final f = fmt ?? (v) => v.toStringAsFixed(0);
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 1),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 56,
-              child: Text(label, style: AppText.tag(context)),
-            ),
-            Expanded(
-              child: Wrap(
-                spacing: 6,
-                runSpacing: -8,
-                children: [
-                  for (final v in values)
-                    ChoiceChip(
-                      key: ValueKey('$keyPrefix-${f(v)}'),
-                      label: Text(f(v)),
-                      visualDensity: VisualDensity.compact,
-                      selected: current == v,
-                      // Tapping the selected chip clears back to blocks.
-                      onSelected: (_) => onValue(current == v ? null : v),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Card(
-      elevation: 0,
-      margin: EdgeInsets.zero,
-      color: scheme.surfaceContainerLow,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'DIALS — GLOBAL OVERRIDES',
-                    style: AppText.title(context),
-                  ),
-                ),
-                if (!o.isEmpty)
-                  ActionChip(
-                    key: const ValueKey('sim2-dials-reset'),
-                    label: const Text('Reset to blocks'),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => onChanged(const Sim2DialOverrides()),
-                  ),
-              ],
-            ),
-            slider(
-              key: const ValueKey('sim2-dial-n'),
-              label: 'N /wk',
-              value: o.n,
-              park: 6,
-              min: 0,
-              max: 12,
-              step: 1,
-              onValue: (v) => onChanged(_with(n: v)),
-            ),
-            slider(
-              key: const ValueKey('sim2-dial-w'),
-              label: 'W /wk',
-              value: o.w,
-              park: 28,
-              min: 0,
-              max: 40,
-              step: 2,
-              onValue: (v) => onChanged(_with(w: v)),
-            ),
-            slider(
-              key: const ValueKey('sim2-dial-r'),
-              label: 'r lb/wk',
-              value: o.r,
-              park: 0.4,
-              min: -1.0,
-              max: 1.0,
-              step: 0.05,
-              onValue: (v) => onChanged(_with(r: v)),
-            ),
-            slider(
-              key: const ValueKey('sim2-dial-p'),
-              label: 'P g/lb',
-              value: o.p,
-              park: 0.9,
-              min: 0.5,
-              max: 1.2,
-              step: 0.05,
-              onValue: (v) => onChanged(_with(p: v)),
-            ),
-            slider(
-              key: const ValueKey('sim2-dial-z2'),
-              label: 'Z2 min',
-              value: o.z2,
-              park: 0,
-              min: 0,
-              max: 180,
-              step: 15,
-              onValue: (v) => onChanged(_with(z2: v)),
-            ),
-            chipRow(
-              label: 'K /wk',
-              keyPrefix: 'sim2-dial-k',
-              values: const [0, 1, 2, 3, 4],
-              current: o.k,
-              onValue: (v) => onChanged(_with(k: v)),
-            ),
-            chipRow(
-              label: 'K_lim',
-              keyPrefix: 'sim2-dial-klim',
-              values: const [0, 1, 2],
-              current: o.kLim,
-              onValue: (v) => onChanged(_with(kLim: v)),
-            ),
-            chipRow(
-              label: 'H',
-              keyPrefix: 'sim2-dial-h',
-              values: const [0, 1],
-              current: o.h,
-              onValue: (v) => onChanged(_with(h: v)),
-            ),
-            chipRow(
-              label: 'Z /wk',
-              keyPrefix: 'sim2-dial-z',
-              values: const [0, 1, 2, 3],
-              current: o.z,
-              onValue: (v) => onChanged(_with(z: v)),
-            ),
-            chipRow(
-              label: 'Q /wk',
-              keyPrefix: 'sim2-dial-q',
-              values: const [0, 1, 2, 3],
-              current: o.q,
-              onValue: (v) => onChanged(_with(q: v)),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              '"blocks" = the per-block baseline dials; an override '
-              'applies to EVERY week (per-block overrides: later wave). '
-              'Tap a selected chip to clear it.',
-              style: AppText.micro(context),
             ),
           ],
         ),
@@ -1149,7 +907,7 @@ class _DialsCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Shared chart plumbing (patterns carried from v1)
+// Shared chart plumbing
 // ---------------------------------------------------------------------------
 
 double _x(DateTime d) =>
@@ -1162,7 +920,7 @@ Color _emphasisColor(ColorScheme scheme, String emphasis) => switch (emphasis) {
   _ => scheme.primary, // lifting
 };
 
-/// Tinted block bands + RED over-budget spans (§8: flag L > L_cap weeks
+/// Tinted block bands + RED over-budget spans (flag L > L_cap weeks
 /// in red). Consecutive red weeks merge into one span.
 List<VerticalRangeAnnotation> _annotations(
   ColorScheme scheme,
@@ -1264,7 +1022,7 @@ class _ChartSeries {
 }
 
 /// One weekly-trajectory chart: block bands, red over-budget spans, and
-/// the given line series (scenario on top, baseline muted underneath).
+/// the given line series.
 class _Sim2Chart extends StatelessWidget {
   final Sim2Run run;
   final List<_ChartSeries> series;
@@ -1355,12 +1113,11 @@ class _Sim2Chart extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Bodyweight: observed + forecast (v1 pattern kept)
+// Bodyweight: observed + forecast
 // ---------------------------------------------------------------------------
 
 class _BwChart extends StatelessWidget {
-  final Sim2Run base, scen;
-  final bool isBaseline;
+  final Sim2Run run;
   final List<WeightRow> daily;
   final DateTime today;
 
@@ -1372,9 +1129,7 @@ class _BwChart extends StatelessWidget {
 
   const _BwChart({
     super.key,
-    required this.base,
-    required this.scen,
-    required this.isBaseline,
+    required this.run,
     required this.daily,
     required this.today,
     this.expectationBand,
@@ -1383,7 +1138,7 @@ class _BwChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final weeks = scen.weeks;
+    final weeks = run.weeks;
     if (weeks.isEmpty) return const SizedBox.shrink();
     final t0 = weeks.first.monday;
     final windowStart = t0.subtract(const Duration(days: _observedDays));
@@ -1403,8 +1158,6 @@ class _BwChart extends StatelessWidget {
       for (final w in visibleDaily) w.weightLbs,
       for (final w in avg) w.weightLbs,
       for (final w in weeks) w.bw,
-      if (!isBaseline)
-        for (final w in base.weeks) w.bw,
       ...?expectationBand,
     ];
     final yMin = ys.reduce(math.min);
@@ -1424,7 +1177,7 @@ class _BwChart extends StatelessWidget {
             gridData: const FlGridData(show: true, drawVerticalLine: false),
             borderData: FlBorderData(show: false),
             rangeAnnotations: RangeAnnotations(
-              verticalRangeAnnotations: _annotations(scheme, scen),
+              verticalRangeAnnotations: _annotations(scheme, run),
               horizontalRangeAnnotations: [
                 if (expectationBand != null)
                   HorizontalRangeAnnotation(
@@ -1466,16 +1219,6 @@ class _BwChart extends StatelessWidget {
                   color: scheme.primary,
                   dotData: const FlDotData(show: false),
                 ),
-              if (!isBaseline)
-                LineChartBarData(
-                  spots: [
-                    for (final w in base.weeks) FlSpot(_x(w.monday), w.bw),
-                  ],
-                  isCurved: false,
-                  barWidth: 1.4,
-                  color: scheme.outline.withValues(alpha: 0.6),
-                  dotData: const FlDotData(show: false),
-                ),
               LineChartBarData(
                 spots: [for (final w in weeks) FlSpot(_x(w.monday), w.bw)],
                 isCurved: false,
@@ -1500,7 +1243,6 @@ class _StatsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    String signed(double v) => '${v > 0 ? '+' : ''}${v.toStringAsFixed(2)}';
     Widget stat(String label, String value) => Expanded(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1520,11 +1262,11 @@ class _StatsRow extends StatelessWidget {
         ),
         stat(
           'rate / wk',
-          stats.bwRateLbWk == null ? '—' : '${signed(stats.bwRateLbWk!)} lb',
+          stats.bwRateLbWk == null ? '—' : '${_signed(stats.bwRateLbWk!)} lb',
         ),
         stat(
           '3-wk change',
-          stats.bw3wkChange == null ? '—' : '${signed(stats.bw3wkChange!)} lb',
+          stats.bw3wkChange == null ? '—' : '${_signed(stats.bw3wkChange!)} lb',
         ),
       ],
     );
@@ -1532,130 +1274,8 @@ class _StatsRow extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Baseline vs scenario (§8: always report the baseline next to it)
-// ---------------------------------------------------------------------------
-
-class _CompareCard extends StatelessWidget {
-  final Sim2Run base, scen;
-  final Sim2McSummary? mcBase, mcScen;
-  final String presetLabel;
-  final bool overridden;
-
-  const _CompareCard({
-    super.key,
-    required this.base,
-    required this.scen,
-    required this.mcBase,
-    required this.mcScen,
-    required this.presetLabel,
-    required this.overridden,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    String pv8(Sim2McSummary? mc) =>
-        mc == null ? '…' : '${(mc.pV8Sent * 100).round()}%';
-
-    final rows = <(String, String, String)>[
-      ('expressed total', _lb(base.last.sTrue), _lb(scen.last.sTrue)),
-      ('capacity', _lb(base.last.sCap), _lb(scen.last.sCap)),
-      (
-        'BW / BF%',
-        '${base.last.bw.toStringAsFixed(0)} / '
-            '${base.last.bfPct.toStringAsFixed(1)}',
-        '${scen.last.bw.toStringAsFixed(0)} / '
-            '${scen.last.bfPct.toStringAsFixed(1)}',
-      ),
-      ('C', base.last.c.toStringAsFixed(1), scen.last.c.toStringAsFixed(1)),
-      ('P(V8 sent)', pv8(mcBase), pv8(mcScen)),
-      (
-        'VO2',
-        base.last.vo2.toStringAsFixed(1),
-        scen.last.vo2.toStringAsFixed(1),
-      ),
-      (
-        'muscle-ups M',
-        base.last.m.toStringAsFixed(1),
-        scen.last.m.toStringAsFixed(1),
-      ),
-      ('F end', base.last.f.toStringAsFixed(2), scen.last.f.toStringAsFixed(2)),
-      ('over-budget wks', '${base.overBudgetWeeks}', '${scen.overBudgetWeeks}'),
-    ];
-
-    return Card(
-      elevation: 0,
-      margin: EdgeInsets.zero,
-      color: scheme.surfaceContainerLow,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'BASELINE VS ${presetLabel.toUpperCase()}'
-              '${overridden ? ' + DIALS' : ''}',
-              style: AppText.title(context),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const Expanded(flex: 5, child: SizedBox()),
-                Expanded(
-                  flex: 3,
-                  child: Text(
-                    'baseline',
-                    textAlign: TextAlign.right,
-                    style: AppText.micro(context),
-                  ),
-                ),
-                Expanded(
-                  flex: 3,
-                  child: Text(
-                    'scenario',
-                    textAlign: TextAlign.right,
-                    style: AppText.micro(context),
-                  ),
-                ),
-              ],
-            ),
-            for (final (label, b, s) in rows)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(
-                  children: [
-                    Expanded(
-                      flex: 5,
-                      child: Text(label, style: AppText.tag(context)),
-                    ),
-                    Expanded(
-                      flex: 3,
-                      child: Text(
-                        b,
-                        textAlign: TextAlign.right,
-                        style: AppText.tag(context),
-                      ),
-                    ),
-                    Expanded(
-                      flex: 3,
-                      child: Text(
-                        s,
-                        textAlign: TextAlign.right,
-                        style: AppText.value(context),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// §9.5 parameter sheet
+// §9.5 parameter sheet — PROVENANCE, not a lever (kept per directive:
+// every constant with value + prior + source tag stays inspectable).
 // ---------------------------------------------------------------------------
 
 class _ParamSheet extends StatelessWidget {
@@ -1770,13 +1390,14 @@ class _ParamSheet extends StatelessWidget {
           ],
           const SizedBox(height: 8),
           Text(
-            'Tap a row to edit — the horizon re-runs instantly. [fit] = '
-            'two-pass fit on the calibration CSVs; [log]/[lit]/[assume] '
-            '= anchors, not fits (§3-§6 are all priors). eDep is pinned '
-            'by the §9.2 replay checkpoints, NOT the window fit (the '
-            'window likelihood is flat in it) — editing it here moves '
-            'the horizon but is not re-validated against the log; the '
-            'replay harness lives in tool/sim2_replay.dart.',
+            'PROVENANCE sheet, not levers. Tap a row to edit for '
+            'inspection — the horizon re-runs instantly; "fitted" here '
+            'includes any nightly recalibration scales (guarded ±50%). '
+            '[fit] = two-pass fit on the calibration CSVs; '
+            '[log]/[lit]/[assume] = anchors, not fits (§3-§6 are all '
+            'priors). eDep is pinned by the §9.2 replay checkpoints, '
+            'NOT the window fit — editing it moves the horizon but is '
+            'not re-validated in-app (tool/sim2_replay.dart).',
             style: AppText.micro(context),
           ),
         ],

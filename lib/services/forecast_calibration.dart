@@ -27,7 +27,7 @@
 ///    Every applied adjustment is recorded as a recalibration event.
 ///  * The result is written to the `forecast_meta` tab (key/value —
 ///    codec below) each night; the Plan tab renders "model tracking:
-///    on / adjusted <date> (<what moved>)" from it and applies the
+///    on / adjusted `<date>` (`<what moved>`)" from it and applies the
 ///    scales/offset to its own local run so app and nightly agree.
 library;
 
@@ -35,7 +35,6 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'program_metrics.dart' show WeightRow;
-import 'program_observed.dart' show sevenDayAvgSeries;
 import 'sim2_harness.dart';
 import 'sim2_model.dart';
 

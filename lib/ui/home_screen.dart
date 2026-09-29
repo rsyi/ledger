@@ -43,6 +43,7 @@ import '../services/transient_retry.dart';
 import '../services/warehouse_connector.dart';
 import '../services/program_provider.dart';
 import '../services/week_planner.dart';
+import '../services/forecast_meta_store.dart';
 import '../services/wm_store.dart';
 import 'chat_screen.dart';
 import 'domain_screen.dart';
@@ -168,6 +169,12 @@ class _HomeScreenState extends State<HomeScreen> {
     // Week Plan prescription blocks, and the Program screen's
     // CONFIGURATION card.
     final wmStore = WmStore(
+      spreadsheetId: assetConfig.spreadsheetId,
+      serviceAccountKeyJson: keyJson,
+    );
+    // Nightly forecast recalibration state (forecast_meta tab) — read
+    // by the Plan tab's "model tracking" line; auth is lazy.
+    final forecastMetaStore = ForecastMetaStore(
       spreadsheetId: assetConfig.spreadsheetId,
       serviceAccountKeyJson: keyJson,
     );
@@ -353,6 +360,7 @@ class _HomeScreenState extends State<HomeScreen> {
           : QboService(assetConfig.quickbooks!),
       readOnlyRepo: readOnlyRepo,
       wmStore: wmStore,
+      forecastMetaStore: forecastMetaStore,
     );
   }
 
@@ -989,6 +997,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         readOnlyRepo: data.readOnlyRepo,
                         forView: data.registry.forView,
                       ),
+                      // Nutrition input (Macrofactor meals) + nightly
+                      // recalibration state for the forecast.
+                      mealsView: dashMealsView,
+                      mealsRepo: dashboardRepoFor(
+                        dashMealsView,
+                        readOnlyRepo: data.readOnlyRepo,
+                        forView: data.registry.forView,
+                      ),
+                      metaStore: data.forecastMetaStore,
                       onOpenRoutine: openWeekPlan,
                     );
 
@@ -1085,6 +1102,10 @@ class _Bootstrap {
   /// blocks + the Program screen's CONFIGURATION "Working maxes" card.
   final WmStore? wmStore;
 
+  /// Forecast recalibration state reader (forecast_meta tab) — the
+  /// Plan tab's "model tracking" line + guarded refit application.
+  final ForecastMetaStore? forecastMetaStore;
+
   _Bootstrap({
     required this.views,
     required this.repository,
@@ -1100,6 +1121,7 @@ class _Bootstrap {
     this.qboService,
     this.readOnlyRepo,
     this.wmStore,
+    this.forecastMetaStore,
   });
 }
 

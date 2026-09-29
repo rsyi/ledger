@@ -289,15 +289,25 @@ class NutritionForecast {
   /// only (never to the displayed actuals).
   final double calorieDelta;
 
+  /// Nightly recalibration correction to maintenance (guardedRefit's
+  /// clamped offset, from the forecast_meta tab). 0 when tracking is
+  /// on-band.
+  final double maintenanceOffsetKcal;
+
   const NutritionForecast({
     required this.avg7,
     required this.avg14,
     required this.maintenance,
     this.calorieDelta = 0,
+    this.maintenanceOffsetKcal = 0,
   });
 
   /// True when the model can project (maintenance + 14d intake known).
   bool get canProject => maintenance != null && avg14 != null;
+
+  /// Maintenance with the recalibration offset applied.
+  double? get effectiveMaintenanceKcal =>
+      maintenance == null ? null : maintenance!.kcal + maintenanceOffsetKcal;
 
   /// Intake the projection runs on (14d average + delta).
   double? get projectedIntakeKcal =>
@@ -306,11 +316,12 @@ class NutritionForecast {
   /// r = (intake − maintenance)/3500 × 7 lb/wk.
   double? get rProjectedLbWk => !canProject
       ? null
-      : (projectedIntakeKcal! - maintenance!.kcal) / kcalPerLb * 7;
+      : (projectedIntakeKcal! - effectiveMaintenanceKcal!) / kcalPerLb * 7;
 
   /// r at delta = 0 (the current-intake rate, for the card).
-  double? get rCurrentLbWk =>
-      !canProject ? null : (avg14!.kcal - maintenance!.kcal) / kcalPerLb * 7;
+  double? get rCurrentLbWk => !canProject
+      ? null
+      : (avg14!.kcal - effectiveMaintenanceKcal!) / kcalPerLb * 7;
 
   double? get _scale => avg14 == null || avg14!.kcal <= 0
       ? null
@@ -333,6 +344,16 @@ class NutritionForecast {
         avg14: avg14,
         maintenance: maintenance,
         calorieDelta: delta,
+        maintenanceOffsetKcal: maintenanceOffsetKcal,
+      );
+
+  NutritionForecast withMaintenanceOffset(double offsetKcal) =>
+      NutritionForecast(
+        avg7: avg7,
+        avg14: avg14,
+        maintenance: maintenance,
+        calorieDelta: calorieDelta,
+        maintenanceOffsetKcal: offsetKcal,
       );
 }
 

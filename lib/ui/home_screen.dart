@@ -1,7 +1,5 @@
 import 'dart:async';
 
-import 'package:airledger_engine/airledger_engine.dart'
-    show EngineLedgerRepository;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:package_info_plus/package_info_plus.dart';
@@ -18,6 +16,7 @@ import '../services/engine_ledger_connector.dart';
 import '../services/sync_scheduler.dart';
 import '../services/engine_schema_adapter.dart';
 import 'widgets/sync_status_button.dart';
+import 'widgets/today_status_card.dart';
 import 'integrations_screen.dart';
 import '../services/heart_rate_service.dart';
 import '../services/integrations/gmail_gateway.dart';
@@ -48,7 +47,6 @@ import '../services/wm_store.dart';
 import 'chat_screen.dart';
 import 'domain_screen.dart';
 import 'program_screen.dart';
-import 'coach_chat_screen.dart';
 import 'coach_threads_screen.dart';
 import 'home_dashboard.dart';
 import 'goals_screen.dart';
@@ -148,7 +146,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _tabHistory.remove(i);
       _tab = i;
     });
-    if (i == 0) _coachRowKey.currentState?.refresh();
+    if (i == 0) _todayStatusKey.currentState?.refresh();
   }
 
   /// Handle on the progress dashboard so pull-to-refresh can bust its
@@ -163,10 +161,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// app/dashboards.yaml (1 h cache otherwise).
   final _domainsKey = GlobalKey<_DomainSectionsState>();
 
-  /// Handle on the HOME tab's Coach preview row: switching back to HOME
-  /// after reading threads refreshes its unread accent immediately
-  /// (the row also refreshes itself when a background sync completes).
-  final _coachRowKey = GlobalKey<_CoachRowState>();
+  /// Handle on the Progress tab's today-vs-plan status card: switching
+  /// back to Progress after logging refreshes its food/training lines
+  /// immediately (pull-to-refresh recomputes it too).
+  final _todayStatusKey = GlobalKey<TodayStatusCardState>();
 
   @override
   void initState() {
@@ -515,7 +513,7 @@ class _HomeScreenState extends State<HomeScreen> {
             if (didPop || _tabHistory.isEmpty) return;
             final prev = _tabHistory.removeLast();
             setState(() => _tab = prev);
-            if (prev == 0) _coachRowKey.currentState?.refresh();
+            if (prev == 0) _todayStatusKey.currentState?.refresh();
           },
           child: Scaffold(
           body: Builder(
@@ -853,14 +851,32 @@ class _HomeScreenState extends State<HomeScreen> {
                 body: RefreshIndicator(
                   // Busts the dashboard's caches (wm_store snapshot,
                   // program docs, weight mirror, best-e1RM) and refires
-                  // its card futures + the Coach preview.
+                  // its card futures + the today-vs-plan status card.
                   onRefresh: () async {
-                    _coachRowKey.currentState?.refresh();
+                    _todayStatusKey.currentState?.refresh();
                     await _dashboardKey.currentState?.reload();
                   },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
+                      // Today-vs-plan: how the day is going against the
+                      // plan (food + training). Replaced the Coach preview
+                      // row; the coach stays its own tab. Tap → Log.
+                      TodayStatusCard(
+                        key: _todayStatusKey,
+                        mealsView: dashMealsView,
+                        mealsRepo: dashboardRepoFor(
+                          dashMealsView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
+                        strengthView: dashStrengthView,
+                        strengthRepo: dashStrengthView == null
+                            ? null
+                            : data.registry.forView(dashStrengthView),
+                        provider: programProvider,
+                        onOpen: () => _selectTab(2),
+                      ),
                       HomeDashboard(
                         key: _dashboardKey,
                         progressOnly: true,
@@ -927,14 +943,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             ? null
                             : openStrengthDomain,
                       ),
-                      if (coachView != null)
-                        _CoachRow(
-                          key: _coachRowKey,
-                          view: coachView,
-                          repository: data.registry.forView(coachView),
-                          ledger: coachLedger,
-                          onOpen: () => _selectTab(3),
-                        ),
                     ],
                   ),
                 ),
@@ -1229,188 +1237,6 @@ class _Bootstrap {
     this.wmStore,
     this.forecastMetaStore,
   });
-}
-
-/// Coach preview row on the HOME tab. Tinted (primaryContainer) so it
-/// reads as a different kind of row; shows a preview of the newest
-/// coach message across all threads + relative time, and an accent dot
-/// / stronger tint while ANY thread is unread (per-thread newest coach
-/// `ts` vs its device-local read marker, with the legacy fallback for
-/// `general`). Tap selects the COACH tab ([onOpen]); preview + unread
-/// refresh when a background sync completes, on pull-to-refresh, and
-/// when the shell switches back to HOME.
-class _CoachRow extends StatefulWidget {
-  final ViewSchema view;
-  final WarehouseConnector repository;
-  final EngineLedgerRepository? ledger;
-
-  /// Tap handler — the shell selects the Coach tab.
-  final VoidCallback onOpen;
-
-  const _CoachRow({
-    super.key,
-    required this.view,
-    required this.repository,
-    this.ledger,
-    required this.onOpen,
-  });
-
-  @override
-  State<_CoachRow> createState() => _CoachRowState();
-}
-
-class _CoachRowState extends State<_CoachRow> {
-  String? _preview;
-  String? _relTime;
-  bool _unread = false;
-  ValueNotifier<bool>? _syncing;
-
-  @override
-  void initState() {
-    super.initState();
-    refresh();
-    _syncing = SyncScheduler.instance?.syncing;
-    _syncing?.addListener(_onSyncStateChanged);
-  }
-
-  @override
-  void dispose() {
-    _syncing?.removeListener(_onSyncStateChanged);
-    super.dispose();
-  }
-
-  void _onSyncStateChanged() {
-    // Refresh when a sync completes — a fresh coach message may have
-    // just been pulled from the sheet.
-    if (_syncing?.value == false) refresh();
-  }
-
-  /// Re-lists the coach view and recomputes preview + unread. Public-
-  /// within-library: the shell calls it on tab return / pull-to-refresh.
-  Future<void> refresh() async {
-    try {
-      final rows = await widget.repository.list(widget.view);
-      // Newest coach message overall (preview) + newest coach `ts` per
-      // thread (unread). ISO strings — lexicographic compare matches
-      // chronological.
-      Map<String, Object?>? newest;
-      String? newestTs;
-      final newestByThread = <String, String>{};
-      for (final r in rows) {
-        if (r['role']?.toString() != 'coach') continue;
-        final ts = r['ts']?.toString();
-        if (ts == null || ts.isEmpty) continue;
-        if (newestTs == null || ts.compareTo(newestTs) > 0) {
-          newestTs = ts;
-          newest = r;
-        }
-        final thread = coachThreadOf(r);
-        final prev = newestByThread[thread];
-        if (prev == null || ts.compareTo(prev) > 0) {
-          newestByThread[thread] = ts;
-        }
-      }
-      // Unread when ANY thread's newest coach message postdates its
-      // read marker. Missing/unreadable meta → unread (a coach message
-      // exists the user has provably never opened on this device).
-      var unread = false;
-      for (final e in newestByThread.entries) {
-        String? lastRead;
-        if (widget.ledger != null) {
-          try {
-            lastRead = await coachThreadLastRead(widget.ledger!, e.key);
-          } catch (_) {
-            /* treat as missing */
-          }
-        }
-        if (lastRead == null ||
-            lastRead.isEmpty ||
-            e.value.compareTo(lastRead) > 0) {
-          unread = true;
-          break;
-        }
-      }
-      if (!mounted) return;
-      setState(() {
-        _preview = newest == null
-            ? null
-            : _firstLine(newest['text']?.toString() ?? '');
-        _relTime = _relativeTime(newestTs);
-        _unread = unread;
-      });
-    } catch (_) {
-      /* keep whatever the row currently shows */
-    }
-  }
-
-  static String _firstLine(String text) {
-    final stripped = stripMarkdownPreview(text);
-    final line = stripped.trimLeft().split('\n').first.trim();
-    return line.length > 80 ? '${line.substring(0, 80)}…' : line;
-  }
-
-  static String? _relativeTime(String? ts) {
-    final dt = ts == null ? null : DateTime.tryParse(ts);
-    if (dt == null) return null;
-    final diff = DateTime.now().difference(dt);
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
-    if (diff.inHours < 24) return '${diff.inHours}h ago';
-    if (diff.inDays == 1) return 'yesterday';
-    return '${diff.inDays}d ago';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final subtitle = _preview == null
-        ? null
-        : [_preview!, ?_relTime].join(' · ');
-    return Material(
-      color: scheme.primaryContainer.withValues(alpha: _unread ? 1.0 : 0.45),
-      child: ListTile(
-        leading: IconResolver.resolve(
-          'bot',
-          size: 24,
-          color: scheme.onPrimaryContainer,
-        ),
-        title: Text(
-          'Coach',
-          style: TextStyle(
-            color: scheme.onPrimaryContainer,
-            fontWeight: _unread ? FontWeight.w600 : FontWeight.w500,
-          ),
-        ),
-        subtitle: subtitle == null
-            ? null
-            : Text(
-                subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: scheme.onPrimaryContainer.withValues(alpha: 0.8),
-                ),
-              ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_unread)
-              Container(
-                width: 10,
-                height: 10,
-                margin: const EdgeInsets.only(right: 8),
-                decoration: BoxDecoration(
-                  color: scheme.primary,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            Icon(Icons.chevron_right, color: scheme.onPrimaryContainer),
-          ],
-        ),
-        onTap: widget.onOpen,
-      ),
-    );
-  }
 }
 
 /// Tracker rows grouped by `app/dashboards.yaml` (see

@@ -86,6 +86,32 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Current feature state (all live on device as of 2026-09-28)
 
+- **Progress/Goals bottom-nav split (2026-09-29)**: the output-over-input
+  principle made literal (user directive). The old combined Home tab
+  divided into TWO tabs; the shell is now 5-tab: **Progress · Goals ·
+  Log · Coach · Plan** (home_screen.dart, `_tab` 0-4; openProgram → Plan
+  index 4, coach preview → Coach index 3). PROGRESS (outputs only) =
+  HomeDashboard in the new `progressOnly` mode — the PHASE hero (weight
+  trajectory + body verdict) + the STRENGTH card + the Coach preview row
+  (cross-cutting, kept on top); the THIS WEEK input strip is DROPPED
+  there. GOALS (input eigenvectors) = `goals_screen.dart` +
+  `goals_service.dart` (pure, 24 tests): the phase's input goals as
+  plain-language met/partial/unmet rows over the current accounting week,
+  DECLARED in `app/dashboards.yaml` `phases:`→`<phase>:`→`goals:` (same
+  engine-free contract as the hero eigenvectors + weekly drivers;
+  phase-selected via effectivePhaseKey — cut vs recomp differ). Goal ids:
+  `macros` (protein g/lb or absolute grams + carbs floor), `calorie_band`
+  (cut→deficit / bulk|recomp→surplus band, maintenance from
+  nutrition_model's adaptive estimate), `hard_sets` (per main lift, sets
+  RPE 8-9 this week toward ~10 — the hypertrophy landmark — + per-lift
+  accessory-completion check, accessories declared from the routine),
+  `climbing` (2/wk), `cardio_4x4` (1/wk). Both tabs keep pull-to-refresh
+  (own GlobalKeys). Absent/malformed `goals:` → screen placeholder,
+  never crashes. Current phase = cut, so the cut goal set is live; the
+  recomp set flips the calorie band to surplus + protein to absolute
+  160-175 from Dec 14. The retired driver-strip content (week_drivers)
+  stays used only in HomeDashboard's non-progressOnly path (no live
+  caller now — kept for back-compat + the recomp one-screen section).
 - **Sync/store**: engine SQLite is source of truth; Sheets is the
   mirror. Ingest primitive: match-by-date OR match-by-dimension
   (`match_field` + `deleted_ids`, 2026-09-16 — row-grained sources

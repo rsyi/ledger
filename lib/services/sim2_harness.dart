@@ -99,6 +99,26 @@ List<Sim2Block>? sim2BlocksFromProgramDocs(Map<Object?, Object?>? program) {
   return blocks;
 }
 
+/// "I want to just stick with this program long-term" (user directive
+/// 2026-09-28): the default trajectory runs the DECLARED calendar and
+/// then holds the recomp steady-state indefinitely — ONE flat
+/// continuation block (lifting-emphasis post-cut template, block rate
+/// [sim2RecompR]) appended after the last declared block for
+/// [extraWeeks]. Deliberately NO auto-generated bulk/cut cycles beyond
+/// the calendar (the v1 sim_core rule-4 next-cycle machine is retired
+/// from the default path). The continuation block keeps the 8-week
+/// light/test cadence (n ≥ 2).
+List<Sim2Block> sim2ExtendSteadyState(List<Sim2Block> blocks,
+    {int extraWeeks = 52}) {
+  if (blocks.isEmpty || extraWeeks <= 0) return blocks;
+  final last = blocks.last;
+  return [
+    ...blocks,
+    Sim2Block(last.n + 1, last.end.add(const Duration(days: 1)),
+        last.end.add(Duration(days: extraWeeks * 7)), 'lifting', sim2RecompR),
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // One-year EXPECTATION ranges (program.yaml v10 `expectations_1yr`,
 // final post-cut spec) — NOT targets. The forecast section renders them

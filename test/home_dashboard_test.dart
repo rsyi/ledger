@@ -671,8 +671,14 @@ $dashYamlWithPhases
       find.textContaining('singles', findRichText: true),
       findsOneWidget,
     );
-    expect(find.textContaining('B✓', findRichText: true), findsOneWidget);
-    expect(find.textContaining('S·', findRichText: true), findsOneWidget);
+    expect(
+      find.textContaining('bench ✓', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('squat —', findRichText: true),
+      findsOneWidget,
+    );
     expect(
       find.textContaining('2/≤2', findRichText: true),
       findsOneWidget,
@@ -680,11 +686,122 @@ $dashYamlWithPhases
     // Output>>input: the activity tallies are not on the strip.
     expect(find.text('sets'), findsNothing);
     expect(find.text('near-max'), findsNothing);
+    // Clarity ban-list (2026-09-29): the single-letter tick
+    // compressions are gone for good.
+    for (final banned in ['B✓', 'S·', 'D·', 'P·', 'S✓']) {
+      expect(find.textContaining(banned, findRichText: true), findsNothing,
+          reason: 'cryptic tick "$banned" leaked onto the strip');
+    }
+  });
+
+  testWidgets('muscle-volume driver: readable strip summary + per-group '
+      'vertical list in the detail sheet (clarity pass 2026-09-29 — no '
+      'single-letter muscle groups)', (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestWeightCache();
+    DomainConfigProvider.clearCache();
+    // Program with a muscle map covering three groups — one of them
+    // the underscore key that used to collapse to a colliding letter.
+    const muscleProgramYaml = '''
+versions:
+  - version: 1
+    effective_from: "2026-09-21"
+    id: bulk-2026-27
+    blocks:
+      - { n: 0, dates: ["2026-09-21", "2026-12-13"], emphasis: cut, weight: [163, 154] }
+    targets:
+      near_max_sets_wk: 4
+    exercise_muscle_map:
+      exercises:
+        "Flat Barbell Bench Press": { chest: 1.0 }
+        "Barbell Squat": { quads: 1.0, hamstrings_glutes: 0.5 }
+''';
+    const muscleDashYaml = '''
+$dashYamlWithPhases
+    weekly_drivers:
+      - id: hypertrophy_volume
+        label: muscle sets
+        band: [8, 12]
+        muscle_groups: [quads, hamstrings_glutes, chest]
+        outcome: "muscle retained"
+        why: "8-12 productive sets per muscle group per week."
+''';
+    Future<String?> muscleFetcher(String path) async => switch (path) {
+          'coach/phase.yaml' => phaseYaml,
+          'coach/program.yaml' => muscleProgramYaml,
+          'app/dashboards.yaml' => muscleDashYaml,
+          _ => null,
+        };
+    // 9 bench sets → chest 9 (in range); 2 squat sets → quads 2 under,
+    // hamstrings+glutes 1 under (the 0.5 credit).
+    final strengthRepo = _FakeStatusRepo([
+      for (var i = 0; i < 9; i++)
+        {
+          'date': DateTime(2026, 9, 21),
+          'exercise': 'Flat Barbell Bench Press',
+          'weight': 185,
+          'reps': 8,
+          'rpe': 8,
+        },
+      for (var i = 0; i < 2; i++)
+        {
+          'date': DateTime(2026, 9, 22),
+          'exercise': 'Barbell Squat',
+          'weight': 225,
+          'reps': 8,
+          'rpe': 8,
+        },
+    ]);
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(muscleFetcher),
+      dashboards: DomainConfigProvider(muscleFetcher),
+      strengthView: _strengthView,
+      strengthRepo: strengthRepo,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+
+    // Strip: plain-words label + summary — never the per-group letter
+    // soup ("Q 0/8 H 0/8 …").
+    expect(
+      find.textContaining('muscle sets', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('1 of 3 groups in the 8-12-set range',
+          findRichText: true),
+      findsOneWidget,
+    );
+    for (final banned in ['hyp sets', 'Q 2/8', 'H 1/8', 'C 9/8']) {
+      expect(find.textContaining(banned, findRichText: true), findsNothing,
+          reason: 'cryptic muscle tick "$banned" leaked onto the strip');
+    }
+
+    // Detail sheet: one line per group — full name, sets, clear state.
+    await tester.tap(find.text('THIS WEEK'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('quads — 2 sets (under)'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('hamstrings and glutes — 1 set (under)'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('chest — 9 sets (in range)'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Under mid-week is normal'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('singles driver is readings-based + parity-aware '
-      '(2026-09-25): tab ∪ live readings tick, (H)/(L) alternation tags, '
-      'heavy-single recency line under the pills', (tester) async {
+      '(2026-09-25, spelled out 2026-09-29): tab ∪ live readings tick, '
+      'heavy/light week alternation tags, heavy-single recency line '
+      'under the pills', (tester) async {
     ProgramProvider.clearCache();
     HomeDashboardState.clearBestWeightCache();
     DomainConfigProvider.clearCache();
@@ -763,19 +880,31 @@ $dashYamlWithPhases
     // Ticks: squat from the TAB reading (parity-tagged heavy), bench
     // from the LIVE extraction; deadlift wears its light-week tag.
     expect(
-      find.textContaining('S✓(H)', findRichText: true),
+      find.textContaining('squat ✓ (heavy week)', findRichText: true),
       findsOneWidget,
     );
-    expect(find.textContaining('B✓', findRichText: true), findsOneWidget);
     expect(
-      find.textContaining('D·(L)', findRichText: true),
+      find.textContaining('bench ✓', findRichText: true),
       findsOneWidget,
     );
-    expect(find.textContaining('P·', findRichText: true), findsOneWidget);
+    expect(
+      find.textContaining('deadlift — (light week)', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('press —', findRichText: true),
+      findsOneWidget,
+    );
+    // Clarity ban-list (2026-09-29): letters + (H)/(L) never return.
+    for (final banned in ['S✓', 'B✓', 'D·', 'P·', '(H)', '(L)']) {
+      expect(find.textContaining(banned, findRichText: true), findsNothing,
+          reason: 'cryptic tick "$banned" leaked onto the strip');
+    }
     // The two-week heavy rule's secondary line: squat's 275x2@8 is a
-    // heavy exposure (2d ago); deadlift has none recorded → overdue.
+    // heavy exposure (2 days ago); deadlift has none recorded → overdue.
     expect(
-      find.text('heavy single: S 2d · D none yet — overdue'),
+      find.text('Heavy single: squat 2 days ago · '
+          'deadlift none yet — overdue'),
       findsOneWidget,
     );
 
@@ -1154,17 +1283,18 @@ phases:
       findsOneWidget,
     );
     expect(
-      find.textContaining('protein 1/1', findRichText: true),
+      find.textContaining('target met 1/1 days', findRichText: true),
       findsOneWidget,
     );
     // Hypertrophy: 8 productive bench sets (warmup excluded) — chest in
     // band; RIR 2 from RPE 8.
     expect(
-      find.textContaining('1/1 muscles in band', findRichText: true),
+      find.textContaining('1 of 1 muscle groups in range',
+          findRichText: true),
       findsOneWidget,
     );
     expect(
-      find.textContaining('2.0 RIR', findRichText: true),
+      find.textContaining('2.0 reps in reserve', findRichText: true),
       findsOneWidget,
     );
     // Recovery: pain flag surfaces (and outranks the numbers).

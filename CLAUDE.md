@@ -432,6 +432,29 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   data flows; detail sheet ends on the spec's closing question);
   other phases keep the driver checklist (test-pinned). Hidden until
   the phase flips (cut → effective key stays cut).
+- **Sim dial audit + strip clarity (2026-09-29)**: sim2 dials realigned
+  to the ACTUAL v13 routine (user: predictions must track the adjusted
+  routine, 4x4 never changes) — cut D 4.5→4 (the Thu skill/arms day
+  rides Q only; it was half-counted in both dials), reverse-block N
+  3→4 (one wave top per lift every week; the RPE-7 cap is intensity,
+  not count); Z=1 in EVERY block forever and K=2/kLim=1 (climbing
+  blocks 3) verified already right. New §9.3 pins (sim2_model_test):
+  det 1006.2 / cap 1023.7 / over 59 / MC 1004 / P(V8) 0.76; cut L 7.4
+  vs 6.0, F peaks ~0.77 (was 1.04) so end-of-cut expressed 889 (was
+  880); VO2 stays 53.4 — Z=1 holds absolute capacity, the score is
+  bodyweight-driven, and the forecast VO2 card now says exactly that
+  (workload-at-same-HR gains belong to the weekly review/tracking
+  layer, explicitly not claimed by the model). Bulk preset pins
+  1031.6/1030/0.39. Nightly forecast tab rewritten; MCP untouched
+  (serves the tab). THIS WEEK strip clarity (user: "what's Q, H, C,
+  B, S, B, T?"): NO single-letter compressions anywhere — driver
+  ticks spell lifts out ("squat ✓ (heavy week)"), the
+  hypertrophy_volume pill reads "N of M groups in the 8-12-set range"
+  with a per-group under/in range/over list in the detail sheet
+  (home_dashboard hypertrophyLines/plainName), heavy-single line and
+  recomp rows spelled out (protein/carbs/fat, calisthenics, body
+  fat, full lift names); dashboards.yaml labels now "muscle sets" /
+  "bench days"; ban-list widget tests pin the cryptic forms out.
 - **Cut-training revision (program.yaml v11, 2026-09-28 — user-approved,
   effective now)**: block-0 training REWRITTEN as a hypertrophy-
   maximizing deficit program; cut NUTRITION/WEIGHT targets UNCHANGED

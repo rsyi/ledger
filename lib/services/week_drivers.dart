@@ -337,7 +337,9 @@ class DriverEval {
         'climbing_cap': 'climb',
         'bike_4x4': '4x4',
         'dual_exposure': 'lifts',
-        'hypertrophy_volume': 'hyp sets',
+        // Clarity pass 2026-09-29 (user: '"hyp sets" is very
+        // confusing'): plain words, no abbreviation.
+        'hypertrophy_volume': 'muscle sets',
       }[config.id] ??
       config.id;
 }

@@ -1911,9 +1911,25 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// causal story. The singles driver additionally explains its parity
   /// and two-week-heavy mechanics (2026-09-25).
   _DetailEntry _driverEntry(DriverEval d) {
+    // Muscle-volume driver (clarity pass 2026-09-29): the sheet gets a
+    // readable summary plus one line per muscle group — full name,
+    // sets, and a clear under / in range / over state.
+    if (d.config.id == 'hypertrophy_volume' && d.ticks.isNotEmpty) {
+      final (summary, lines) = hypertrophyLines(d);
+      return _DetailEntry(
+        label: d.label,
+        value: summary,
+        explain:
+            'Why this matters: ${d.config.why ?? '—'} '
+            'Drives: ${d.config.outcome ?? '—'}.\n'
+            'This week per muscle group:\n${lines.join('\n')}\n'
+            'Under mid-week is normal — counts fill in as sets are '
+            'logged. Over the top of the range is the warning state.',
+      );
+    }
     final ticks = d.ticks.isEmpty
         ? ''
-        : ' · ${d.ticks.map(_tickText).join(' ')}';
+        : '\n${d.ticks.map(_tickText).join(' · ')}';
     final stale = d.staleAsOf == null
         ? ''
         : ' · as of ${DateFormat('MMM d').format(d.staleAsOf!)}';
@@ -1924,22 +1940,23 @@ class HomeDashboardState extends State<HomeDashboard> {
               '(Integrations → Kaya → Sync).';
     final heavyLine = heavyRecencyText(d);
     final heavy = heavyLine == null ? '' : '\n$heavyLine';
-    // The singles rule, mechanically: how a tick is earned, what
-    // (H)/(L) means, and how the two-week heavy rule is tracked. The
-    // user's own phrasing of the rule lives in the config's `why`.
+    // The singles rule, mechanically: how a tick is earned, what the
+    // heavy/light week tags mean, and how the two-week heavy rule is
+    // tracked. The user's own phrasing lives in the config's `why`.
     final singlesExplain = d.config.id != 'top_single_per_lift'
         ? ''
         : ' A tick = a top-set reading for that lift this accounting '
               'week — the working-max controller\'s day-top RPE set, '
               'heavy or light, any reps (deload-week readings don\'t '
               'count).'
-              '${d.ticks.any((t) => t.parity != null) ? ' (H)/(L) on squat/deadlift is this week\'s side '
-                    'of the heavy↔light alternation — a lighter top set '
-                    'still ticks on its light week.' : ''}'
+              '${d.ticks.any((t) => t.parity != null) ? ' "Heavy week"/"light week" on squat and deadlift '
+                    'is this week\'s side of their alternation — a '
+                    'lighter top set still ticks on its light week.' : ''}'
               '${d.config.heavySingleMaxDays == null ? '' : ' The heavy-single line tracks the every-two-weeks '
-                    'rule: the newest ≤2-rep set at RPE ≥ 7.5 per lift '
-                    '— amber past ${d.config.heavySingleMaxDays} days, '
-                    'red a week later.'}';
+                    'rule: the newest set of 1-2 reps at RPE 7.5 or '
+                    'harder per lift — amber past '
+                    '${d.config.heavySingleMaxDays} days, red a week '
+                    'later.'}';
     return _DetailEntry(
       label: d.label,
       value: '${d.value}$ticks$stale$heavy',
@@ -1949,34 +1966,80 @@ class HomeDashboardState extends State<HomeDashboard> {
     );
   }
 
+  /// Plain display name for a lift or muscle group key
+  /// ("hamstrings_glutes" → "hamstrings and glutes"). Clarity pass
+  /// 2026-09-29 (user: single-letter compressions were unreadable —
+  /// two groups even shared a letter): full words everywhere, more
+  /// vertical space over cryptic density.
+  static String plainName(String key) =>
+      key.isEmpty ? '?' : key.replaceAll('_', ' and ');
+
   static String _tickText(DriverTick t) {
-    final letter = t.lift.isEmpty ? '?' : t.lift[0].toUpperCase();
+    final name = plainName(t.lift);
     final base = t.target > 1
-        ? '$letter ${t.count}/${t.target}'
-        : '$letter${t.done ? '✓' : '·'}';
-    // Alternation parity tag (2026-09-25): this week's EXPECTED side
-    // of the squat/deadlift heavy↔light swap — display only, a light
-    // top set still ticks.
+        ? '$name ${t.count}/${t.target}'
+        : '$name ${t.done ? '✓' : '—'}';
+    // Alternation tag (2026-09-25): this week's EXPECTED side of the
+    // squat/deadlift heavy↔light swap — display only, a light top set
+    // still ticks. Spelled out since 2026-09-29 ((H)/(L) needed
+    // decoding).
     return switch (t.parity) {
-      'heavy' => '$base(H)',
-      'light' => '$base(L)',
+      'heavy' => '$base (heavy week)',
+      'light' => '$base (light week)',
       _ => base,
     };
   }
 
-  /// "heavy single: S 4d · D 16d — overdue" — the every-two-weeks
-  /// heavy rule's secondary line (null when the eval carries none).
+  /// "Heavy single: squat 4 days ago · deadlift none yet — overdue" —
+  /// the every-two-weeks heavy rule's secondary line (null when the
+  /// eval carries none).
   static String? heavyRecencyText(DriverEval d) {
     if (d.heavyRecency.isEmpty) return null;
     String part(HeavySingleRecency h) {
-      final letter = h.lift.isEmpty ? '?' : h.lift[0].toUpperCase();
-      final age = h.daysAgo == null ? 'none yet' : '${h.daysAgo}d';
+      final name = plainName(h.lift);
+      final age = h.daysAgo == null
+          ? 'none yet'
+          : h.daysAgo == 0
+              ? 'today'
+              : h.daysAgo == 1
+                  ? '1 day ago'
+                  : '${h.daysAgo} days ago';
       return h.band == HeavySingleBand.fresh
-          ? '$letter $age'
-          : '$letter $age — overdue';
+          ? '$name $age'
+          : '$name $age — overdue';
     }
 
-    return 'heavy single: ${d.heavyRecency.map(part).join(' · ')}';
+    return 'Heavy single: ${d.heavyRecency.map(part).join(' · ')}';
+  }
+
+  /// The muscle-volume driver's readable summary ("3 of 7 groups in
+  /// range") + per-group states, computed against the config's band
+  /// (a group can be under, in, or over the range — "over" is the red
+  /// state, the excess-pulling caution).
+  static (String, List<String>) hypertrophyLines(DriverEval d) {
+    final band = d.config.band ?? const [8.0, 12.0];
+    final lo = band[0] <= band[1] ? band[0] : band[1];
+    final hi = band[0] <= band[1] ? band[1] : band[0];
+    final bandText = '${lo.round()}-${hi.round()}';
+    var inRange = 0;
+    final lines = <String>[];
+    for (final t in d.ticks) {
+      final state = t.count > hi
+          ? 'over the range'
+          : t.count >= lo
+              ? 'in range'
+              : 'under';
+      if (t.count >= lo && t.count <= hi) inRange++;
+      lines.add(
+        '${plainName(t.lift)} — ${t.count} '
+        '${t.count == 1 ? 'set' : 'sets'} ($state)',
+      );
+    }
+    final summary = d.ticks.isEmpty
+        ? d.value
+        : '$inRange of ${d.ticks.length} groups in the '
+            '$bandText-set range';
+    return (summary, lines);
   }
 
   /// Full-width compact strip: the week's four quotas side by side +
@@ -2153,7 +2216,7 @@ class HomeDashboardState extends State<HomeDashboard> {
       if (b.change7d != null) '${_sgn(b.change7d!)}/wk',
       b.waistIn != null ? 'waist ${_n1(b.waistIn!)}"' : 'waist —',
       data.latestBfPct != null
-          ? 'bf ${_n1(data.latestBfPct!)}% scale'
+          ? 'body fat ${_n1(data.latestBfPct!)}% (scale)'
           : 'DEXA —',
     ];
 
@@ -2173,14 +2236,17 @@ class HomeDashboardState extends State<HomeDashboard> {
 
     final heavyDone =
         r.heavyExposures.values.where((v) => v > 0).length;
+    // Clarity pass 2026-09-29: full lift names, no letter ticks.
     String liftTick(String lift) =>
-        '${lift[0].toUpperCase()}${(r.heavyExposures[lift] ?? 0) > 0 ? '✓' : '·'}';
+        '$lift ${(r.heavyExposures[lift] ?? 0) > 0 ? '✓' : '—'}';
 
     final cal = r.calisthenics;
     final skillsBits = <String>[
       'climb ${r.climbing.sessions}'
           '${r.climbing.newV5PlusSends > 0 ? ' (V5+ ×${r.climbing.newV5PlusSends})' : ''}',
-      cal.sessions > 0 ? 'cali ${cal.sessions}' : 'cali —',
+      cal.sessions > 0
+          ? 'calisthenics ${cal.sessions}'
+          : 'calisthenics —',
     ];
 
     final cw = r.cardio;
@@ -2200,7 +2266,7 @@ class HomeDashboardState extends State<HomeDashboard> {
             if (rec.avgFatigue != null)
               'fatigue ${_n1(rec.avgFatigue!)}/5',
             if (rec.avgSoreness != null)
-              'sore ${_n1(rec.avgSoreness!)}/5',
+              'soreness ${_n1(rec.avgSoreness!)}/5',
             if (rec.painDays.isNotEmpty)
               'PAIN ×${rec.painDays.length}',
           ];
@@ -2219,9 +2285,9 @@ class HomeDashboardState extends State<HomeDashboard> {
         label: 'NUTRITION',
         value: n == null
             ? 'no meals logged this week'
-            : '${_n0(n.avgKcal)} kcal · P ${_n0(n.avgProteinG)} · '
-                'C ${_n0(n.avgCarbsG)} · F ${_n0(n.avgFatG)}'
-                '${n.proteinDaysMet != null ? ' · protein ${n.proteinDaysMet}/${n.daysLogged}' : ''}',
+            : '${_n0(n.avgKcal)} kcal · protein ${_n0(n.avgProteinG)} · '
+                'carbs ${_n0(n.avgCarbsG)} · fat ${_n0(n.avgFatG)}'
+                '${n.proteinDaysMet != null ? ' · target met ${n.proteinDaysMet}/${n.daysLogged} days' : ''}',
         explain:
             'Daily averages over logged days + protein-target adherence '
             '(160-175 g/day once the recomp targets are in force). '
@@ -2232,21 +2298,22 @@ class HomeDashboardState extends State<HomeDashboard> {
         label: 'HYPERTROPHY',
         value: r.muscleSets.isEmpty
             ? 'no muscle map in program'
-            : '$inBand/${r.muscleSets.length} muscles in band'
-                '${r.avgRir != null ? ' · ~${_n1(r.avgRir!)} RIR' : ''}'
-                '${over.isNotEmpty ? ' · over: ${over.join(', ')}' : ''}',
+            : '$inBand of ${r.muscleSets.length} muscle groups in range'
+                '${r.avgRir != null ? ' · ~${_n1(r.avgRir!)} reps in reserve' : ''}'
+                '${over.isNotEmpty ? ' · over: ${over.map(HomeDashboardState.plainName).join(', ')}' : ''}',
         explain:
             'Productive sets per muscle group vs the 8-12 band, '
             'overlap-counted (climbing sessions credit back/biceps/'
             'forearms via the program map; warmup/skill/rehab set_type '
-            'excluded; untagged legacy rows effort-inferred). RIR = '
-            '10 - RPE — proximity to failure on productive sets.'
-            '${under.isNotEmpty ? ' Under band: ${under.join(', ')}.' : ''}',
+            'excluded; untagged legacy rows effort-inferred). Reps in '
+            'reserve = 10 - RPE — how far productive sets stop short '
+            'of failure.'
+            '${under.isNotEmpty ? ' Under the range: ${under.map(HomeDashboardState.plainName).join(', ')}.' : ''}',
       ),
       (
         label: 'STRENGTH',
         value:
-            'heavy $heavyDone/4 · ${['squat', 'bench', 'deadlift', 'press'].map(liftTick).join(' ')}',
+            'heavy $heavyDone/4 · ${['squat', 'bench', 'deadlift', 'press'].map(liftTick).join(' · ')}',
         explain:
             'One heavy top-set exposure per main lift per week (the '
             'working-max controller\'s readings are the ground truth). '
@@ -3157,8 +3224,12 @@ class _SparklinePainter extends CustomPainter {
 /// week's status row yet and the card falls back to the newest one.
 /// One driver pill: label + tick/progress, tinted by status — green
 /// met, neutral pending, error-tinted violated (a breached cap/floor).
-/// Per-lift drivers render tick letters (S✓ B✓ D· P✓ / S 1/2 …); the
-/// stale climb count wears its "as of `last import`" tag.
+/// Per-lift drivers spell the lifts out ("squat ✓ · bench —" /
+/// "squat 1/2 …" — clarity pass 2026-09-29, no more single-letter
+/// ticks); the muscle-volume driver shows a summary ("3 of 7 groups in
+/// the 8-12-set range" — the per-group list is one tap away in the
+/// detail sheet); the stale climb count wears its "as of `last
+/// import`" tag.
 class _DriverPill extends StatelessWidget {
   final DriverEval eval;
   const _DriverPill({required this.eval});
@@ -3180,8 +3251,11 @@ class _DriverPill extends StatelessWidget {
         scheme.onErrorContainer,
       ),
     };
-    final detail = eval.ticks.isNotEmpty
-        ? eval.ticks.map(HomeDashboardState._tickText).join(' ')
+    final detail = eval.config.id == 'hypertrophy_volume' &&
+            eval.ticks.isNotEmpty
+        ? HomeDashboardState.hypertrophyLines(eval).$1
+        : eval.ticks.isNotEmpty
+        ? eval.ticks.map(HomeDashboardState._tickText).join(' · ')
         : eval.staleAsOf != null
         ? '${eval.value} · as of '
               '${DateFormat('MMM d').format(eval.staleAsOf!)}'

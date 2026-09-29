@@ -827,7 +827,7 @@ WmDecision evaluate({
       return decision(
         action: 'hold',
         wmAfter: wm,
-        reason: 'sub-top intensity (${_fmtLb(reading.weightLb)} < '
+        reason: 'sub-top intensity (${reading.weightLb.toStringAsFixed(1)} < '
             '${(tmRule.minTopFraction * 100).round()}% of TM) — recorded, '
             'not evaluated',
       );

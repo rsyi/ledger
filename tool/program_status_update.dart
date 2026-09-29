@@ -521,8 +521,27 @@ Future<void> main(List<String> args) async {
     );
   }
 
-  String? weekTypeAt(DateTime d) =>
-      py == null ? null : programCurrent(py, phaseYaml, d)?.weekType;
+  // Week type for the WM chain's kind classification. v12: block-0
+  // cut-wave DELOAD weeks (wave week 4) report 'deload' so their
+  // readings are recorded + ignored (they would otherwise imply ~0.86×
+  // TM and drop it under the guarded implied-max rule).
+  String? weekTypeAt(DateTime d) {
+    if (py == null) return null;
+    final slice = programCurrent(py, phaseYaml, d);
+    if (slice == null) return null;
+    if (slice.weekType == 'normal') {
+      final cut = strengthWaveCutFor(
+        wmVersion,
+        blockN: slice.block['number'] as int?,
+        day: d,
+      );
+      if (cut?.deload == true) return 'deload';
+    }
+    return slice.weekType;
+  }
+
+  // v12 guarded implied-max TM rule (null pre-v12 → legacy bands).
+  final tmRule = tmRuleOf(wmVersion);
 
   // TWO_SIGNALS → controller freeze: DELIBERATELY NOT WIRED (2026-09-21).
   // The flag rules are phase-aware now (targets_block_0 via targetsOf:
@@ -550,6 +569,7 @@ Future<void> main(List<String> args) async {
     today: today,
     twoSignalsWeeks: twoSignalsWeeks,
     painNotes: painNotes,
+    tmRule: tmRule,
   );
   final allWmRows = [...existingWm, ...seeds, ...chain.newWorkingMaxRows];
   final allReadings = [...existingReadings, ...chain.newReadings];

@@ -78,8 +78,11 @@ Future<void> main() async {
   final programFile = File('../airledger-fitness/coach/program.yaml');
   final program =
       loadYaml(programFile.readAsStringSync()) as Map<Object?, Object?>;
-  final policies = loadPolicies(currentVersion(program)!);
+  final version = currentVersion(program)!;
+  final policies = loadPolicies(version);
   final cutEarly = policies.firstWhere((p) => p.name == 'cut_early');
+  // v12: the guarded implied-max rule (null pre-v12 → legacy bands).
+  final tmRule = tmRuleOf(version);
 
   print('# Working-max §7.1 replay — real strength rows '
       '${ymd(from)}..${ymd(to)}, cut_early, §5 seeds');
@@ -103,6 +106,7 @@ Future<void> main() async {
       seedWm: seeds[lift]!,
       rows: rows,
       policyFor: (_) => cutEarly,
+      tmRule: tmRule,
     );
     print('');
     print('## $lift (seed ${fmtNum(seeds[lift]!)})');
@@ -127,6 +131,11 @@ Future<void> main() async {
     }
     if (lift == 'bench') {
       print('');
+      if (tmRule != null) {
+        print('  NOTE: replay ran under the v12 GUARDED IMPLIED-MAX '
+            'tm_rule — the §7.1 table below is the LEGACY band-rule '
+            'trace and is expected to diverge.');
+      }
       print('  §7.1 expected vs actual:');
       var ok = true;
       for (final (date, action, wm) in expectedBench) {

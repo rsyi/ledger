@@ -1,8 +1,20 @@
 /// Video-attach + AI-RPE support for `widget: video` fields.
-///
-/// Phase A ships the schema convention only; the picker flow and the
-/// Claude estimation pipeline land on top of this file.
 library;
+
+import 'video_attach.dart';
+
+/// App-global holder for the video pipeline (HeartRateService.instance
+/// precedent — avoids threading a rarely-used dependency through every
+/// screen between home and the form). Null when the Google web client
+/// id isn't configured; the form then renders the attach affordance
+/// disabled with a hint.
+class VideoRpeService {
+  VideoRpeService({required this.flow});
+
+  static VideoRpeService? instance;
+
+  final VideoAttachFlow flow;
+}
 
 /// Sibling-dim convention for `widget: video` fields: the picker's
 /// persistent media-item id is stored next to the URL dim in

@@ -15,6 +15,8 @@ import 'dart:convert';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 
+import 'google_signin_bootstrap.dart';
+
 /// The single OAuth scope this feature ever requests.
 const kGmailReadonlyScope = 'https://www.googleapis.com/auth/gmail.readonly';
 
@@ -155,15 +157,11 @@ class GoogleSignInGmailGateway implements GmailGateway {
 
   static const _base = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
-  /// GoogleSignIn.instance is app-global and must be initialized exactly
-  /// once per process.
-  static Future<void>? _initialized;
   GoogleSignInAccount? _account;
 
-  Future<void> _ensureInit() {
-    return _initialized ??=
-        GoogleSignIn.instance.initialize(serverClientId: serverClientId);
-  }
+  /// GoogleSignIn.instance is app-global and must be initialized exactly
+  /// once per process — shared with the Photos Picker gateway.
+  Future<void> _ensureInit() => ensureGoogleSignInInit(serverClientId);
 
   @override
   Future<String?> signedInEmail() async {

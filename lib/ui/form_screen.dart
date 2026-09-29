@@ -5,6 +5,8 @@ import '../models/view_schema.dart';
 import '../services/autocomplete_cache.dart';
 import '../services/derive.dart';
 import '../services/sheets_repository.dart';
+import '../services/video_attach.dart';
+import '../services/video_rpe.dart';
 import '../services/warehouse_connector.dart';
 import 'widgets/field_widgets.dart';
 import 'widgets/history_panel.dart';
@@ -244,6 +246,10 @@ class _FormScreenState extends State<FormScreen> {
       // an exercise after starting the timer would silently overwrite
       // today's start_time with yesterday's.
       if (dim.input?.widget == WidgetType.timer) continue;
+      // Video attach is per-set footage — carrying a past set's link
+      // forward would attach the WRONG video (fabricated data). Belt +
+      // suspenders with the schema's autofill: false.
+      if (dim.input?.widget == WidgetType.video) continue;
       if (dim.input?.nowButton == true) continue;
       // Opted out per-schema (autofill: false) — subjective per-set
       // fields like rpe/notes must never carry over (false-data risk).
@@ -259,6 +265,41 @@ class _FormScreenState extends State<FormScreen> {
       // Cross-scope autofill (shared → repeat or vice versa) intentionally
       // skipped — too easy to clobber the user's other blocks.
     }
+  }
+
+  /// Runs the Photos Picker attach flow for a `widget: video` field:
+  /// writes the deep link into the field + the picker media id into the
+  /// sibling `<base>_media_id` dim (when the view has one). Cancel is
+  /// quiet; real failures surface as a snackbar.
+  Future<void> _attachVideo(Dimension dim) async {
+    final svc = VideoRpeService.instance;
+    if (svc == null) return;
+    try {
+      final res = await svc.flow.pickVideo();
+      if (!mounted) return;
+      setState(() {
+        _shared[dim.name] = res.url;
+        final idField = mediaIdFieldFor(dim.name);
+        if (widget.view.dimensionByName(idField) != null) {
+          _shared[idField] = res.mediaId;
+        }
+      });
+    } on VideoAttachCancelled {
+      // User closed the picker — nothing to report.
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Video attach failed: $e')),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    // Form closed mid-pick: stop the poll loop (best-effort — the flow
+    // is app-global but only one form runs a pick at a time).
+    VideoRpeService.instance?.flow.cancel();
+    super.dispose();
   }
 
   @override
@@ -308,11 +349,22 @@ class _FormScreenState extends State<FormScreen> {
             value: _shared[dim.name],
             repository: widget.repository,
           ),
+          onAttachVideo: dim.input?.widget == WidgetType.video &&
+                  VideoRpeService.instance != null
+              ? () => _attachVideo(dim)
+              : null,
           onChanged: (v) => setState(() {
             _shared[dim.name] = v;
             _missingRequired.remove(dim.name);
             if (dim.input?.widget == WidgetType.autocomplete) {
               _autofillFromHistory(dim, v);
+            }
+            // Removing a video also drops its paired media id — a
+            // dangling id would point at footage the row no longer
+            // references.
+            if (dim.input?.widget == WidgetType.video && v == null) {
+              _shared.remove(dim.name);
+              _shared.remove(mediaIdFieldFor(dim.name));
             }
           }),
           // For timer widgets: ladder taps write into other shared fields

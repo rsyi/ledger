@@ -225,6 +225,66 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   still pins 1023/1022/0.45, recomp gap ≈25 lb. Resolver slice shape
   UNCHANGED (ledger-mcp needed only test-pin updates, no deploy);
   shared fixtures pin v10 + the Tue/Fri swap.
+- **v12: guarded implied-max TM + routine unification + tab split
+  (2026-09-28, user-directed, LIVE — app installed, fitness pushed, MCP
+  deployed)**: program.yaml v12 supersedes the band-rule WM controller
+  and the two-template shape.
+  - TM RULE: `tm_rule: guarded_implied_max` — after every evaluable
+    top-set reading, TM = round5(weight/chart[rpe][reps]); raises
+    capped +5/session, drops in FULL. Guards (all YAML-editable):
+    `min_top_fraction` 0.78 (readings under 78% of TM — the %TM volume
+    slots — are recorded, never evaluated: without it Wed squat
+    3x8@65% would crater the TM weekly), grinder/missed always drop
+    >= `min_drop_lb_on_grinder` 5 (in full when implied is lower —
+    a ground PR still drops), light + cut-wave-DELOAD readings ignored
+    (weekTypeOf returns 'deload' → kind 'deload'), pain caps freeze
+    (clean = rpe < `clean_rpe_lt` 9). DELIBERATE: the test single is
+    just a reading now (implied /0.922 IS the old reset, but the raise
+    cap applies — TM converges +5/session, no jump); cut_late/reverse/
+    test_week are UNFROZEN (caps kept, TM tracks everywhere); v12
+    load_policies keep ONLY applies/target_rpe/cap_rpe/
+    cap_after_drop_rpe/consecutive_drops_action/frozen(light)/
+    readings_ignored — every band key is gone. Legacy band path stays
+    in evaluate() for tmRule==null (pinned against the v11 history
+    entry in tests). Shared fixtures REGENERATED from Dart (27 cases);
+    both twins green. Nightly + wm_replay + MCP log_rows all pass
+    tmRuleOf(version).
+  - ACCESSORIES: RPE-nudged double progression
+    (lib/services/accessory_progression.dart, pure + 16 tests): last
+    comparable session → all sets at `reps_hi` at <= 2 RIR (RPE >= 8)
+    → +5 lb (2.5 for the declared upper-isolation list); avg RPE > 9 →
+    −5% rounded DOWN to step; else hold; no history/bodyweight → no
+    weight. Config = v12 `accessory_progression`; planner
+    (plan_v6) fills accessory weights from it (suggestions surface in
+    planned rows' weight field); accessory rows NEVER get warm-up
+    ramps; planned items carry `reps_hi` (never emitted into rows).
+  - ROUTINE UNIFICATION: one `routine.week` base (the v11 cut week,
+    VERBATIM strings) + `phase_overrides.postcut.week` (the v10
+    final-spec week, verbatim; every day differs so all seven are
+    replaced) + documentation-only climbing_emphasis/deload entries.
+    weekly_template/_block_0 GONE from v12. Resolvers read through
+    `routineWeekFor` (program_current.dart + program.ts twins, legacy
+    fallback for old docs). EQUIVALENCE PROVEN:
+    test/v12_equivalence_test.dart — planner output byte-equal v11↔v12
+    across 9 representative weeks on both weight paths, today_template
+    strings equal, sim block calendar unchanged (sim2 reads only
+    `blocks` — counted W cannot move; dials untouched).
+  - TAB SPLIT: nav slot 4 is now **Plan** (plan_screen.dart — phase
+    card + block timeline + ONE combined progress chart w/ capacity
+    line DEFAULT-ON during cuts + verdict; scenarios/body/climbing/
+    VO2/fatigue/params fold behind ExpansionTiles = ForecastSection
+    `compact: true`). **Program** (program_screen.dart, REWRITTEN) is
+    the ROUTINE surface reached from Plan's app-bar dumbbell action +
+    every old week-plan deep link (openWeekPlan alias kept): week-paged
+    day cards (AM/PM prose + grouped session rows priced off TM/wave/
+    double-progression + wave-state header + §4 Rx blocks with the
+    backoff_rule annotation) + the WorkingMaxCard (configuration).
+    week_plan_screen.dart DELETED (buildWeekPlan/week_plan.dart service
+    survives).
+  - MCP: get_coach_context next_prescriptions are WAVE-AWARE now (the
+    recorded §4 gap fixed): TS buildPrescription gained topReps/topPct;
+    heavyLiftsForDate reads the merged routine. Worker DEPLOYED +
+    smoke-tested (serves version 12, wave top 5@260 for Mon squat).
 - **Recomp TRACKING layer (2026-09-28, coach/recomp-tracking-spec.md —
   canonical, user-authored)**: adherence INPUTS vs generated OUTCOMES.
   SCHEMAS (existing keys only — NO Rust/dylib change; engine's

@@ -56,7 +56,7 @@ void main() {
     final v = currentVersion(program);
     expect(v, isNotNull);
     expect(v!['id'], 'bulk-2026-27');
-    expect(v['version'], 11);
+    expect(v['version'], 12);
     // A trailing pending entry must be skipped.
     final withPending = {
       'versions': [
@@ -64,7 +64,7 @@ void main() {
         {'version': 99, 'pending': true, 'id': 'draft'},
       ],
     };
-    expect(currentVersion(withPending)!['version'], 11);
+    expect(currentVersion(withPending)!['version'], 12);
   });
 
   for (final c in cases) {
@@ -162,7 +162,7 @@ void main() {
     });
   });
 
-  test('block 0 slice uses weekly_template_block_0 and carries block_0_loads note', () {
+  test('block 0 slice reads the v12 routine base week and carries block_0_loads note', () {
     final slice =
         programCurrent(program, phase, DateTime.parse('2026-09-21'))!;
     // v11 cut-training revision: Monday = squat wave top + volume work.

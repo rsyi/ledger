@@ -34,6 +34,9 @@ void main() {
       _loadYamlFile('$_fitnessRepo/program.yaml') as Map<Object?, Object?>;
   final version = currentVersion(program)!;
   final policies = loadPolicies(version);
+  // v12: TM movement is the guarded implied-max tm_rule; the fixtures
+  // pin it (and the kept freeze/cap semantics) for both twins.
+  final tmRule = tmRuleOf(version);
   LoadPolicy byName(String n) => policies.firstWhere((p) => p.name == n);
 
   final fixtures = _loadYamlFile('$_fitnessRepo/fixtures/wm_evaluate_cases.yaml')
@@ -105,6 +108,7 @@ void main() {
         twoSignalsThisWeek: c['two_signals'] == true,
         weeksWithoutReading:
             (c['weeks_without_reading'] as num?)?.toInt() ?? 0,
+        tmRule: tmRule,
       );
 
       final expected = c['expect'] as Map;

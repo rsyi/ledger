@@ -38,11 +38,23 @@ void main() {
   final policies = loadPolicies(version);
   LoadPolicy byName(String n) => policies.firstWhere((p) => p.name == n);
 
-  final cutEarly = byName('cut_early');
-  final cutLate = byName('cut_late');
-  final liftingBlock = byName('lifting_block');
-  final lightWeek = byName('light_week');
-  final testWeek = byName('test_week');
+  // v12: the live program moved TM movement to `tm_rule`
+  // (guarded_implied_max — see guarded_implied_max_test.dart and the
+  // shared fixtures); the LEGACY band mechanics below stay pinned
+  // against the v11 entry still in the versions history, so the
+  // pre-v12 evaluate() path never silently rots.
+  final legacyVersion = Map<Object?, Object?>.from(
+      (program['versions'] as List).firstWhere(
+          (v) => v is Map && v['version'] == 11) as Map);
+  final legacyPolicies = loadPolicies(legacyVersion);
+  LoadPolicy byLegacyName(String n) =>
+      legacyPolicies.firstWhere((p) => p.name == n);
+
+  final cutEarly = byLegacyName('cut_early');
+  final cutLate = byLegacyName('cut_late');
+  final liftingBlock = byLegacyName('lifting_block');
+  final lightWeek = byLegacyName('light_week');
+  final testWeek = byLegacyName('test_week');
 
   Reading heavy({
     required String date,
@@ -72,8 +84,8 @@ void main() {
   // -------------------------------------------------------------------------
   // program.yaml v5 parsing
   // -------------------------------------------------------------------------
-  group('load_policies (program.yaml v5)', () {
-    test('all seven policies parse with §1.5 fields', () {
+  group('load_policies (program.yaml v12 — caps only, bands retired)', () {
+    test('all seven policies parse; tm_rule owns TM movement', () {
       expect(policies.map((p) => p.name).toList(), [
         'cut_early',
         'cut_late',
@@ -83,26 +95,52 @@ void main() {
         'light_week',
         'test_week',
       ]);
-      expect(cutEarly.targetRpeHigh, 8);
+      final v12CutEarly = byName('cut_early');
+      final v12CutLate = byName('cut_late');
+      final v12LightWeek = byName('light_week');
+      final v12TestWeek = byName('test_week');
+      expect(v12CutEarly.targetRpeHigh, 8);
+      expect(v12CutEarly.capRpe, 8.5);
+      expect(v12CutEarly.capAfterDropRpe, 8.5);
+      expect(v12CutEarly.consecutiveDropsAction, 'no_top_sets_next_week');
+      // The band keys are GONE (tm_rule replaces them).
+      expect(v12CutEarly.raiseIfRpeLte, isNull);
+      expect(v12CutEarly.holdBand, isNull);
+      expect(v12CutEarly.dropIfRpeGte, isNull);
+      expect(v12CutEarly.readingsThatRaise, isEmpty);
+      expect(v12CutEarly.readingsThatLower, isEmpty);
+      expect(v12CutEarly.resetOnTest, isFalse);
+      expect(v12CutEarly.saturdaySingle, isFalse);
+      // Frozen semantics survive ONLY on light weeks; cut_late/reverse/
+      // test are unfrozen (the TM tracks implied maxes everywhere,
+      // guarded) but keep their RPE caps.
+      expect(v12CutLate.frozen, isFalse);
+      expect(v12CutLate.capRpe, 7);
+      expect(v12LightWeek.frozen, isTrue);
+      expect(v12LightWeek.readingsIgnored, isTrue);
+      expect(v12TestWeek.frozen, isFalse);
+      expect(v12TestWeek.capRpe, 8);
+    });
+
+    test('tm_rule parses from the live program (guarded_implied_max)', () {
+      final rule = tmRuleOf(version)!;
+      expect(rule.raiseCapLb, 5);
+      expect(rule.roundingLb, 5);
+      expect(rule.minTopFraction, 0.78);
+      expect(rule.minDropLbOnGrinder, 5);
+      expect(rule.cleanRpeLt, 9);
+    });
+
+    test('legacy v11 policies keep their band fields (history pin)', () {
       expect(cutEarly.raiseIfRpeLte, 7);
       expect(cutEarly.raiseRequiresConsecutive, 2);
       expect(cutEarly.holdBand, [7.5, 8.5]);
       expect(cutEarly.dropIfRpeGte, 9);
-      expect(cutEarly.stepLb['bench'], 5);
-      expect(cutEarly.frozen, isFalse);
-      expect(cutEarly.capRpe, 8.5);
-      expect(cutEarly.capAfterDropRpe, 8.5);
-      expect(cutEarly.consecutiveDropsAction, 'no_top_sets_next_week');
       expect(cutEarly.readingsThatRaise, ['heavy_top']);
-      expect(
-          cutEarly.readingsThatLower, ['heavy_top', 'saturday_single', 'capped']);
       expect(cutEarly.resetOnTest, isTrue);
       expect(cutEarly.saturdaySingle, isTrue);
       expect(cutLate.frozen, isTrue);
-      expect(cutLate.raiseIfRpeLte, isNull);
-      expect(lightWeek.readingsIgnored, isTrue);
       expect(testWeek.frozen, isTrue);
-      expect(testWeek.capRpe, 8);
     });
 
     test('policyForDate: block-0 date split + week-type overrides', () {

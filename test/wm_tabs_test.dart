@@ -21,7 +21,13 @@ void main() {
   final program = loadYaml(
           File('$_fitnessRepo/program.yaml').readAsStringSync())
       as Map<Object?, Object?>;
-  final policies = loadPolicies(currentVersion(program)!);
+  // The chain-mechanics tests pin the LEGACY band behavior against the
+  // v11 entry still in the versions history (the live v12 program moved
+  // TM movement to tm_rule — chain runs under it are covered below).
+  final legacyVersion = Map<Object?, Object?>.from(
+      (program['versions'] as List)
+          .firstWhere((v) => v is Map && v['version'] == 11) as Map);
+  final policies = loadPolicies(legacyVersion);
   final cutEarly = policies.firstWhere((p) => p.name == 'cut_early');
   final testWeek = policies.firstWhere((p) => p.name == 'test_week');
   LoadPolicy? always(DateTime _) => cutEarly;
@@ -549,6 +555,79 @@ void main() {
       );
       expect(fresh.flagsByLift['bench'] ?? const [],
           isNot(contains('NO_READING')));
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // runWmChain under the live v12 tm_rule (guarded implied-max)
+  // ---------------------------------------------------------------------
+  group('runWmChain under tm_rule (program.yaml v12)', () {
+    final v12 = currentVersion(program)!;
+    final v12Policies = loadPolicies(v12);
+    final v12CutEarly = v12Policies.firstWhere((p) => p.name == 'cut_early');
+    final rule = tmRuleOf(v12)!;
+    final seeds = seedWorkingMaxRows();
+    WmSnapshot snap(List<WorkingMaxRow> wm, [List<ReadingRow>? r]) =>
+        (workingMax: wm, readings: r ?? const []);
+
+    test('easy wave top raises +5 (capped); hard top drops in full', () {
+      // Bench seed 240. 195×5@7 → implied 248.1 → 250 capped → 245.
+      final raise = runWmChain(
+        snapshot: snap(seeds),
+        strengthRows: [bench('2026-10-05', 195, 5, 7)],
+        policyFor: (_) => v12CutEarly,
+        today: _d('2026-10-05'),
+        tmRule: rule,
+      );
+      expect(raise.newReadings.single.decision, 'raise');
+      expect(raise.newWorkingMaxRows.single.valueLb, 245);
+
+      // 195×5@9 → implied 233.0 → 235: full drop.
+      final drop = runWmChain(
+        snapshot: snap(seeds),
+        strengthRows: [bench('2026-10-05', 195, 5, 9)],
+        policyFor: (_) => v12CutEarly,
+        today: _d('2026-10-05'),
+        tmRule: rule,
+      );
+      expect(drop.newReadings.single.decision, 'drop');
+      expect(drop.newWorkingMaxRows.single.valueLb, 235);
+    });
+
+    test('%TM volume day-top is recorded but never moves the TM', () {
+      // Wed squat volume 3x8@65%: 210×8@7 against squat TM 320 —
+      // implied 297 would be a 25 lb crater without the guard.
+      final res = runWmChain(
+        snapshot: snap(seeds),
+        strengthRows: [
+          StrengthRow(
+              date: _d('2026-10-07'),
+              exercise: 'Barbell Squat',
+              weight: 210,
+              reps: 8,
+              rpe: 7),
+        ],
+        policyFor: (_) => v12CutEarly,
+        today: _d('2026-10-07'),
+        tmRule: rule,
+      );
+      expect(res.newReadings.single.decision, 'hold');
+      expect(res.newWorkingMaxRows, isEmpty);
+    });
+
+    test('cut-wave deload week readings are ignored via weekTypeOf', () {
+      // Deload top 5@70%: 170×5@7 — implied 216 must NOT drop the TM.
+      final res = runWmChain(
+        snapshot: snap(seeds),
+        strengthRows: [bench('2026-10-19', 170, 5, 7)],
+        policyFor: (_) => v12CutEarly,
+        weekTypeOf: (_) => 'deload',
+        today: _d('2026-10-19'),
+        tmRule: rule,
+      );
+      expect(res.newReadings.single.kind, 'deload');
+      expect(res.newReadings.single.decision, 'hold');
+      expect(res.newWorkingMaxRows, isEmpty);
     });
   });
 }

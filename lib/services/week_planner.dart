@@ -27,10 +27,13 @@ import 'package:intl/intl.dart';
 import '../models/planned_entry.dart';
 import '../models/view_schema.dart';
 import 'plan_store.dart';
+import 'accessory_progression.dart'
+    show AccessoryRule, suggestAccessoryLoad;
 import 'program_current.dart'
     show
         currentVersion,
         programCurrent,
+        routineWeekFor,
         strengthWaveCutFor,
         strengthWaveTopReps,
         weekStartDayOf;
@@ -161,6 +164,7 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
   Map<String, double> references = const {},
   Map<String, double> workingMaxes = const {},
   Map<String, double> capRpeByLift = const {},
+  List<StrengthRow> accessoryHistory = const [],
 }) {
   final version = currentVersion(program);
   if (version == null) return const [];
@@ -269,6 +273,11 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     return null;
   }
 
+  // Accessory double-progression config (program.yaml v12; defaults
+  // when absent). Suggestions need history — empty history means no
+  // accessory weights, exactly the pre-v12 behavior.
+  final accessoryRule = AccessoryRule.fromVersion(version);
+
   final wave = version['strength_wave'];
   final entries = <Map<String, Object?>>[];
   for (var i = 0; i < 7; i++) {
@@ -277,10 +286,9 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     if (block == null) continue; // outside every block: nothing to plan
     final blockN = block['n'];
     final blockNInt = blockN is num ? blockN.toInt() : null;
-    final block0Template = version['weekly_template_block_0'];
-    final Object? template = (blockN == 0 && block0Template is Map)
-        ? block0Template
-        : version['weekly_template'];
+    // v12 routine merge (base week + phase_overrides), legacy
+    // two-template fallback inside routineWeekFor.
+    final template = routineWeekFor(version, blockNInt);
     if (template is! Map) continue;
     // Template lookup by the day's ACTUAL weekday (the window may not
     // start on Monday, but the template is keyed mon..sun).
@@ -375,14 +383,30 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
       if (exercise is! String || exercise.isEmpty || reps == null) continue;
       final rawSets = item['sets'];
       var sets = rawSets is num && rawSets >= 1 ? rawSets.toInt() : 1;
+      final isAccessory = mainLiftByExercise[exercise] == null;
       if (!isTop) {
         var m = nonTopMult;
         // The ramp eases ACCESSORIES only — main-lift back-offs follow
         // the wave/RPE targets, not the ramp.
-        if (mainLiftByExercise[exercise] == null) m *= accessoryRampMult;
+        if (isAccessory) m *= accessoryRampMult;
         if (m != 1.0) sets = max(1, (sets * m).round());
       }
-      final weight = workingWeight(exercise, reps, dayPolicy, pct: pct);
+      var weight = workingWeight(exercise, reps, dayPolicy, pct: pct);
+      // Accessory double progression (v12): suggest the next load from
+      // the last logged comparable session — +step when every set hit
+      // the top of the range (`reps_hi`) at <= 2 RIR, −5% after an
+      // avg-RPE>9 session, else hold. No history / bodyweight work →
+      // no weight (never guessed).
+      if (weight == null && isAccessory && pct == null) {
+        final repsHi = item['reps_hi'];
+        weight = suggestAccessoryLoad(
+          exercise: exercise,
+          history: accessoryHistory,
+          asOf: day,
+          repRangeHigh: repsHi is num ? repsHi.toInt() : null,
+          rule: accessoryRule,
+        )?.weightLb;
+      }
       for (var s = 0; s < sets; s++) {
         // ONLY exercise + reps + optional weight (+ date). Never
         // rpe/notes — those describe what happened, and nothing has
@@ -412,7 +436,11 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     for (final w in working) {
       final ex = w['exercise'] as String;
       final top = tops[ex];
-      if (top != null && warmedUp.add(ex)) {
+      // Warm-up ramps are a MAIN-LIFT protocol (bar work, plate math);
+      // accessories with double-progression weights never get one.
+      if (top != null &&
+          mainLiftByExercise[ex] != null &&
+          warmedUp.add(ex)) {
         entries.addAll(warmupRows(day, ex, top));
       }
       entries.add(w);
@@ -436,8 +464,9 @@ class WeekPlanner {
   /// (v3: working-max weight math replaced the reference-e1rm fill;
   /// v4: strength-wave top reps + planned accessories + volume
   /// multipliers, program.yaml v10; v5: cut wave `strength_wave_cut` +
-  /// %TM `pct` rows + cut deload halving, program.yaml v11).
-  static const planVersion = 'plan_v5';
+  /// %TM `pct` rows + cut deload halving, program.yaml v11; v6: v12
+  /// routine merge + accessory double-progression weights).
+  static const planVersion = 'plan_v6';
 
   /// Ledger meta key the runner writes the last swallowed error into.
   static const metaErrorKey = 'week_planner_error';
@@ -467,6 +496,7 @@ class WeekPlanner {
     required DateTime today,
     Map<String, double> workingMaxes = const {},
     Map<String, double> capRpeByLift = const {},
+    List<StrengthRow> accessoryHistory = const [],
   }) async {
     final fmt = DateFormat('yyyy-MM-dd');
     final monday = DateTime.utc(
@@ -492,6 +522,7 @@ class WeekPlanner {
       references: references,
       workingMaxes: workingMaxes,
       capRpeByLift: capRpeByLift,
+      accessoryHistory: accessoryHistory,
     );
     for (final e in built) {
       final date = e['date'] as DateTime;
@@ -559,10 +590,8 @@ class WeekPlanner {
       if (await repo.metaGet(metaGeneratedKey) == stamp) return;
 
       final rows = await connector.list(strengthView);
-      final references = liftReferencesAsOf(
-        [for (final r in rows) ?_strengthRow(r)],
-        today,
-      );
+      final history = [for (final r in rows) ?_strengthRow(r)];
+      final references = liftReferencesAsOf(history, today);
 
       // v3 inputs — best-effort: any failure leaves both maps empty and
       // the reference fallback carries the week.
@@ -602,6 +631,7 @@ class WeekPlanner {
         today: today,
         workingMaxes: workingMaxes,
         capRpeByLift: capRpeByLift,
+        accessoryHistory: history,
       );
       // Mark the week done even when empty (e.g. pre-program week) so we
       // don't re-evaluate on every launch.

@@ -224,6 +224,62 @@ CutWaveWeekSpec? strengthWaveCutFor(
   );
 }
 
+/// The weekly routine for a block (program.yaml v12 `routine:` — ONE
+/// base week shared across phases plus small explicit
+/// `phase_overrides`).
+///
+/// v12 structure:
+///   routine:
+///     week: { mon: {...}, ... }          # base — the cut week
+///     phase_overrides:
+///       postcut:
+///         applies_to_blocks: [1..7]
+///         week: { mon: {...}, ... }      # whole-DAY replacements
+///
+/// Resolution: start from `routine.week`; every override whose
+/// `applies_to_blocks` contains [blockN] replaces the days present in
+/// its own `week` (day-level replacement, no deep merge — a day is a
+/// coherent session). Overrides without a `week` key are documentation
+/// (e.g. climbing-emphasis multipliers declared elsewhere) and change
+/// nothing.
+///
+/// Legacy fallback (pre-v12): block 0 prefers `weekly_template_block_0`
+/// when present; other blocks read `weekly_template`. Null when the
+/// version declares no template at all.
+Map<Object?, Object?>? routineWeekFor(
+  Map<Object?, Object?>? version,
+  int? blockN,
+) {
+  final routine = version?['routine'];
+  if (routine is Map && routine['week'] is Map) {
+    final merged = <Object?, Object?>{
+      ...routine['week'] as Map,
+    };
+    final overrides = routine['phase_overrides'];
+    if (overrides is Map && blockN != null) {
+      for (final entry in overrides.entries) {
+        final o = entry.value;
+        if (o is! Map) continue;
+        final applies = o['applies_to_blocks'];
+        if (applies is! List || !applies.contains(blockN)) continue;
+        final week = o['week'];
+        if (week is! Map) continue;
+        for (final day in week.entries) {
+          merged[day.key] = day.value;
+        }
+      }
+    }
+    return merged;
+  }
+  // Legacy (v6-v11) two-template shape.
+  final block0 = version?['weekly_template_block_0'];
+  if (blockN == 0 && block0 is Map) {
+    return Map<Object?, Object?>.from(block0);
+  }
+  final template = version?['weekly_template'];
+  return template is Map ? Map<Object?, Object?>.from(template) : null;
+}
+
 /// Resolve the program slice for [date]. Returns null when [date] falls
 /// outside every block of the current program version (e.g. pre-program)
 /// or when no non-pending version exists.
@@ -278,13 +334,12 @@ ProgramSlice? programCurrent(
     }
   }
 
-  // Today's template row.
-  // For block 0, prefer weekly_template_block_0 when present.
+  // Today's template row — v12 `routine:` merge (base week +
+  // phase_overrides), with the legacy two-template fallback inside
+  // [routineWeekFor].
   final weekday = _weekdayKeys[day.weekday - 1];
   final template = version['weekly_template'] as Map? ?? const {};
-  final block0Template = version['weekly_template_block_0'] as Map?;
-  final Map activeTemplate =
-      (blockN == 0 && block0Template != null) ? block0Template : template;
+  final activeTemplate = routineWeekFor(version, blockN) ?? const {};
   final today = activeTemplate[weekday];
   final todayTemplate = <String, Object?>{
     'weekday': weekday,

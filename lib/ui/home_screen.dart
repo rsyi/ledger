@@ -129,6 +129,28 @@ class _HomeScreenState extends State<HomeScreen> {
   /// so it survives the poller's setState rebuilds.
   int _tab = 0;
 
+  /// Visited-tab stack (excluding the current tab) so the system Back
+  /// button returns to the previous tab instead of exiting the app.
+  /// Capped so a long session can't grow it unbounded; older entries
+  /// drop off the bottom.
+  final List<int> _tabHistory = [];
+
+  /// Switch tabs, recording the departed tab for Back. Collapses any
+  /// existing occurrence of the target so history stays a simple
+  /// most-recent-first trail without cycles.
+  void _selectTab(int i) {
+    if (i == _tab) return;
+    setState(() {
+      _tabHistory
+        ..remove(_tab)
+        ..add(_tab);
+      if (_tabHistory.length > 8) _tabHistory.removeAt(0);
+      _tabHistory.remove(i);
+      _tab = i;
+    });
+    if (i == 0) _coachRowKey.currentState?.refresh();
+  }
+
   /// Handle on the progress dashboard so pull-to-refresh can bust its
   /// caches (wm_store / program docs / weight mirror / best-e1RM).
   final _dashboardKey = GlobalKey<HomeDashboardState>();
@@ -485,7 +507,17 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           }
         }
-        return Scaffold(
+        return PopScope(
+          // Back returns to the previously-visited tab; only the root
+          // tab with no history lets the pop through (exits the app).
+          canPop: _tabHistory.isEmpty,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop || _tabHistory.isEmpty) return;
+            final prev = _tabHistory.removeLast();
+            setState(() => _tab = prev);
+            if (prev == 0) _coachRowKey.currentState?.refresh();
+          },
+          child: Scaffold(
           body: Builder(
             builder: (context) {
               // Admin actions for the HOME tab's app bar. The old
@@ -633,7 +665,7 @@ class _HomeScreenState extends State<HomeScreen> {
               // Plan is a tab — hero taps / sheet actions select it
               // instead of pushing a duplicate screen (index 4 in the
               // 5-tab shell).
-              void openProgram() => setState(() => _tab = 4);
+              void openProgram() => _selectTab(4);
 
               // Shared timeline opener for tracker rows. Read-only views
               // ride the direct-sheet repo with no post-log hooks; entry
@@ -893,7 +925,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           view: coachView,
                           repository: data.registry.forView(coachView),
                           ledger: coachLedger,
-                          onOpen: () => setState(() => _tab = 3),
+                          onOpen: () => _selectTab(3),
                         ),
                     ],
                   ),
@@ -1087,13 +1119,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _tab,
-            onDestinationSelected: (i) {
-              if (i == _tab) return;
-              setState(() => _tab = i);
-              // Back to PROGRESS after reading coach threads → refresh
-              // the preview row's unread accent right away.
-              if (i == 0) _coachRowKey.currentState?.refresh();
-            },
+            onDestinationSelected: _selectTab,
             destinations: const [
               NavigationDestination(
                 icon: Icon(Icons.insights_outlined),
@@ -1121,6 +1147,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 label: 'Plan',
               ),
             ],
+          ),
           ),
         );
       },

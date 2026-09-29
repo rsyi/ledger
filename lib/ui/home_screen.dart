@@ -51,6 +51,7 @@ import 'program_screen.dart';
 import 'coach_chat_screen.dart';
 import 'coach_threads_screen.dart';
 import 'home_dashboard.dart';
+import 'goals_screen.dart';
 import 'app_text.dart';
 import 'timeline_screen.dart';
 import 'plan_screen.dart';
@@ -60,14 +61,22 @@ import 'plan_screen.dart';
 const kCoachChatViewName = 'coach_chat';
 
 /// App entrypoint shell. Loads config + schemas, connects to the
-/// warehouse, and presents a 4-tab NavigationBar (bottom-nav redesign
-/// 2026-09-21 — the single scrolling home page had gotten too crowded):
+/// warehouse, and presents a 5-tab NavigationBar (Progress/Goals split
+/// 2026-09-29 — the output-over-input principle made literal: the old
+/// combined Home tab divided into an OUTPUT surface and an INPUT
+/// surface):
 ///
-///   HOME     the synthesis surface only: PHASE hero + STRENGTH card +
-///            THIS WEEK strip (home_dashboard.dart) and the Coach
-///            preview row. No lists. Its app bar carries the settings
-///            gear that opens Integrations (moved out of the LOG list
-///            2026-09-25 — it is app setup, not logging).
+///   PROGRESS outputs only — the PHASE hero (weight trajectory + the
+///            body verdict) + the STRENGTH card (working-max / Wilks /
+///            e1RM trends), home_dashboard.dart in progressOnly mode, and
+///            the Coach preview row (cross-cutting, kept at the top). No
+///            input/adherence content. Its app bar carries the settings
+///            gear that opens Integrations (app setup, not logging).
+///   GOALS    the phase's INPUT eigenvectors as plain-language rows with
+///            a met / partial / unmet state (goals_screen.dart +
+///            goals_service.dart): macros, calorie band vs phase, ~10
+///            hard sets per main lift, climbing 2x, one 4x4. Declared in
+///            app/dashboards.yaml `goals:`, phase-selected.
 ///   LOG      the tracker rows, grouped by `app/dashboards.yaml` into
 ///            LOG (entry domains) and CONNECTED (integration domains —
 ///            read-friendly record lists; rows arrive via sync, with a
@@ -78,11 +87,11 @@ const kCoachChatViewName = 'coach_chat';
 ///   COACH    the coach threads screen embedded as the tab root (the
 ///            old pinned-row → pushed-threads flow, minus the push);
 ///            opening a thread still pushes the chat.
-///   PROGRAM  the program screen embedded (declared / configuration /
-///            observed / verdict), Week plan via its app-bar action.
+///   PLAN     the phases + forecast screen (plan_screen.dart); the
+///            ROUTINE (Program screen) rides its app-bar action.
 ///
 /// Bootstrap stays at THIS level: one FutureBuilder feeds every tab, so
-/// the SchemaSync poller's rebuild swaps all four bodies at once and
+/// the SchemaSync poller's rebuild swaps all five bodies at once and
 /// the selected tab (a plain State field) survives. Tab switches don't
 /// push routes, so the poller's canPop() mid-task guard keeps working.
 ///
@@ -115,13 +124,18 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Reentrancy guard so overlapping ticks (slow network) don't stack.
   bool _polling = false;
 
-  /// Selected bottom-nav tab (0 home · 1 log · 2 coach · 3 program).
-  /// Plain state field so it survives the poller's setState rebuilds.
+  /// Selected bottom-nav tab (Progress/Goals split 2026-09-29):
+  /// 0 progress · 1 goals · 2 log · 3 coach · 4 plan. Plain state field
+  /// so it survives the poller's setState rebuilds.
   int _tab = 0;
 
   /// Handle on the progress dashboard so pull-to-refresh can bust its
   /// caches (wm_store / program docs / weight mirror / best-e1RM).
   final _dashboardKey = GlobalKey<HomeDashboardState>();
+
+  /// Handle on the Goals tab so pull-to-refresh re-evaluates the goal
+  /// rows (busts the shared dashboards-config cache).
+  final _goalsKey = GlobalKey<GoalsScreenState>();
 
   /// Handle on the LOG/CONNECTED sections so pull-to-refresh re-pulls
   /// app/dashboards.yaml (1 h cache otherwise).
@@ -616,9 +630,10 @@ class _HomeScreenState extends State<HomeScreen> {
               final domainProvider = github == null
                   ? null
                   : DomainConfigProvider(CoachBrain.githubFetcher(github));
-              // Program is a tab — hero taps / sheet actions select it
-              // instead of pushing a duplicate screen.
-              void openProgram() => setState(() => _tab = 3);
+              // Plan is a tab — hero taps / sheet actions select it
+              // instead of pushing a duplicate screen (index 4 in the
+              // 5-tab shell).
+              void openProgram() => setState(() => _tab = 4);
 
               // Shared timeline opener for tracker rows. Read-only views
               // ride the direct-sheet repo with no post-log hooks; entry
@@ -789,8 +804,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }
 
-              // ---- HOME: hero + STRENGTH + THIS WEEK + Coach preview.
-              final homeTab = Scaffold(
+              // ---- PROGRESS: outputs only — PHASE hero (weight
+              // trajectory + verdict) + STRENGTH card + Coach preview.
+              // The THIS WEEK input strip is dropped here (progressOnly);
+              // it moved to the GOALS tab.
+              final progressTab = Scaffold(
                 appBar: AppBar(title: Text(appName), actions: homeActions),
                 body: RefreshIndicator(
                   // Busts the dashboard's caches (wm_store snapshot,
@@ -805,6 +823,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       HomeDashboard(
                         key: _dashboardKey,
+                        progressOnly: true,
                         wmStore: data.wmStore,
                         provider: programProvider,
                         analytics: data.analytics,
@@ -874,9 +893,55 @@ class _HomeScreenState extends State<HomeScreen> {
                           view: coachView,
                           repository: data.registry.forView(coachView),
                           ledger: coachLedger,
-                          onOpen: () => setState(() => _tab = 2),
+                          onOpen: () => setState(() => _tab = 3),
                         ),
                     ],
+                  ),
+                ),
+              );
+
+              // ---- GOALS: the phase's input eigenvectors as
+              // plain-language rows (goals_screen.dart). Same data
+              // sources as the retired THIS WEEK strip; declared in
+              // app/dashboards.yaml `goals:`, phase-selected.
+              final goalsTab = Scaffold(
+                appBar: AppBar(
+                  title: const Text('Goals'),
+                  actions: [SyncStatusButton()],
+                ),
+                body: RefreshIndicator(
+                  onRefresh: () async => _goalsKey.currentState?.reload(),
+                  child: GoalsScreen(
+                    key: _goalsKey,
+                    provider: programProvider,
+                    dashboards: domainProvider,
+                    analytics: data.analytics,
+                    weightView: weightView,
+                    weightRepo: weightView == null
+                        ? null
+                        : data.registry.forView(weightView),
+                    strengthView: dashStrengthView,
+                    strengthRepo: dashStrengthView == null
+                        ? null
+                        : data.registry.forView(dashStrengthView),
+                    climbingView: dashClimbingView,
+                    climbingRepo: dashboardRepoFor(
+                      dashClimbingView,
+                      readOnlyRepo: data.readOnlyRepo,
+                      forView: data.registry.forView,
+                    ),
+                    mealsView: dashMealsView,
+                    mealsRepo: dashboardRepoFor(
+                      dashMealsView,
+                      readOnlyRepo: data.readOnlyRepo,
+                      forView: data.registry.forView,
+                    ),
+                    cardioView: dashCardioView,
+                    cardioRepo: dashboardRepoFor(
+                      dashCardioView,
+                      readOnlyRepo: data.readOnlyRepo,
+                      forView: data.registry.forView,
+                    ),
                   ),
                 ),
               );
@@ -1012,10 +1077,11 @@ class _HomeScreenState extends State<HomeScreen> {
               // IndexedStack keeps every tab's state (scroll positions,
               // in-flight futures, the threads screen's poll) alive
               // across switches; the bootstrap swap above recreates all
-              // four together.
+              // five together. Order matches the NavigationBar:
+              // Progress · Goals · Log · Coach · Plan.
               return IndexedStack(
                 index: _tab,
-                children: [homeTab, logTab, coachTab, planTab],
+                children: [progressTab, goalsTab, logTab, coachTab, planTab],
               );
             },
           ),
@@ -1024,15 +1090,20 @@ class _HomeScreenState extends State<HomeScreen> {
             onDestinationSelected: (i) {
               if (i == _tab) return;
               setState(() => _tab = i);
-              // Back to HOME after reading coach threads → refresh the
-              // preview row's unread accent right away.
+              // Back to PROGRESS after reading coach threads → refresh
+              // the preview row's unread accent right away.
               if (i == 0) _coachRowKey.currentState?.refresh();
             },
             destinations: const [
               NavigationDestination(
-                icon: Icon(Icons.home_outlined),
-                selectedIcon: Icon(Icons.home),
-                label: 'Home',
+                icon: Icon(Icons.insights_outlined),
+                selectedIcon: Icon(Icons.insights),
+                label: 'Progress',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.flag_outlined),
+                selectedIcon: Icon(Icons.flag),
+                label: 'Goals',
               ),
               NavigationDestination(
                 icon: Icon(Icons.edit_note_outlined),

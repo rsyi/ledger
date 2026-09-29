@@ -215,6 +215,14 @@ class HomeDashboard extends StatefulWidget {
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
+  /// PROGRESS-only mode (bottom-nav Progress/Goals split 2026-09-29):
+  /// render the OUTPUT surface only — the phase hero (weight trajectory
+  /// + strength verdicts) and the STRENGTH card. The THIS WEEK input
+  /// strip is dropped; it moved to the Goals tab (goals_service). False
+  /// keeps the full dashboard (hero + strength + this-week strip) for
+  /// any legacy caller.
+  final bool progressOnly;
+
   const HomeDashboard({
     super.key,
     this.wmStore,
@@ -242,6 +250,7 @@ class HomeDashboard extends StatefulWidget {
     this.onOpenStatus,
     this.onOpenStrengthDomain,
     this.today,
+    this.progressOnly = false,
   });
 
   @override
@@ -1132,8 +1141,12 @@ class HomeDashboardState extends State<HomeDashboard> {
         _HeroCard(hero: hero, onRowTap: _onHeroRowTap),
         const SizedBox(height: 8),
         _strengthCard(context),
-        const SizedBox(height: 8),
-        _weekCard(context),
+        // PROGRESS-only (Progress/Goals split): the THIS WEEK input
+        // strip lives on the Goals tab now — outputs only here.
+        if (!widget.progressOnly) ...[
+          const SizedBox(height: 8),
+          _weekCard(context),
+        ],
       ],
     );
   }

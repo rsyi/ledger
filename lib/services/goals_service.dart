@@ -37,7 +37,7 @@ library;
 
 import 'package:yaml/yaml.dart';
 
-import 'program_metrics.dart' show GradedSet, mainLiftByExercise, weekStartOf;
+import 'program_metrics.dart' show GradedSet, weekStartOf;
 
 // ---------------------------------------------------------------------------
 // Config (dashboards.yaml phases.<phase>.goals)

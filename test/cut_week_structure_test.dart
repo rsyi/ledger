@@ -15,7 +15,8 @@
 //      Mon  squat heavy + bench volume + BSS + accessories
 //      Tue  4x4 + hard climb (no barbell rows)
 //      Wed  bench heavy + squat volume + press volume + pull-ups
-//      Thu  calisthenics (muscle-ups main) + dips + EZ-bar preacher curls
+//      Thu  calisthenics (muscle-ups main + handstand/front-lever skill
+//           + hanging leg raise) + dips + EZ-bar preacher curls
 //      Fri  deadlift heavy + bench volume + light climb
 //      Sat  press heavy + OHP back-offs + seated cable row + pull-ups +
 //           laterals + face pulls + external rotations
@@ -108,9 +109,13 @@ void main() {
     ]);
   });
 
-  test('Thu: muscle-ups main + dips + EZ-bar preacher curls', () {
+  test('Thu: muscle-ups main + skill (handstand/front-lever) + HLR + '
+      'dips + EZ-bar preacher curls', () {
     expect(dayRows(3), [
       ('Muscle Up', 3, 1),
+      ('Handstand Hold', 3, 1), // v14 skill work
+      ('Front Lever', 2, 5), // v14 up-downs
+      ('Hanging Leg Raise', 3, 8), // v14 restored core work
       ('Parallel Bar Triceps Dip', 3, 8),
       ('EZ-Bar Preacher Curl', 3, 8),
     ]);

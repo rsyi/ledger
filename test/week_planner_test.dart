@@ -112,6 +112,14 @@ void main() {
         'Muscle Up -x1', // skill FIRST — planner keeps template order
         'Muscle Up -x1',
         'Muscle Up -x1',
+        'Handstand Hold -x1', // v14: skill holds after muscle-ups
+        'Handstand Hold -x1',
+        'Handstand Hold -x1',
+        'Front Lever -x5', // v14: front-lever up-downs 2x5
+        'Front Lever -x5',
+        'Hanging Leg Raise -x8', // v14: restored core work 3x8-15
+        'Hanging Leg Raise -x8',
+        'Hanging Leg Raise -x8',
         'Parallel Bar Triceps Dip -x8',
         'Parallel Bar Triceps Dip -x8',
         'Parallel Bar Triceps Dip -x8',
@@ -270,9 +278,17 @@ void main() {
         'Cable Face Pull -x12',
         'Cable External Rotation -x12',
       ]);
-      // Wed now plans the pistol-squat progression (ramped 3 → 2).
+      // Wed plans handstand + front-lever skill work (v14) + the
+      // pistol-squat progression, all accessory-ramped in maintenance
+      // week 1 (×0.65): Handstand 3→2, Front Lever 2→1, Pistol 3→2.
       final wed = onDay(entries, dec14.add(const Duration(days: 2)));
-      expect(rows(wed), ['Pistol Squat -x3', 'Pistol Squat -x3']);
+      expect(rows(wed), [
+        'Handstand Hold -x1',
+        'Handstand Hold -x1',
+        'Front Lever -x5',
+        'Pistol Squat -x3',
+        'Pistol Squat -x3',
+      ]);
       final fri = onDay(entries, dec14.add(const Duration(days: 4)));
       expect(rows(fri), [
         'Barbell Deadlift -x5', // wave wk1 top
@@ -812,9 +828,11 @@ void main() {
       );
 
       // Today-forward only: Sat/Sun/Mon/Tue are past — the logged
-      // Monday squat is NOT re-created. Wed 13 + Thu 9 + Fri 8 rows
-      // (skeleton — references only, %TM rows never price off e1rm).
-      expect(added, hasLength(30));
+      // Monday squat is NOT re-created. Wed 13 + Thu 17 + Fri 8 rows
+      // (skeleton — references only, %TM rows never price off e1rm;
+      // v14 Thursday gained handstand 3 + front-lever 2 + HLR 3 skill
+      // rows, +8 over v13's Thu 9).
+      expect(added, hasLength(38));
       final wed = added
           .where((e) => e.date == DateTime(2026, 9, 30))
           .toList();

@@ -226,7 +226,10 @@ const double sim2PostCutWReverse = 50;
 /// RPE 7-8); W counted from the v13 base-week planned lists (verbatim
 /// the v11 cut week) — Mon 13 (top + BSS 3 + bench 4 + laterals 3 +
 /// triceps 2) / Wed 13 (top + bench 3 + squat 3 + OHP 3 + pull-ups 3)
-/// / Thu 6 (dips 3 + curls 3; muscle-up skill rides Q) / Fri 8 (top +
+/// / Thu 6 (dips 3 + curls 3; muscle-up + the v14 handstand/front-
+/// lever/HLR skill+core work all ride Q, not W — they are low-fatigue
+/// skill volume, so W and L are UNCHANGED by the 2026-09-29 addition)
+/// / Fri 8 (top +
 /// DL 2 + RDL 2 + bench 3) / Sat 15 (top + OHP 3 + row 3 + pull-ups 3
 /// + laterals 3 + face pulls 2; "easy" external rotations excluded,
 /// v10 convention) = 55 on normal weeks; the sim has no block-0 week
@@ -254,7 +257,9 @@ const double sim2CutD = 4;
 /// climbing / 50 reverse-ramp), K=2 (Tue technique + Fri limit,
 /// kLim=1; climbing blocks add the 3rd session), Z=1 (Thu 4x4 — one
 /// weekly session in EVERY block type, forever; no block varies it)
-/// and Q=1 (Wed calisthenics) — with r = [sim2RecompR] and
+/// and Q=1 (Wed calisthenics — the v14 handstand/front-lever additions
+/// there are skill work on the same Q dial; W unchanged) — with
+/// r = [sim2RecompR] and
 /// p = [sim2RecompProtein] for the rated blocks (2-7). The cut
 /// (block 0) is untouched. The superseded bulk trajectory is reachable
 /// via the 'Bulk plan (inactive)' preset, which restores the bulk-era

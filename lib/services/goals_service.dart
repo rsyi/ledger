@@ -20,8 +20,8 @@
 ///                    maintenance → maintenance .. +band_kcal. Maintenance
 ///                    is the adaptive estimate (nutrition_model); no
 ///                    estimate yet → honest "no data".
-///   3. hard_sets     per main lift, sets close to failure (RPE in the
-///                    declared band, default 8-9) this accounting week
+///   3. hard_sets     per main lift, sets close to failure (RPE at/above
+///                    the declared minimum, default 7) this accounting week
 ///                    toward ~10 — the common ~10-hard-sets/muscle/week
 ///                    hypertrophy landmark (Schoenfeld et al.). Plus a
 ///                    per-lift "accessories done" check: did that lift's
@@ -79,8 +79,11 @@ class GoalConfig {
   /// Hard-set target per lift (~10 — the hypertrophy landmark).
   final int? hardSetTarget;
 
-  /// The RPE band that counts as "close to failure" ([8, 9]).
-  final List<double>? hardRpe;
+  /// The minimum RPE that counts as a "hard set" (default 7 — RPE 7 and
+  /// above). Declared as a single number (`hard_rpe_min: 7`); a legacy
+  /// `[lo, hi]` band is still accepted and only its lo is read (the
+  /// threshold is open-ended above — an RPE 9 set still counts).
+  final double? hardRpeMin;
 
   /// Per-lift associated accessory exercise names (from the routine).
   /// lift → [exercise names]. A lift's accessory check is met when EVERY
@@ -101,7 +104,7 @@ class GoalConfig {
     this.bandKcal,
     this.lifts = const [],
     this.hardSetTarget,
-    this.hardRpe,
+    this.hardRpeMin,
     this.accessories = const {},
     this.target,
   });
@@ -154,7 +157,8 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
               ? [for (final l in lifts) l.toString()]
               : const [],
           hardSetTarget: (gg['hard_set_target'] as num?)?.toInt(),
-          hardRpe: _numPair(gg['hard_rpe']),
+          hardRpeMin: (gg['hard_rpe_min'] as num?)?.toDouble() ??
+              _numPair(gg['hard_rpe'])?.first,
           accessories: acc is Map
               ? {
                   for (final e in acc.entries)
@@ -244,7 +248,7 @@ class GoalEval {
 /// shape philosophy as WeekDriverInputs.
 class GoalInputs {
   /// §2.5 graded main-lift sets over full history (RPE carried); the
-  /// hard-set counter filters to the accounting week and the RPE band.
+  /// hard-set counter filters to the accounting week and the RPE floor.
   final List<GradedSet> graded;
 
   /// ALL logged strength rows (exercise name + date) — the accessory
@@ -452,15 +456,13 @@ List<GoalEval> evaluateGoals({
       case 'hard_sets':
         final lifts = c.lifts.isEmpty ? _defaultLifts : c.lifts;
         final target = c.hardSetTarget ?? 10;
-        final rpeLo = c.hardRpe == null ? 8.0 : c.hardRpe![0];
-        final rpeHi = c.hardRpe == null ? 9.0 : c.hardRpe![1];
+        final rpeMin = c.hardRpeMin ?? 7.0;
         int hardSets(String lift) => inputs.graded
             .where((s) =>
                 s.lift == lift &&
                 inWeek(s.date) &&
                 s.rpe != null &&
-                s.rpe! >= rpeLo &&
-                s.rpe! <= rpeHi)
+                s.rpe! >= rpeMin)
             .length;
         // Per-lift accessory completion: every declared accessory needs
         // ≥ 1 logged set this week. No accessories declared → null.

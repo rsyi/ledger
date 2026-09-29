@@ -56,7 +56,7 @@ phases:
       - id: hard_sets
         lifts: [squat, bench, deadlift, press]
         hard_set_target: 10
-        hard_rpe: [8, 9]
+        hard_rpe_min: 7
         accessories:
           squat: [Bulgarian Split Squat]
           bench: [Triceps Extension, Lateral Dumbbell Raise]
@@ -79,7 +79,7 @@ phases:
       expect(cut[0].carbsFloorGDay, 150);
       expect(cut[1].calorieMode, 'deficit');
       expect(cut[2].hardSetTarget, 10);
-      expect(cut[2].hardRpe, [8, 9]);
+      expect(cut[2].hardRpeMin, 7);
       expect(cut[2].accessories['squat'], ['Bulgarian Split Squat']);
       expect(cut[2].accessories['bench'],
           ['Triceps Extension', 'Lateral Dumbbell Raise']);
@@ -260,17 +260,19 @@ phases:
       id: 'hard_sets',
       lifts: ['squat', 'bench', 'deadlift', 'press'],
       hardSetTarget: 10,
-      hardRpe: [8, 9],
+      hardRpeMin: 7,
       accessories: {
         'squat': ['Bulgarian Split Squat'],
       },
     );
 
-    test('counts only RPE-in-band sets this week per lift', () {
+    test('counts sets at RPE >= 7 this week per lift', () {
       final sets = <GradedSet>[
-        for (var i = 0; i < 10; i++) hard('squat', inWeek, rpe: 8.5),
-        hard('squat', inWeek, rpe: 6), // too easy
-        for (var i = 0; i < 5; i++) hard('bench', inWeek, rpe: 9),
+        // squat: 8 at RPE 7 (boundary counts) + 2 at RPE 9 = 10 hard sets.
+        for (var i = 0; i < 8; i++) hard('squat', inWeek, rpe: 7),
+        for (var i = 0; i < 2; i++) hard('squat', inWeek, rpe: 9),
+        hard('squat', inWeek, rpe: 6.5), // below the floor — excluded
+        for (var i = 0; i < 5; i++) hard('bench', inWeek, rpe: 8),
         hard('deadlift', lastWeek, rpe: 8.5), // last week
       ];
       final r = evaluateGoals(

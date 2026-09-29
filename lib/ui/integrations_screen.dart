@@ -5,9 +5,9 @@ import '../services/integrations/registry.dart';
 import '../services/sync_scheduler.dart';
 
 /// Integrations page — one card per source: status, Connect/Sync
-/// now, and an overflow with Full reconcile / Disconnect. (The
-/// "Working maxes" card moved to the Program screen's CONFIGURATION
-/// section — see ui/widgets/working_max_card.dart.)
+/// now, and an overflow with Full reconcile / Disconnect. (Training
+/// maxes moved to the top of the Program screen — see
+/// ui/program_screen.dart's TRAINING MAXES section.)
 class IntegrationsScreen extends StatefulWidget {
   const IntegrationsScreen({super.key});
 

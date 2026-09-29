@@ -1,17 +1,29 @@
-/// Program screen — THE ROUTINE (tab split, 2026-09-28): this week's
-/// periodized template rendered from program.yaml (v12 `routine:` base
-/// week + phase overrides) and the live working maxes.
+/// Program screen — THE ROUTINE (restructured 2026-09-28 per user
+/// feedback: "too unstructured… don't want freeform text").
 ///
-/// Replaces/absorbs the old Week Plan screen — one routine surface, not
-/// two. Per day: the template prose (AM/PM), the planner's structured
-/// session rows (mains priced off TM × wave pct / chart, accessories
-/// off the double-progression suggestions), and the §4 prescription
-/// block for heavy lifts with the backoff_rule annotation. The
-/// working-maxes card (configuration — the one part that writes) sits
-/// at the bottom. Phases + forecast/sim live on the Plan tab
-/// (plan_screen.dart), not here.
+/// Layout, top to bottom:
+///   1. Header — week range + block + the plain-words week status
+///      ("Week 2 of 4 · top set 4 reps @ 84%"). No jargon anywhere on
+///      this screen: no "wave", no "Rx", no section-sign references.
+///   2. TRAINING MAXES — one row per lift: current TM, the 2-week
+///      change ("310 · was 320 ↓ · Oct 1"), Confirm when a proposed
+///      value awaits confirmation. Tap a lift → full-screen TM trend
+///      plot (append-only working_max tab history). Menu: manual set +
+///      refresh. A manual edit recomputes every displayed load
+///      immediately (the store's cache is busted on write and the
+///      whole screen refetches).
+///   3. Day tiles — ONE summary line (`squat heavy · bench volume`)
+///      plus a bare list of exercise rows (`Squat 1×5 · 260 lb (81%)`;
+///      accessories show the double-progression suggestion or stay
+///      blank), and the backoff rule collapsed to one short line on
+///      heavy days. Template prose is never rendered.
+///
+/// All row/summary/label formatting is pure and tested —
+/// services/routine_display.dart. Phases + forecast/sim live on the
+/// Plan tab (plan_screen.dart), not here.
 library;
 
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -20,30 +32,36 @@ import '../services/program_current.dart';
 import '../services/program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
 import '../services/program_provider.dart';
+import '../services/routine_display.dart';
 import '../services/sheets_repository.dart' show Record;
 import '../services/warehouse_connector.dart';
 import '../services/week_plan.dart';
 import '../services/week_planner.dart' show buildWeekPlannedEntries;
 import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
-import '../services/working_max.dart';
-import 'widgets/working_max_card.dart';
+import '../services/working_max.dart'
+    show LoadPolicy, defaultVariantByLift, loadPolicies, policyForDate;
+import 'app_text.dart';
+import 'widgets/chart_bottom_axis.dart';
+import 'widgets/chart_range.dart';
+import 'widgets/pinned_tooltip_line_chart.dart';
 
 /// Full-screen routine view (the Program surface).
 ///
 /// Fetches program.yaml/phase.yaml via [provider] (1 h cache), the
-/// working-max tabs via [wmStore], and the strength history via
+/// training-max tabs via [wmStore], and the strength history via
 /// [strengthRepo] (references + accessory double-progression). Left/
 /// right chevrons navigate weeks; the default week follows
 /// [defaultWeekStart] (next week when opened on the week's last day).
 class ProgramScreen extends StatefulWidget {
   final ProgramProvider provider;
 
-  /// Working-max tab reader; null hides prescriptions + the WM card.
+  /// Training-max tab reader/writer; null hides the TRAINING MAXES
+  /// section (loads fall back to reference e1rms).
   final WmStore? wmStore;
 
   /// Strength history for accessory suggestions + reference e1rms.
-  /// Null → mains still price off the TM; accessories stay weightless.
+  /// Null → mains still price off the TM; accessories stay blank.
   final WarehouseConnector? strengthRepo;
   final ViewSchema? strengthView;
 
@@ -74,6 +92,7 @@ class _ProgramScreenState extends State<ProgramScreen> {
   late final DateTime _today;
   late DateTime _weekStart; // Monday of the displayed week
   late Future<_RoutineData?> _load;
+  bool _wmBusy = false;
 
   @override
   void initState() {
@@ -107,9 +126,86 @@ class _ProgramScreenState extends State<ProgramScreen> {
     await next;
   }
 
-  void _shiftWeek(int weeks) => setState(() {
-        _weekStart = _weekStart.add(Duration(days: 7 * weeks));
-      });
+  /// Runs a training-max write, then refetches EVERYTHING so every
+  /// displayed load reprices off the new value (deterministic edit →
+  /// recompute; WmStore busts its cache on write, so the refetch
+  /// reads the fresh tab).
+  Future<void> _wmAction(Future<void> Function() op) async {
+    setState(() => _wmBusy = true);
+    try {
+      await op();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _wmBusy = false;
+          _load = _fetch();
+        });
+      }
+    }
+  }
+
+  Future<void> _setTrainingMaxDialog() async {
+    final store = widget.wmStore;
+    if (store == null) return;
+    var lift = 'bench';
+    final valueCtl = TextEditingController();
+    final reasonCtl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: const Text('Set training max'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: lift,
+                decoration: const InputDecoration(labelText: 'Lift'),
+                items: [
+                  for (final l in defaultVariantByLift.keys)
+                    DropdownMenuItem(value: l, child: Text(l)),
+                ],
+                onChanged: (v) => setLocal(() => lift = v ?? lift),
+              ),
+              TextField(
+                controller: valueCtl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration:
+                    const InputDecoration(labelText: 'Training max (lb)'),
+              ),
+              TextField(
+                controller: reasonCtl,
+                decoration: const InputDecoration(labelText: 'Reason'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Set'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final value = double.tryParse(valueCtl.text.trim());
+    if (ok != true || value == null || value <= 0) return;
+    await _wmAction(() => store.setWorkingMax(
+          lift: lift,
+          valueLb: value,
+          reason: reasonCtl.text,
+        ));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -120,12 +216,16 @@ class _ProgramScreenState extends State<ProgramScreen> {
           IconButton(
             icon: const Icon(Icons.chevron_left),
             tooltip: 'Previous week',
-            onPressed: () => _shiftWeek(-1),
+            onPressed: () => setState(() {
+              _weekStart = _weekStart.subtract(const Duration(days: 7));
+            }),
           ),
           IconButton(
             icon: const Icon(Icons.chevron_right),
             tooltip: 'Next week',
-            onPressed: () => _shiftWeek(1),
+            onPressed: () => setState(() {
+              _weekStart = _weekStart.add(const Duration(days: 7));
+            }),
           ),
         ],
       ),
@@ -150,7 +250,12 @@ class _ProgramScreenState extends State<ProgramScreen> {
               data: data,
               weekStart: _weekStart,
               today: _today,
-              wmStore: widget.wmStore,
+              hasWmStore: widget.wmStore != null,
+              wmBusy: _wmBusy,
+              onSetTrainingMax: _setTrainingMaxDialog,
+              onConfirmSeed: (lift) =>
+                  _wmAction(() => widget.wmStore!.confirmSeed(lift)),
+              onRefreshMaxes: () => _wmAction(() async {}),
             ),
           );
         },
@@ -184,54 +289,25 @@ class _ProgramScreenState extends State<ProgramScreen> {
 // Week view
 // ---------------------------------------------------------------------------
 
-/// One lift's §4 prescription for a day tile.
-class _LiftRx {
-  final Prescription rx;
-  final String variant;
-  final bool unconfirmed;
-
-  /// Wave-prescribed top reps (v10 strength_wave / v11 cut wave).
-  final int? waveTopReps;
-  final String? backoffNote;
-  final List<ReadingRow> readings;
-
-  const _LiftRx({
-    required this.rx,
-    required this.variant,
-    required this.unconfirmed,
-    required this.readings,
-    this.waveTopReps,
-    this.backoffNote,
-  });
-}
-
-/// One grouped session line: `sets` identical sets of an exercise.
-class _SessionLine {
-  final String exercise;
-  final int sets;
-  final num reps;
-  final num? weight;
-  final bool top;
-  const _SessionLine({
-    required this.exercise,
-    required this.sets,
-    required this.reps,
-    this.weight,
-    this.top = false,
-  });
-}
-
 class _RoutineView extends StatelessWidget {
   final _RoutineData data;
   final DateTime weekStart;
   final DateTime today;
-  final WmStore? wmStore;
+  final bool hasWmStore;
+  final bool wmBusy;
+  final VoidCallback onSetTrainingMax;
+  final ValueChanged<String> onConfirmSeed;
+  final VoidCallback onRefreshMaxes;
 
   const _RoutineView({
     required this.data,
     required this.weekStart,
     required this.today,
-    required this.wmStore,
+    required this.hasWmStore,
+    required this.wmBusy,
+    required this.onSetTrainingMax,
+    required this.onConfirmSeed,
+    required this.onRefreshMaxes,
   });
 
   @override
@@ -249,11 +325,12 @@ class _RoutineView extends StatelessWidget {
       }
     }
 
-    // Weight inputs: working maxes + caps (TM path), reference e1rms
+    // Weight inputs: training maxes + caps (TM path), reference e1rms
     // (fallback), accessory history (double progression).
     final wm = data.wm;
-    final maxes =
-        wm == null ? const <String, double>{} : currentWorkingMaxesByLift(wm.workingMax);
+    final maxes = wm == null
+        ? const <String, double>{}
+        : currentWorkingMaxesByLift(wm.workingMax);
     final policies = version == null ? const <LoadPolicy>[] : loadPolicies(version);
     final sliceByDay = {for (final d in week) d.date: d.slice};
     LoadPolicy? policyOn(DateTime d) {
@@ -281,8 +358,8 @@ class _RoutineView extends StatelessWidget {
       capRpeByLift: caps,
       accessoryHistory: data.history,
     );
-    final linesByDay = _groupSessionLines(entries);
-    final rxByDay = _prescriptionsByDay(version, entries, week, policyOn);
+    final linesByDay = sessionLinesByDay(entries);
+    final backoff = backoffLine(version?['backoff_rule']);
 
     final todayUtc = DateTime.utc(today.year, today.month, today.day);
     return ListView(
@@ -295,173 +372,71 @@ class _RoutineView extends StatelessWidget {
           phaseYaml: phase,
           version: version,
         ),
-        const SizedBox(height: 12),
-        for (final day in week)
-          _DayTile(
-            day: day,
-            isToday: day.date == todayUtc,
-            lines: linesByDay[day.date] ?? const [],
-            prescriptions: rxByDay[day.date] ?? const [],
-          ),
-        if (wmStore != null) ...[
-          const SizedBox(height: 16),
+        if (hasWmStore) ...[
+          const SizedBox(height: 12),
           Padding(
-            padding: const EdgeInsets.only(bottom: 6, left: 4),
-            child: Text(
-              'WORKING MAXES',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelMedium
-                  ?.copyWith(fontWeight: FontWeight.w700),
+            padding: const EdgeInsets.only(left: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child:
+                      Text('TRAINING MAXES', style: AppText.title(context)),
+                ),
+                wmBusy
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : PopupMenuButton<String>(
+                        onSelected: (v) {
+                          if (v == 'set') onSetTrainingMax();
+                          if (v == 'refresh') onRefreshMaxes();
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(
+                              value: 'set',
+                              child: Text('Set training max…')),
+                          PopupMenuItem(
+                              value: 'refresh', child: Text('Refresh')),
+                        ],
+                      ),
+              ],
             ),
           ),
           Card(
             elevation: 0,
             margin: EdgeInsets.zero,
             color: Theme.of(context).colorScheme.surfaceContainerLow,
-            child: WorkingMaxCard(store: wmStore!),
+            child: _TrainingMaxSection(
+              snapshot: wm,
+              today: today,
+              busy: wmBusy,
+              onConfirm: onConfirmSeed,
+            ),
           ),
+          const SizedBox(height: 4),
         ],
+        const SizedBox(height: 8),
+        for (final day in week)
+          _DayTile(
+            day: day,
+            isToday: day.date == todayUtc,
+            lines: linesByDay[day.date] ?? const [],
+            maxes: maxes,
+            backoff: backoff,
+          ),
         const SizedBox(height: 24),
       ],
     );
   }
-
-  /// Groups the planner's one-row-per-set output into per-day session
-  /// lines: consecutive identical (exercise, reps, weight, top) rows
-  /// merge into `N × reps @ weight`.
-  Map<DateTime, List<_SessionLine>> _groupSessionLines(
-    List<Map<String, Object?>> entries,
-  ) {
-    final out = <DateTime, List<_SessionLine>>{};
-    for (final e in entries) {
-      final date = e['date'] as DateTime;
-      final exercise = e['exercise'] as String;
-      final reps = e['reps'] as num;
-      final weight = e['weight'] as num?;
-      final top = e['top'] == true;
-      final lines = out[date] ??= [];
-      final last = lines.isEmpty ? null : lines.last;
-      if (last != null &&
-          last.exercise == exercise &&
-          last.reps == reps &&
-          last.weight == weight &&
-          last.top == top) {
-        lines[lines.length - 1] = _SessionLine(
-          exercise: exercise,
-          sets: last.sets + 1,
-          reps: reps,
-          weight: weight,
-          top: top,
-        );
-      } else {
-        lines.add(_SessionLine(
-          exercise: exercise,
-          sets: 1,
-          reps: reps,
-          weight: weight,
-          top: top,
-        ));
-      }
-    }
-    return out;
-  }
-
-  /// §4 prescriptions for the week's heavy days (wave-aware; same math
-  /// as the coach context's next_prescriptions).
-  Map<DateTime, List<_LiftRx>> _prescriptionsByDay(
-    Map<Object?, Object?>? version,
-    List<Map<String, Object?>> entries,
-    List<DayPlan> week,
-    LoadPolicy? Function(DateTime) policyOn,
-  ) {
-    final wm = data.wm;
-    if (wm == null || wm.workingMax.isEmpty || version == null) {
-      return const {};
-    }
-    final maxes = currentWorkingMaxesByLift(wm.workingMax);
-    final caps = activeCapsByLift(wm, policyOn);
-    final sliceByDay = {for (final d in week) d.date: d.slice};
-
-    // Heavy lifts per day: a planned wave top (`top: true`) or a top
-    // single (legacy block-0 shape).
-    final heavy = <DateTime, Set<String>>{};
-    for (final e in entries) {
-      if (e['top'] != true && e['reps'] != 1) continue;
-      final lift = mainLiftByExercise[e['exercise']];
-      if (lift == null) continue;
-      (heavy[e['date'] as DateTime] ??= {}).add(lift);
-    }
-
-    // v11/v12 backoff_rule → one shared annotation for wave-day blocks.
-    String? backoffNote;
-    final br = version['backoff_rule'];
-    if (br is Map) {
-      final drop = br['drop_pct'];
-      final dropStr = drop is List ? drop.join('–') : '$drop';
-      backoffNote = 'Back-offs/volume per the session rows — hold while '
-          'RPE ≤ ${br['hold_if_rpe_lte']}; drop $dropStr% next set if '
-          'above (${br['purpose']})';
-    }
-
-    final out = <DateTime, List<_LiftRx>>{};
-    heavy.forEach((day, lifts) {
-      final slice = sliceByDay[day];
-      final policy = policyOn(day);
-      if (policy == null) return;
-      var waveReps = strengthWaveTopReps(
-        version,
-        blockN: slice?.block['number'] as int?,
-        weekInBlock: slice?.weekInBlock ?? 0,
-        weekType: slice?.weekType,
-      );
-      double? wavePct;
-      if (waveReps == null) {
-        final cut = strengthWaveCutFor(
-          version,
-          blockN: slice?.block['number'] as int?,
-          day: day,
-        );
-        if (cut != null) {
-          waveReps = cut.reps;
-          wavePct = cut.pct;
-        }
-      }
-      for (final lift in lifts) {
-        final max = maxes[lift];
-        if (max == null) continue;
-        final readings = [
-          for (final r in wm.readings)
-            if (r.lift == lift) r,
-        ]..sort((a, b) => a.date.compareTo(b.date));
-        (out[day] ??= []).add(_LiftRx(
-          rx: buildPrescription(
-            lift: lift,
-            policy: policy,
-            workingMax: max,
-            warmupProtocol: version['warmup_protocol'],
-            activeCapRpe: caps[lift],
-            topReps: waveReps,
-            topPct: wavePct,
-          ),
-          waveTopReps: waveReps,
-          backoffNote: backoffNote,
-          variant: currentWorkingMax(wm.workingMax, lift)?.variant ??
-              defaultVariantByLift[lift] ??
-              '',
-          unconfirmed: needsConfirmation(wm.workingMax, lift),
-          readings: readings.length <= 3
-              ? readings
-              : readings.sublist(readings.length - 3),
-        ));
-      }
-    });
-    return out;
-  }
 }
 
 // ---------------------------------------------------------------------------
-// Header card — week + block + WAVE STATE
+// Header card — week + block + plain-words week status
 // ---------------------------------------------------------------------------
 
 class _HeaderCard extends StatelessWidget {
@@ -477,36 +452,20 @@ class _HeaderCard extends StatelessWidget {
     required this.version,
   });
 
-  /// The wave-state line for the displayed week: the cut wave's
-  /// calendar week (5/4/3/deload @ %TM) or the post-cut block wave's
-  /// prescribed top reps. Null pre-wave.
-  String? _waveLine() {
+  /// "Week 2 of 4 · top set 4 reps @ 84%" — pure, tested in
+  /// routine_display. Null pre-program.
+  String? _statusLine() {
     final s = slice;
     if (s == null || version == null) return null;
     final blockN = s.block['number'] as int?;
-    final cut = strengthWaveCutFor(version, blockN: blockN, day: weekStart);
-    if (cut != null) {
-      final pct = (cut.pct * 100).round();
-      return cut.deload
-          ? 'Cut wave week ${cut.week} of 4 — DELOAD: top 1×${cut.reps} '
-              '@ ~$pct% TM, non-top volume halved'
-          : 'Cut wave week ${cut.week} of 4 — top 1×${cut.reps} @ $pct% TM '
-              '(RPE 7–8)';
-    }
-    final reps = strengthWaveTopReps(
-      version,
-      blockN: blockN,
-      weekInBlock: s.weekInBlock,
+    return weekStatusLine(
+      cut: strengthWaveCutFor(version, blockN: blockN, day: weekStart),
+      waveWeek: strengthWaveWeek(version,
+          blockN: blockN, weekInBlock: s.weekInBlock),
+      waveReps: strengthWaveTopReps(version,
+          blockN: blockN, weekInBlock: s.weekInBlock, weekType: s.weekType),
       weekType: s.weekType,
     );
-    if (reps == null) return null;
-    return switch (s.weekType) {
-      'light' => 'Wave deload (light week) — top 1×$reps at the RPE-6 cap, '
-          'volume halved',
-      'test' => 'Test week — the block-result single (1×1 @ RPE 8), '
-          'volume halved',
-      _ => 'Strength wave — top 1×$reps @ RPE 7–8 this week',
-    };
   }
 
   @override
@@ -522,8 +481,7 @@ class _HeaderCard extends StatelessWidget {
       final s = slice!;
       final blockN = s.block['number'];
       final emphasis = s.block['emphasis']?.toString() ?? '';
-      blockLine =
-          'Block $blockN · $emphasis · week ${s.weekInBlock} in block';
+      blockLine = 'Block $blockN · $emphasis · week ${s.weekInBlock} in block';
       weekTypeLine = s.weekType;
     }
     final phaseVersion = phaseYaml != null ? currentVersion(phaseYaml!) : null;
@@ -531,7 +489,7 @@ class _HeaderCard extends StatelessWidget {
       final value = phaseVersion['value']?.toString() ?? '';
       phaseLine = 'Phase: $value';
     }
-    final wave = _waveLine();
+    final status = _statusLine();
 
     return Card(
       elevation: 0,
@@ -562,7 +520,7 @@ class _HeaderCard extends StatelessWidget {
                     ),
               ),
             ],
-            if (wave != null) ...[
+            if (status != null) ...[
               const SizedBox(height: 8),
               Container(
                 padding:
@@ -572,7 +530,7 @@ class _HeaderCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  wave,
+                  status,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
@@ -633,20 +591,319 @@ class _WeekTypeBadge extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Day tile — prose + session rows + Rx blocks
+// Training maxes — top section
+// ---------------------------------------------------------------------------
+
+class _TrainingMaxSection extends StatelessWidget {
+  final WmSnapshot? snapshot;
+  final DateTime today;
+  final bool busy;
+  final ValueChanged<String> onConfirm;
+
+  const _TrainingMaxSection({
+    required this.snapshot,
+    required this.today,
+    required this.busy,
+    required this.onConfirm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final snap = snapshot;
+    final rows = <(String, TmSignal, bool)>[
+      if (snap != null)
+        for (final lift in defaultVariantByLift.keys)
+          if (tmSignal(snap.workingMax, lift, today) case final TmSignal s)
+            (lift, s, needsConfirmation(snap.workingMax, lift)),
+    ];
+    if (rows.isEmpty) {
+      return ListTile(
+        title: Text(
+          snap == null
+              ? 'Training maxes unavailable — pull to retry.'
+              : 'No training maxes yet.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final row in rows)
+            InkWell(
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => _TmTrendScreen(
+                  lift: row.$1,
+                  rows: snap!.workingMax,
+                  signal: row.$2,
+                ),
+              )),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                                text: '${liftTitle(row.$1)}  ',
+                                style:
+                                    Theme.of(context).textTheme.bodyMedium),
+                            TextSpan(
+                              text: fmtLb(row.$2.current),
+                              style: AppText.value(context),
+                            ),
+                            TextSpan(
+                              text: '  ${tmSignalSuffix(row.$2)}',
+                              style: AppText.tag(context),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (row.$3)
+                      busy
+                          ? Text('…',
+                              style:
+                                  TextStyle(color: scheme.onSurfaceVariant))
+                          : TextButton(
+                              onPressed: () => onConfirm(row.$1),
+                              child: const Text('Confirm'),
+                            ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 'squat' → 'Squat'.
+  static String liftTitle(String lift) =>
+      lift[0].toUpperCase() + lift.substring(1);
+
+  static String fmtLb(num v) =>
+      v == v.roundToDouble() ? v.round().toString() : v.toString();
+}
+
+/// Full-screen trend plot of one lift's training-max history (the
+/// append-only working_max tab).
+class _TmTrendScreen extends StatefulWidget {
+  final String lift;
+  final List<WorkingMaxRow> rows;
+  final TmSignal signal;
+
+  const _TmTrendScreen({
+    required this.lift,
+    required this.rows,
+    required this.signal,
+  });
+
+  @override
+  State<_TmTrendScreen> createState() => _TmTrendScreenState();
+}
+
+class _TmTrendScreenState extends State<_TmTrendScreen> {
+  ChartRange? _selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final title = _TrainingMaxSection.liftTitle(widget.lift);
+    final points = tmHistoryPoints(widget.rows, widget.lift);
+    final variant =
+        currentWorkingMax(widget.rows, widget.lift)?.variant ?? '';
+
+    return Scaffold(
+      appBar: AppBar(title: Text('$title training max')),
+      body: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(
+                    text: '${_TrainingMaxSection.fmtLb(widget.signal.current)} lb',
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  TextSpan(
+                    text: '  ${tmSignalSuffix(widget.signal)}'
+                        '${variant.isNotEmpty ? ' · $variant' : ''}',
+                    style: AppText.tag(context),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: points.length < 2
+                  ? Center(
+                      child: Text(
+                        points.isEmpty
+                            ? 'No recorded values yet.'
+                            : 'One recorded value — the plot appears once '
+                                'it changes.',
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    )
+                  : _chart(context, points),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _chart(
+      BuildContext context, List<({DateTime day, double value})> points) {
+    final scheme = Theme.of(context).colorScheme;
+    final series = <ChartSeriesPoint>[
+      for (final p in points) (day: p.day, value: p.value),
+    ];
+    final anchor = series.last.day;
+    final chips = visibleRanges(
+      points: series,
+      ranges: const [ChartRange.m3, ChartRange.m6, ChartRange.y1, ChartRange.all],
+      today: anchor,
+    );
+    final range = resolveRange(chips, _selected ?? ChartRange.all);
+    final clipped = clipSeriesToRange(series, range, anchor);
+
+    double dayX(DateTime d) => d.millisecondsSinceEpoch / 86400000;
+    final spots = [for (final p in clipped) FlSpot(dayX(p.day), p.value)];
+    var xMin = dayX(range.startFor(anchor) ?? clipped.first.day);
+    final xMax = spots.last.x;
+    if (xMax - xMin < 1) xMin = xMax - 1;
+    final ys = spots.map((s) => s.y).toList();
+    final yMin = ys.reduce((a, b) => a < b ? a : b);
+    final yMax = ys.reduce((a, b) => a > b ? a : b);
+    final yPad = (yMax - yMin).abs() * 0.1 + 2.5;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (chips.length > 1)
+          ChartRangeSelector(
+            ranges: chips,
+            selected: range,
+            onChanged: (r) => setState(() => _selected = r),
+          ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) => PinnedTooltipLineChart(
+              key: ValueKey(range),
+              data: LineChartData(
+                minX: xMin,
+                maxX: xMax,
+                minY: yMin - yPad,
+                maxY: yMax + yPad,
+                gridData:
+                    const FlGridData(show: true, drawVerticalLine: false),
+                borderData: FlBorderData(
+                  show: true,
+                  border: Border(
+                    left: BorderSide(color: scheme.outlineVariant),
+                    bottom: BorderSide(color: scheme.outlineVariant),
+                  ),
+                ),
+                titlesData: FlTitlesData(
+                  rightTitles: const AxisTitles(),
+                  topTitles: const AxisTitles(),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 44,
+                      getTitlesWidget: (value, meta) => Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: Text(
+                          value.toStringAsFixed(0),
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ),
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: dateBottomTitles(
+                      minX: xMin,
+                      maxX: xMax,
+                      plotWidth: (constraints.maxWidth - 44).clamp(1, 10000),
+                      style: const TextStyle(fontSize: 11),
+                      reservedSize: 32,
+                    ),
+                  ),
+                ),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: spots,
+                    isCurved: false,
+                    isStepLineChart: true,
+                    barWidth: 2,
+                    color: scheme.primary,
+                    dotData: FlDotData(
+                      show: spots.length < 80,
+                      getDotPainter: (spot, _, _, _) => FlDotCirclePainter(
+                        radius: 3,
+                        color: scheme.primary,
+                        strokeWidth: 0,
+                      ),
+                    ),
+                  ),
+                ],
+                lineTouchData: LineTouchData(
+                  enabled: true,
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) => Colors.black.withValues(alpha: 0.7),
+                    getTooltipItems: (touched) => [
+                      for (final s in touched)
+                        LineTooltipItem(
+                          '${DateFormat('yyyy-MM-dd').format(DateTime.fromMillisecondsSinceEpoch((s.x * 86400000).toInt(), isUtc: true))}\n'
+                          '${s.y.toStringAsFixed(0)} lb',
+                          const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            height: 1.3,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Day tile — one summary line + bare exercise rows
 // ---------------------------------------------------------------------------
 
 class _DayTile extends StatelessWidget {
   final DayPlan day;
   final bool isToday;
-  final List<_SessionLine> lines;
-  final List<_LiftRx> prescriptions;
+  final List<SessionLine> lines;
+  final Map<String, double> maxes;
+  final String? backoff;
 
   const _DayTile({
     required this.day,
     required this.isToday,
-    this.lines = const [],
-    this.prescriptions = const [],
+    required this.lines,
+    required this.maxes,
+    required this.backoff,
   });
 
   @override
@@ -655,42 +912,23 @@ class _DayTile extends StatelessWidget {
     final slice = day.slice;
     final date = day.date;
 
-    final weekdayLabel = DateFormat('EEEE').format(date);
+    final weekdayLabel = DateFormat('EEE').format(date);
     final dateLabel = DateFormat('MMM d').format(date);
 
-    final morning = slice?.todayTemplate['morning']?.toString().trim();
-    final afternoon = slice?.todayTemplate['afternoon']?.toString().trim();
-    final hasContent = (morning != null && morning.isNotEmpty) ||
-        (afternoon != null && afternoon.isNotEmpty);
+    final summary = slice == null
+        ? 'No program'
+        : daySummary(
+            lines: lines,
+            morning: slice.todayTemplate['morning']?.toString(),
+            afternoon: slice.todayTemplate['afternoon']?.toString(),
+          );
+    final muted = slice == null || summary == 'Rest';
+    final hasTop = lines.any((l) => l.top);
 
-    Widget content;
-    if (slice == null) {
-      content = Text(
-        'No program',
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-              fontStyle: FontStyle.italic,
-            ),
-      );
-    } else if (!hasContent) {
-      content = Text(
-        'Off',
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: scheme.onSurfaceVariant,
-              fontStyle: FontStyle.italic,
-            ),
-      );
-    } else {
-      content = Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (morning != null && morning.isNotEmpty)
-            _ProseLine(label: 'AM', text: morning),
-          if (afternoon != null && afternoon.isNotEmpty)
-            _ProseLine(label: 'PM', text: afternoon),
-        ],
-      );
-    }
+    final small = Theme.of(context)
+        .textTheme
+        .bodySmall
+        ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
 
     return Material(
       color: isToday
@@ -707,7 +945,7 @@ class _DayTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    weekdayLabel.substring(0, 3),
+                    weekdayLabel,
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
                           fontWeight:
                               isToday ? FontWeight.w700 : FontWeight.w500,
@@ -730,201 +968,45 @@ class _DayTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  content,
-                  if (lines.isNotEmpty) _SessionCard(lines: lines),
-                  for (final rx in prescriptions) _RxBlock(rx: rx),
+                  Text(
+                    summary,
+                    style: muted
+                        ? Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                              fontStyle: FontStyle.italic,
+                            )
+                        : Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  if (lines.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    for (final l in lines)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1),
+                        child: Text(
+                          formatSessionLine(l,
+                              tm: maxes[mainLiftByExercise[l.exercise]]),
+                          style: small?.copyWith(
+                            fontWeight:
+                                l.top ? FontWeight.w600 : FontWeight.w400,
+                            color: l.top ? null : scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    if (hasTop && backoff != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text('Back-offs: $backoff',
+                            style: AppText.micro(context)),
+                      ),
+                  ],
                 ],
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// The day's structured session: one line per exercise segment with
-/// prescribed sets × reps and the priced load (TM math for mains,
-/// double-progression suggestions for accessories, blank = log by
-/// feel / no history).
-class _SessionCard extends StatelessWidget {
-  final List<_SessionLine> lines;
-  const _SessionCard({required this.lines});
-
-  static String _n(num v) =>
-      v == v.roundToDouble() ? v.round().toString() : v.toString();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final small = Theme.of(context)
-        .textTheme
-        .bodySmall
-        ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
-
-    // Merge warm-up segments of an exercise into one compact line:
-    // consecutive segments of the same exercise render together.
-    final rows = <Widget>[];
-    String? currentExercise;
-    final buffer = <String>[];
-    var bufferHasTop = false;
-    void flush() {
-      if (currentExercise == null) return;
-      rows.add(Padding(
-        padding: const EdgeInsets.symmetric(vertical: 1.5),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              flex: 5,
-              child: Text(
-                currentExercise,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontWeight:
-                          bufferHasTop ? FontWeight.w600 : FontWeight.w400,
-                    ),
-              ),
-            ),
-            Expanded(
-              flex: 6,
-              child: Text(
-                buffer.join(' · '),
-                textAlign: TextAlign.right,
-                style: small?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  fontWeight:
-                      bufferHasTop ? FontWeight.w600 : FontWeight.w400,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ));
-      buffer.clear();
-      bufferHasTop = false;
-    }
-
-    for (final l in lines) {
-      if (l.exercise != currentExercise) {
-        flush();
-        currentExercise = l.exercise;
-      }
-      final setsReps = '${l.sets}×${_n(l.reps)}';
-      final w = l.weight == null ? '' : ' @ ${_n(l.weight!)}';
-      buffer.add('$setsReps$w${l.top ? ' (top)' : ''}');
-      if (l.top) bufferHasTop = true;
-    }
-    flush();
-
-    return Container(
-      margin: const EdgeInsets.only(top: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: rows,
-      ),
-    );
-  }
-}
-
-/// One lift's §4 prescription block (wave-aware).
-class _RxBlock extends StatelessWidget {
-  final _LiftRx rx;
-  const _RxBlock({required this.rx});
-
-  static String _n(num v) =>
-      v == v.roundToDouble() ? v.round().toString() : v.toString();
-
-  static String _readingLine(ReadingRow r) {
-    const moves = {'raise', 'drop', 'reset', 'manual'};
-    final arrow = moves.contains(r.decision) ? '→${_n(r.wmAfter)}' : '';
-    return '${DateFormat('MMM d').format(r.date)}  '
-        '${_n(r.weightLb)}×${r.reps} @${_n(r.rpe)} · ${r.decision}$arrow';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final p = rx.rx;
-    final topReps = p.topSetOptions.keys.toList()..sort();
-    final tops = [
-      for (final reps in topReps)
-        if (p.topSetOptions[reps] != null)
-          '${_n(p.topSetOptions[reps]!)}×$reps',
-    ].join(' · ');
-    final small = Theme.of(context)
-        .textTheme
-        .bodySmall
-        ?.copyWith(color: scheme.onSurfaceVariant);
-    return Container(
-      margin: const EdgeInsets.only(top: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHigh.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${p.lift} · ${p.policyName} · TM ${_n(p.workingMax)} '
-            '${rx.variant}${rx.unconfirmed ? ' (unconfirmed seed)' : ''}',
-            style: Theme.of(context)
-                .textTheme
-                .labelMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            rx.waveTopReps != null ? 'Top set (wave): $tops' : 'Top set: $tops',
-            style: small,
-          ),
-          if (rx.backoffNote != null) Text(rx.backoffNote!, style: small),
-          if (rx.readings.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            for (final r in rx.readings) Text(_readingLine(r), style: small),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _ProseLine extends StatelessWidget {
-  final String label; // 'AM' or 'PM'
-  final String text;
-
-  const _ProseLine({required this.label, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 3),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 26,
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              text,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-        ],
       ),
     );
   }

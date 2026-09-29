@@ -165,6 +165,16 @@ num _roundTo(num x, num step) {
 /// Weeks that fall outside every block (pre-program) and days without a
 /// `planned` key produce nothing. Malformed structures are skipped, never
 /// thrown on.
+///
+/// Window ([snapToWeekStart], 2026-09-28 Saturday-regression fix): by
+/// default the 7-day window is snapped BACK to the program's accounting
+/// week start (v7 `week_start: saturday` → Sat–Fri, matching the
+/// PlanStore/rollup windows). Callers that display a fixed Mon–Sun week
+/// (the Program routine screen) pass `snapToWeekStart: false` to plan
+/// exactly [weekMonday]..+6 — otherwise the displayed Saturday falls
+/// OUTSIDE the snapped Sat–Fri window and renders as a rest day. Every
+/// day's content is resolved from the day itself (template weekday,
+/// block, wave), so the two windows agree on their overlap.
 List<Map<String, Object?>> buildWeekPlannedEntries(
   Map<Object?, Object?> program,
   DateTime weekMonday, {
@@ -172,6 +182,7 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
   Map<String, double> workingMaxes = const {},
   Map<String, double> capRpeByLift = const {},
   List<StrengthRow> accessoryHistory = const [],
+  bool snapToWeekStart = true,
 }) {
   final version = currentVersion(program);
   if (version == null) return const [];
@@ -181,8 +192,9 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
   // the week's start day.
   final wsDay = weekStartDayOf(version);
   final day0 = DateTime.utc(weekMonday.year, weekMonday.month, weekMonday.day);
-  final weekStart =
-      day0.subtract(Duration(days: (day0.weekday - wsDay) % 7));
+  final weekStart = snapToWeekStart
+      ? day0.subtract(Duration(days: (day0.weekday - wsDay) % 7))
+      : day0;
   // Program STRUCTURE stays Monday-anchored: parity/alternation is
   // resolved at the Monday contained in the window (the one owning its
   // Mon–Fri) — identical to the week start for Monday-start weeks.

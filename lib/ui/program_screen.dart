@@ -350,13 +350,19 @@ class _RoutineView extends StatelessWidget {
         : activeCapsByLift(wm, policyOn);
     final references = liftReferencesAsOf(data.history, today);
 
+    // Plan entries for EXACTLY the displayed Mon–Sun days. The default
+    // (snapped) call would price the Sat-start ACCOUNTING window
+    // (Sat–Fri under program.yaml v7 `week_start: saturday`), which
+    // excludes the displayed Saturday — the 2026-09-28 "Saturday shows
+    // as Rest" regression.
     final entries = buildWeekPlannedEntries(
       program,
-      weekStart,
+      week.first.date,
       references: references,
       workingMaxes: maxes,
       capRpeByLift: caps,
       accessoryHistory: data.history,
+      snapToWeekStart: false,
     );
     final linesByDay = sessionLinesByDay(entries);
     final backoff = backoffLine(version?['backoff_rule']);

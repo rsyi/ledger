@@ -134,6 +134,26 @@ void main() {
     }
   });
 
+  testWidgets('SATURDAY REGRESSION: the displayed Saturday is a full OHP '
+      'session, never Rest', (tester) async {
+    // Displayed week = Mon Sep 28 – Sun Oct 4; the accounting window
+    // (week_start: saturday) is Sat Sep 26 – Fri Oct 2. The screen used
+    // to price the SNAPPED window, so Sat Oct 3 rendered as "Rest".
+    await pump(tester, _FakeWmStore(_seedRows(confirmed: true)));
+
+    expect(find.text('press heavy'), findsOneWidget);
+    // Wave top: press 140 × 0.811 = 113.5 → 115 (81%).
+    expect(find.text('Press 1×5 · 115 lb (81%)'), findsOneWidget);
+    // Back-offs 3×6-8 @ 72%: 140 × 0.72 = 100.8 → 100.
+    expect(find.text('Press 3×6 · 100 lb (72%)'), findsOneWidget);
+    // The approved Saturday movements, verbatim.
+    expect(find.text('Seated Cable Row 3×8-12'), findsOneWidget);
+    expect(find.text('Cable Face Pull 2×12-20'), findsOneWidget);
+    expect(find.text('Cable External Rotation 2×12-20'), findsOneWidget);
+    // Exactly one rest day on screen: Sunday.
+    expect(find.text('Rest'), findsOneWidget);
+  });
+
   testWidgets('training maxes at the top: value + since-date, pending '
       'seeds confirmable', (tester) async {
     final store = _FakeWmStore(_seedRows());

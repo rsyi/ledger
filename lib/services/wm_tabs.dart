@@ -558,6 +558,42 @@ WmChainResult runWmChain({
         if (mainLiftByExercise[r.exercise] == lift) r,
     ];
     final base = extractReadings(liftRows, kindOf: (_, _) => 'heavy_top');
+
+    // v13 slow loop: the estimator's sample history = ALL of the lift's
+    // day-top readings (recent completed training), kind-classified by
+    // week type only (light/deload exclusion; the post-drop `capped`
+    // kind is irrelevant to sampling). The last manual set_working_max
+    // row pins the TM until `manual_outvote_sets` qualifying sets are
+    // logged after it, and permanently scopes the estimator to
+    // post-manual sets (overridden history is never resurrected).
+    final slowLoop = tmRule?.slowLoop == true;
+    final samples = !slowLoop
+        ? const <Reading>[]
+        : [
+            for (final r in base)
+              Reading(
+                date: _dayUtc(r.date),
+                lift: r.lift,
+                variant: r.variant,
+                weightLb: r.weightLb,
+                rawWeightLb: r.rawWeightLb,
+                reps: r.reps,
+                rpe: r.rpe,
+                kind: classifyKind(
+                  lift: lift,
+                  date: r.date,
+                  weekType: weekTypeOf?.call(r.date),
+                ),
+                grinder: r.grinder,
+                missed: r.missed,
+                variantMismatch: r.variantMismatch,
+              ),
+          ];
+    DateTime? manualSince;
+    for (final r in wmRows) {
+      if (r.source == 'manual') manualSince = _dayUtc(r.effectiveFrom);
+    }
+
     final candidates = [
       for (final r in base)
         if (!_dayUtc(r.date).isBefore(startDate) &&
@@ -627,6 +663,26 @@ WmChainResult runWmChain({
         missed: r.missed,
         variantMismatch: r.variantMismatch,
       );
+      SlowTmEstimate? slowTm;
+      ManualPin? pin;
+      if (slowLoop) {
+        slowTm = slowTmEstimate(
+          samples: samples,
+          currentTm: wm,
+          rule: tmRule!,
+          asOf: _dayUtc(r.date),
+          notBefore: manualSince,
+        );
+        if (manualSince != null) {
+          pin = (
+            since: manualSince,
+            newSets: qualifyingTmSamples(samples, wm, tmRule,
+                    asOf: _dayUtc(r.date), notBefore: manualSince)
+                .length,
+            needed: tmRule.manualOutvoteSets,
+          );
+        }
+      }
       final d = evaluate(
         lift: lift,
         policy: policy,
@@ -637,6 +693,8 @@ WmChainResult runWmChain({
         painCapActive: painCap,
         twoSignalsThisWeek: twoSignalsWeeks.contains(_mondayOf(r.date)),
         tmRule: tmRule,
+        slowTm: slowTm,
+        manualPin: pin,
       );
       final id = readingIdOf(r.date, lift);
       newReadings.add(ReadingRow(
@@ -688,6 +746,50 @@ WmChainResult runWmChain({
     }
     // Pain notes dated after the last reading still activate the cap.
     if (todayDay != null) applyNotesThrough(todayDay);
+
+    // v13 slow-loop NIGHTLY RECOMPUTE: the TM is a pure function of the
+    // recent history, so reconcile the stored value against the current
+    // estimate even when no NEW reading arrived (rule/mode changes,
+    // edited history, a manual pin getting outvoted). Writes a row ONLY
+    // when the value changes. Guards: pain caps freeze; a still-pinned
+    // manual value holds; a freshest-qualifying grinder/miss never gets
+    // raised past (its per-reading drop stands until clean data). The
+    // ≤3 iterations run the min_top_fraction gate (which reads the
+    // current TM) to its fixed point, so one nightly lands the final
+    // value and the next run is a no-op.
+    if (slowLoop && todayDay != null && !painCap) {
+      for (var i = 0; i < 3; i++) {
+        final qual = qualifyingTmSamples(samples, wm, tmRule!,
+            asOf: todayDay, notBefore: manualSince);
+        if (qual.isEmpty) break;
+        if (manualSince != null && qual.length < tmRule.manualOutvoteSets) {
+          break; // manual pin still in force
+        }
+        final est = slowTmEstimate(
+          samples: samples,
+          currentTm: wm,
+          rule: tmRule,
+          asOf: todayDay,
+          notBefore: manualSince,
+        );
+        if (est == null || est.value == wm) break;
+        final last = qual.last;
+        if ((last.grinder || last.missed) && est.value > wm) break;
+        newWm.add(WorkingMaxRow(
+          lift: lift,
+          variant: defaultVariantByLift[lift]!,
+          valueLb: est.value,
+          effectiveFrom: todayDay,
+          source: 'rule',
+          reason: 'slow loop nightly recompute: median implied '
+              '${est.median.toStringAsFixed(1)} over ${est.sampleCount} '
+              'top sets (${_ymd(est.from)}..${_ymd(est.to)}, '
+              '${tmRule.windowDays}d ∨ ${tmRule.minSets}-set window) → '
+              '${_fmtNum(est.value)} (was ${_fmtNum(wm)})',
+        ));
+        wm = est.value;
+      }
+    }
 
     // NO_READING: two consecutive readingless weeks (spec §2/§7.6).
     if (todayDay != null) {

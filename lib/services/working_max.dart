@@ -57,66 +57,226 @@ num _roundTo(num x, num step) {
 }
 
 // ---------------------------------------------------------------------------
-// TM rule (program.yaml v12 `tm_rule`) — guarded implied-max
+// TM rule (program.yaml v12 `tm_rule` guarded / v13 median slow loop)
 // ---------------------------------------------------------------------------
 
-/// The guarded implied-max TM rule (program.yaml v12 `tm_rule`,
-/// user-approved 2026-09-28): after every evaluable top-set reading,
-/// TM = weight ÷ chart[rpe][reps] (the implied max), rounded to
-/// [roundingLb] — but RAISES are capped at [raiseCapLb] per session
-/// while drops apply in full immediately. Replaces the per-policy
-/// raise/hold/drop band rules for every phase; policies keep only
-/// their frozen/cap semantics (light weeks, pain caps, post-drop caps,
-/// cut_late's RPE-7 ceiling).
+/// `tm_rule.mode` values.
+const tmModeGuarded = 'guarded_implied_max';
+const tmModeMedian = 'median_implied_max';
+
+/// The TM rule. Two modes:
 ///
-/// Guards (each declared + editable in the YAML):
+/// GUARDED (program.yaml v12, [tmModeGuarded]): after every evaluable
+/// top-set reading, TM = weight ÷ chart[rpe][reps] (the implied max),
+/// rounded to [roundingLb] — but RAISES are capped at [raiseCapLb] per
+/// session while drops apply in full immediately.
+///
+/// MEDIAN SLOW LOOP (program.yaml v13, [tmModeMedian], user-specified
+/// two-loop architecture 2026-09-28): the TM is a deterministic
+/// ESTIMATE from recent completed training — the median of the implied
+/// maxes of the last qualifying top sets (day-max per lift), see
+/// [slowTmEstimate]. The per-session ±[raiseCapLb] cap is SUPERSEDED BY
+/// DESIGN: the median itself damps outliers (one anomalous day among
+/// [minSets] can never move the aggregate more than the gap to its
+/// neighbor), so no session cap is applied. Identical history ⇒
+/// identical TM (pure function of the readings; no clock dependence —
+/// the trailing window anchors at the newest qualifying set).
+///
+/// Guards shared by both modes (each declared + editable in the YAML):
 ///   * [minTopFraction] — a reading lighter than this fraction of the
 ///     current TM is sub-top-set work (%TM volume slots, hypertrophy
-///     exposures); it is recorded but never moves the TM. Without this
-///     the Wed squat 3x8@65% day-top would imply ~0.92×TM and crater
-///     the TM weekly. Grinders/misses bypass the guard (a grinder is a
-///     real signal at any load).
-///   * grinder/missed still DROPS: at least [minDropLbOnGrinder], and
-///     all the way to the implied max when that is lower ("the implied
-///     max of a grinder is already low").
-///   * the legacy test-single reset (weight / 0.922 round-down-5) is
-///     RETIRED as a special case: under implied-max the test single IS
-///     just a reading — an @8 single implies weight/0.922 through the
-///     same one rule, with the raise cap applying (the TM converges
-///     over the following sessions instead of jumping).
+///     exposures); it is recorded but never moves the TM and never
+///     enters the median. Grinders/misses bypass the guard (a grinder
+///     is a real signal at any load).
+///   * grinder/missed still DROPS immediately (the fast safety path):
+///     at least [minDropLbOnGrinder], and all the way to the implied
+///     max when that is lower. The grinder's low implied max also
+///     enters the median, so the slow loop converges to it honestly.
 ///   * pain caps freeze as before; a capped session counts "clean"
 ///     when rpe < [cleanRpeLt] with no grinder/miss.
+///
+/// Median-mode extras:
+///   * [windowDays]/[minSets] — the estimator windows over the last
+///     [windowDays] days (anchored at the newest qualifying set) or the
+///     last [minSets] qualifying sets, whichever holds MORE data.
+///   * [maxTopReps] — sets above this rep count are hypertrophy work,
+///     not TM evidence (the chart's rep columns end at 8).
+///   * [manualOutvoteSets] — a manual set_working_max PINS the TM until
+///     this many qualifying top sets are logged AFTER its date; from
+///     then on the estimator runs on post-manual sets only (overridden
+///     history is never resurrected). A grinder still drops through a
+///     pin (safety beats optimism).
 class TmRule {
+  final String mode;
   final double raiseCapLb;
   final double roundingLb;
   final double minTopFraction;
   final double minDropLbOnGrinder;
   final double cleanRpeLt;
+  final int windowDays;
+  final int minSets;
+  final int maxTopReps;
+  final int manualOutvoteSets;
 
   const TmRule({
+    this.mode = tmModeGuarded,
     this.raiseCapLb = 5,
     this.roundingLb = 5,
     this.minTopFraction = 0.78,
     this.minDropLbOnGrinder = 5,
     this.cleanRpeLt = 9,
+    this.windowDays = 21,
+    this.minSets = 5,
+    this.maxTopReps = 8,
+    this.manualOutvoteSets = 3,
   });
+
+  /// True for the v13 median slow loop.
+  bool get slowLoop => mode == tmModeMedian;
 }
 
 /// Parses `tm_rule` from a program VERSION map. Null unless the mode is
-/// `guarded_implied_max` (pre-v12 programs keep the legacy band rules).
+/// [tmModeGuarded] (v12) or [tmModeMedian] (v13) — pre-v12 programs
+/// keep the legacy band rules.
 TmRule? tmRuleOf(Map<Object?, Object?>? version) {
   final raw = version?['tm_rule'];
   if (raw is! Map) return null;
-  if (raw['mode']?.toString() != 'guarded_implied_max') return null;
+  final mode = raw['mode']?.toString();
+  if (mode != tmModeGuarded && mode != tmModeMedian) return null;
   double numOr(Object? v, double d) => v is num ? v.toDouble() : d;
+  int intOr(Object? v, int d) => v is num ? v.toInt() : d;
   return TmRule(
+    mode: mode!,
     raiseCapLb: numOr(raw['raise_cap_lb'], 5),
     roundingLb: numOr(raw['rounding_lb'], 5),
     minTopFraction: numOr(raw['min_top_fraction'], 0.78),
     minDropLbOnGrinder: numOr(raw['min_drop_lb_on_grinder'], 5),
     cleanRpeLt: numOr(raw['clean_rpe_lt'], 9),
+    windowDays: intOr(raw['window_days'], 21),
+    minSets: intOr(raw['min_sets'], 5),
+    maxTopReps: intOr(raw['max_reps'], 8),
+    manualOutvoteSets: intOr(raw['manual_outvote_sets'], 3),
   );
 }
+
+// ---------------------------------------------------------------------------
+// Slow-loop TM estimator (v13 median mode)
+// ---------------------------------------------------------------------------
+
+/// The slow loop's deterministic estimate for one lift.
+class SlowTmEstimate {
+  /// The TM: median implied max rounded to `rounding_lb`.
+  final double value;
+
+  /// Unrounded median of the window's implied maxes.
+  final double median;
+
+  /// Qualifying top sets in the window.
+  final int sampleCount;
+
+  /// Dates of the oldest/newest sets used.
+  final DateTime from;
+  final DateTime to;
+
+  const SlowTmEstimate({
+    required this.value,
+    required this.median,
+    required this.sampleCount,
+    required this.from,
+    required this.to,
+  });
+}
+
+/// The qualifying subset of [samples] for the slow loop, chronologically
+/// sorted. A sample qualifies when it has a logged RPE (by construction
+/// of [Reading]), reps ≤ `max_reps`, is not a light/deload-week reading,
+/// has a convertible variant, and its CONVERTED weight is at least
+/// `min_top_fraction` × [currentTm] (the same sub-top guard the
+/// per-reading evaluation uses — %TM volume slots are never TM
+/// evidence). [asOf] (inclusive) bounds the history; [notBefore]
+/// (exclusive) drops samples at/before a manual pin's date.
+List<Reading> qualifyingTmSamples(
+  List<Reading> samples,
+  double currentTm,
+  TmRule rule, {
+  DateTime? asOf,
+  DateTime? notBefore,
+}) {
+  final out = [
+    for (final r in samples)
+      if (r.reps <= rule.maxTopReps &&
+          r.kind != 'light_week' &&
+          r.kind != 'deload' &&
+          !r.variantMismatch &&
+          r.weightLb >= rule.minTopFraction * currentTm &&
+          (asOf == null || !r.date.isAfter(asOf)) &&
+          (notBefore == null || r.date.isAfter(notBefore)))
+        r,
+  ]..sort((a, b) => a.date.compareTo(b.date));
+  return out;
+}
+
+/// SLOW LOOP (program.yaml v13 `tm_rule: median_implied_max`): the
+/// deterministic TM estimate from recent completed training.
+///
+///   TM = round(median(implied maxes of the window's qualifying
+///        top sets), rounding_lb)
+///
+/// Window: the qualifying sets ([qualifyingTmSamples] — day-max per
+/// lift, converted variants, reps ≤ 8, ≥ 0.78×TM, non-deload) within
+/// `window_days` of the NEWEST qualifying set; when that holds fewer
+/// than `min_sets`, the last `min_sets` sets regardless of age —
+/// whichever gives more data. Anchoring the window at the newest SET
+/// (not the clock) makes the estimate a pure function of the history:
+/// identical history ⇒ identical TM, no nightly drift from mere aging.
+///
+/// MEDIAN, not mean (design call, documented in the YAML): with the
+/// window's typical 5 sets, a single outlier day — a misjudged RPE, a
+/// sandbagged single — lands in the tail and moves the median at most
+/// to its neighboring sample; a trimmed mean needs trim parameters and
+/// at N=5 collapses to the median anyway. Grinder sets are INCLUDED
+/// (their low implied max is real evidence; the immediate grinder drop
+/// in [evaluate] stays the fast safety response).
+///
+/// Null when nothing qualifies — callers hold, never guess.
+SlowTmEstimate? slowTmEstimate({
+  required List<Reading> samples,
+  required double currentTm,
+  required TmRule rule,
+  DateTime? asOf,
+  DateTime? notBefore,
+}) {
+  final qual = qualifyingTmSamples(samples, currentTm, rule,
+      asOf: asOf, notBefore: notBefore);
+  if (qual.isEmpty) return null;
+  final newest = qual.last.date;
+  var window = [
+    for (final r in qual)
+      if (r.date.isAfter(newest.subtract(Duration(days: rule.windowDays)))) r,
+  ];
+  if (window.length < rule.minSets) {
+    window = qual.length <= rule.minSets
+        ? qual
+        : qual.sublist(qual.length - rule.minSets);
+  }
+  final implied = [for (final r in window) r.impliedMax]..sort();
+  final n = implied.length;
+  final median = n.isOdd
+      ? implied[n ~/ 2]
+      : (implied[n ~/ 2 - 1] + implied[n ~/ 2]) / 2;
+  return SlowTmEstimate(
+    value: _roundTo(median, rule.roundingLb).toDouble(),
+    median: median,
+    sampleCount: n,
+    from: window.first.date,
+    to: window.last.date,
+  );
+}
+
+/// Manual-pin state for [evaluate]'s median mode: a manual
+/// set_working_max at [since] pins the TM until [newSets] (qualifying
+/// top sets logged after [since]) reaches [needed].
+typedef ManualPin = ({DateTime since, int newSets, int needed});
 
 // ---------------------------------------------------------------------------
 // §1.4 variants
@@ -323,6 +483,10 @@ final RegExp _grinderNotes =
 
 String _fmtLb(num v) =>
     v == v.roundToDouble() ? v.round().toString() : v.toString();
+
+String _ymdOf(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+    '${d.day.toString().padLeft(2, '0')}';
 
 /// Reading kind from week type + day + controller state (spec §1.2 "from
 /// week type + day template"):
@@ -657,6 +821,17 @@ List<String> painCapLiftsForNote(String note) {
 /// `cap_after_drop_rpe` and two in a row still trigger
 /// `consecutive_drops_action`. The test single is just a reading here
 /// (its @8 implied max IS weight/0.922 — the old reset, now guarded).
+///
+/// MEDIAN SLOW LOOP (program.yaml v13, [TmRule.slowLoop]): identical
+/// overrides and guards, but the TM target is [slowTm] — the caller-
+/// computed [slowTmEstimate] over the reading history INCLUDING this
+/// reading — applied in full with NO session cap (the median supersedes
+/// the ±5 guard by design). Extra override: [manualPin] — while a
+/// manual value is pinned (fewer than `manual_outvote_sets` qualifying
+/// sets since it was set) the decision holds, except grinders/misses
+/// which still drop (safety beats the pin). Decisions therefore RECORD
+/// slow-loop updates; drops keep the fast-loop cap/consecutive
+/// semantics unchanged.
 WmDecision evaluate({
   required String lift,
   required LoadPolicy policy,
@@ -670,6 +845,8 @@ WmDecision evaluate({
   String? manualReason,
   int weeksWithoutReading = 0,
   TmRule? tmRule,
+  SlowTmEstimate? slowTm,
+  ManualPin? manualPin,
 }) {
   final wm = workingMax;
   final prior = priorDecisions.isEmpty ? null : priorDecisions.last;
@@ -833,6 +1010,57 @@ WmDecision evaluate({
       );
     }
 
+    // --- v13 median slow loop: TM tracks the window median in full ---
+    if (tmRule.slowLoop) {
+      if (manualPin != null && manualPin.newSets < manualPin.needed) {
+        return decision(
+          action: 'hold',
+          wmAfter: wm,
+          reason: 'manual TM (${_ymdOf(manualPin.since)}) pinned — '
+              '${manualPin.newSets} of ${manualPin.needed} qualifying top '
+              'sets since; hold',
+        );
+      }
+      if (slowTm == null) {
+        return decision(
+          action: 'hold',
+          wmAfter: wm,
+          reason: 'no qualifying top sets for the slow loop — hold',
+        );
+      }
+      final next = slowTm.value;
+      final why = 'slow loop: median implied '
+          '${slowTm.median.toStringAsFixed(1)} over ${slowTm.sampleCount} '
+          'top sets (${_ymdOf(slowTm.from)}..${_ymdOf(slowTm.to)}, '
+          '${tmRule.windowDays}d ∨ ${tmRule.minSets}-set window)';
+      if (next > wm) {
+        return decision(
+          action: 'raise',
+          wmAfter: next,
+          reason: '$why → ${_fmtLb(next)}',
+        );
+      }
+      if (next < wm) {
+        final consecutive = prior?.action == 'drop';
+        return decision(
+          action: 'drop',
+          wmAfter: next,
+          capNextTopSetRpe: policy.capAfterDropRpe,
+          noTopSetsNextWeek: consecutive &&
+              policy.consecutiveDropsAction == 'no_top_sets_next_week',
+          reason: '$why → ${_fmtLb(next)}; next top set capped at RPE '
+              '${policy.capAfterDropRpe}'
+              '${consecutive ? '; second drop in a row → '
+                  '${policy.consecutiveDropsAction}' : ''}',
+        );
+      }
+      return decision(
+        action: 'hold',
+        wmAfter: wm,
+        reason: '$why = TM ${_fmtLb(wm)} — hold',
+      );
+    }
+
     if (candidate > wm) {
       final capped = wm + tmRule.raiseCapLb;
       final next = candidate < capped ? candidate : capped;
@@ -986,6 +1214,7 @@ List<WmDecision> replayLift({
   );
 
   final decisions = <WmDecision>[];
+  final samples = <Reading>[]; // slow-loop history (median mode)
   var wm = seedWm;
   var capActive = false;
   for (final r in base) {
@@ -1010,6 +1239,7 @@ List<WmDecision> replayLift({
       missed: r.missed,
       variantMismatch: r.variantMismatch,
     );
+    samples.add(reading);
     final d = evaluate(
       lift: lift,
       policy: policy,
@@ -1018,6 +1248,9 @@ List<WmDecision> replayLift({
       reading: reading,
       priorDecisions: decisions,
       tmRule: tmRule,
+      slowTm: tmRule?.slowLoop == true
+          ? slowTmEstimate(samples: samples, currentTm: wm, rule: tmRule!)
+          : null,
     );
     decisions.add(d);
     wm = d.wmAfter;

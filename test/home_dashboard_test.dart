@@ -694,14 +694,15 @@ $dashYamlWithPhases
     }
   });
 
-  testWidgets('muscle-volume driver: readable strip summary + per-group '
-      'vertical list in the detail sheet (clarity pass 2026-09-29 — no '
-      'single-letter muscle groups)', (tester) async {
+  testWidgets('muscle-volume driver: full per-group breakdown ON the '
+      'strip (2026-09-29 — the "N of M groups" summary pill is gone) + '
+      'per-group vertical list in the detail sheet', (tester) async {
     ProgramProvider.clearCache();
     HomeDashboardState.clearBestWeightCache();
     DomainConfigProvider.clearCache();
-    // Program with a muscle map covering three groups — one of them
-    // the underscore key that used to collapse to a colliding letter.
+    // Program with a muscle map covering four groups — one of them
+    // the underscore key that used to collapse to a colliding letter,
+    // and one (back) pushed OVER the band to exercise the amber state.
     const muscleProgramYaml = '''
 versions:
   - version: 1
@@ -715,6 +716,7 @@ versions:
       exercises:
         "Flat Barbell Bench Press": { chest: 1.0 }
         "Barbell Squat": { quads: 1.0, hamstrings_glutes: 0.5 }
+        "Barbell Row": { back: 1.0 }
 ''';
     const muscleDashYaml = '''
 $dashYamlWithPhases
@@ -722,7 +724,7 @@ $dashYamlWithPhases
       - id: hypertrophy_volume
         label: muscle sets
         band: [8, 12]
-        muscle_groups: [quads, hamstrings_glutes, chest]
+        muscle_groups: [quads, hamstrings_glutes, chest, back]
         outcome: "muscle retained"
         why: "8-12 productive sets per muscle group per week."
 ''';
@@ -733,7 +735,8 @@ $dashYamlWithPhases
           _ => null,
         };
     // 9 bench sets → chest 9 (in range); 2 squat sets → quads 2 under,
-    // hamstrings+glutes 1 under (the 0.5 credit).
+    // hamstrings+glutes 1 under (the 0.5 credit); 13 row sets →
+    // back 13 (over the 12 top — the amber warning).
     final strengthRepo = _FakeStatusRepo([
       for (var i = 0; i < 9; i++)
         {
@@ -751,6 +754,14 @@ $dashYamlWithPhases
           'reps': 8,
           'rpe': 8,
         },
+      for (var i = 0; i < 13; i++)
+        {
+          'date': DateTime(2026, 9, 22),
+          'exercise': 'Barbell Row',
+          'weight': 155,
+          'reps': 8,
+          'rpe': 8,
+        },
     ]);
     await tester.pumpWidget(_wrap(HomeDashboard(
       provider: ProgramProvider(muscleFetcher),
@@ -761,23 +772,42 @@ $dashYamlWithPhases
     )));
     await tester.pumpAndSettle();
 
-    // Strip: plain-words label + summary — never the per-group letter
-    // soup ("Q 0/8 H 0/8 …").
+    // Strip: dim header (label + band, full words), then one chip per
+    // muscle group with its actual count — never the "N of M groups"
+    // summary that hid them, never the per-group letter soup.
     expect(
-      find.textContaining('muscle sets', findRichText: true),
+      find.text('muscle sets · 8-12 per group this week'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('1 of 3 groups in the 8-12-set range',
-          findRichText: true),
+      find.textContaining('quads 2', findRichText: true),
       findsOneWidget,
+    );
+    expect(
+      find.textContaining('hamstrings and glutes 1', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('chest 9', findRichText: true),
+      findsOneWidget,
+    );
+    // Over the band is spelled out on the chip itself.
+    expect(
+      find.textContaining('back 13 over', findRichText: true),
+      findsOneWidget,
+    );
+    // The summary pill is retired from the strip.
+    expect(
+      find.textContaining('groups in the', findRichText: true),
+      findsNothing,
     );
     for (final banned in ['hyp sets', 'Q 2/8', 'H 1/8', 'C 9/8']) {
       expect(find.textContaining(banned, findRichText: true), findsNothing,
           reason: 'cryptic muscle tick "$banned" leaked onto the strip');
     }
 
-    // Detail sheet: one line per group — full name, sets, clear state.
+    // Detail sheet: one line per group — full name, sets, clear state —
+    // plus the explanatory copy (kept).
     await tester.tap(find.text('THIS WEEK'));
     await tester.pumpAndSettle();
     expect(
@@ -790,6 +820,14 @@ $dashYamlWithPhases
     );
     expect(
       find.textContaining('chest — 9 sets (in range)'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('back — 13 sets (over the range)'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('1 of 4 groups in the 8-12-set range'),
       findsOneWidget,
     );
     expect(

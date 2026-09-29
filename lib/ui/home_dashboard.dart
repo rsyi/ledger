@@ -2015,7 +2015,8 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// The muscle-volume driver's readable summary ("3 of 7 groups in
   /// range") + per-group states, computed against the config's band
   /// (a group can be under, in, or over the range — "over" is the red
-  /// state, the excess-pulling caution).
+  /// state, the excess-pulling caution). Detail-sheet only since
+  /// 2026-09-29 — the strip shows the full `_MuscleGroupBreakdown`.
   static (String, List<String>) hypertrophyLines(DriverEval d) {
     final band = d.config.band ?? const [8.0, 12.0];
     final lo = band[0] <= band[1] ? band[0] : band[1];
@@ -2156,19 +2157,33 @@ class HomeDashboardState extends State<HomeDashboard> {
 
   /// The driver checklist: one pill per driver (label + tick/progress,
   /// tinted met/pending/violated), today's template line kept below.
+  /// The muscle-volume driver breaks OUT of the pill row (2026-09-29):
+  /// its "2 of 7 groups" summary hid the counts the user acts on, so
+  /// it renders as a full per-group breakdown block instead — vertical
+  /// space over compression, per standing instruction.
   Widget _driverChecklist(
     BuildContext context,
     List<DriverEval> drivers,
     String? templateLine,
   ) {
+    bool isMuscleBreakdown(DriverEval d) =>
+        d.config.id == 'hypertrophy_volume' && d.ticks.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Wrap(
           spacing: 6,
           runSpacing: 6,
-          children: [for (final d in drivers) _DriverPill(eval: d)],
+          children: [
+            for (final d in drivers)
+              if (!isMuscleBreakdown(d)) _DriverPill(eval: d),
+          ],
         ),
+        for (final d in drivers)
+          if (isMuscleBreakdown(d)) ...[
+            const SizedBox(height: 6),
+            _MuscleGroupBreakdown(eval: d),
+          ],
         // The every-two-weeks heavy-single rule, under the singles
         // pills (2026-09-25): amber past heavy_single_max_days, red a
         // week past that.
@@ -3226,9 +3241,9 @@ class _SparklinePainter extends CustomPainter {
 /// met, neutral pending, error-tinted violated (a breached cap/floor).
 /// Per-lift drivers spell the lifts out ("squat ✓ · bench —" /
 /// "squat 1/2 …" — clarity pass 2026-09-29, no more single-letter
-/// ticks); the muscle-volume driver shows a summary ("3 of 7 groups in
-/// the 8-12-set range" — the per-group list is one tap away in the
-/// detail sheet); the stale climb count wears its "as of `last
+/// ticks); the muscle-volume driver doesn't render here at all — it
+/// gets the full `_MuscleGroupBreakdown` block on the strip
+/// (2026-09-29); the stale climb count wears its "as of `last
 /// import`" tag.
 class _DriverPill extends StatelessWidget {
   final DriverEval eval;
@@ -3251,10 +3266,7 @@ class _DriverPill extends StatelessWidget {
         scheme.onErrorContainer,
       ),
     };
-    final detail = eval.config.id == 'hypertrophy_volume' &&
-            eval.ticks.isNotEmpty
-        ? HomeDashboardState.hypertrophyLines(eval).$1
-        : eval.ticks.isNotEmpty
+    final detail = eval.ticks.isNotEmpty
         ? eval.ticks.map(HomeDashboardState._tickText).join(' · ')
         : eval.staleAsOf != null
         ? '${eval.value} · as of '
@@ -3276,6 +3288,81 @@ class _DriverPill extends StatelessWidget {
           children: [
             TextSpan(
               text: detail,
+              style: style?.copyWith(color: fg, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The muscle-volume driver's full per-group breakdown, directly on
+/// the THIS WEEK strip (2026-09-29 — the "2 of 7 groups in the
+/// 8-12-set range" summary pill hid the counts the user acts on; per
+/// standing instruction, vertical space over compression). A dim
+/// header carries the label + band, then one compact chip per muscle
+/// group — full name + sets so far — tinted by band state: under =
+/// dim (normal mid-week), in range = green, over = amber with an
+/// explicit "over" word. The detail sheet keeps its longer per-group
+/// lines + explanatory copy.
+class _MuscleGroupBreakdown extends StatelessWidget {
+  final DriverEval eval;
+  const _MuscleGroupBreakdown({required this.eval});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final band = eval.config.band ?? const [8.0, 12.0];
+    final lo = band[0] <= band[1] ? band[0] : band[1];
+    final hi = band[0] <= band[1] ? band[1] : band[0];
+    final style = AppText.tag(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '${eval.label} · ${lo.round()}-${hi.round()} per group '
+          'this week',
+          style: style?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final t in eval.ticks) _groupChip(context, t, lo, hi),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// One group's chip: "quads 3" / "back 14 over". Under the band is
+  /// the dim pending look (never punitive mid-week); over the top is
+  /// the amber warning — the excess caution, spelled out.
+  Widget _groupChip(BuildContext context, DriverTick t, double lo, double hi) {
+    final scheme = Theme.of(context).colorScheme;
+    final over = t.count > hi;
+    final inRange = !over && t.count >= lo;
+    final (bg, fg) = over
+        ? (Colors.orange.withValues(alpha: 0.18), Colors.orange.shade900)
+        : inRange
+        ? (Colors.green.withValues(alpha: 0.18), Colors.green.shade800)
+        : (scheme.surfaceContainerHighest, scheme.onSurfaceVariant);
+    final style = AppText.tag(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text.rich(
+        TextSpan(
+          text: '${HomeDashboardState.plainName(t.lift)} ',
+          style: style?.copyWith(color: scheme.onSurfaceVariant),
+          children: [
+            TextSpan(
+              text: '${t.count}${over ? ' over' : ''}',
               style: style?.copyWith(color: fg, fontWeight: FontWeight.w700),
             ),
           ],

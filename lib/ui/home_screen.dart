@@ -49,7 +49,7 @@ import 'coach_threads_screen.dart';
 import 'home_dashboard.dart';
 import 'app_text.dart';
 import 'timeline_screen.dart';
-import 'week_plan_screen.dart';
+import 'plan_screen.dart';
 
 /// The synced view that backs the coach chat. Hidden from the normal
 /// tile list; surfaced only through the pinned Coach row + chat screen.
@@ -680,12 +680,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 openDomain(strengthDomain, view);
               }
 
+              // The ROUTINE surface (tab split 2026-09-28): the Program
+              // screen absorbed the old Week Plan screen — this opener
+              // stays as the deep-link alias for every old week-plan
+              // entry point (coach proposals, dashboard rows).
               void openWeekPlan() {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => WeekPlanScreen(
+                    builder: (_) => ProgramScreen(
                       provider: programProvider!,
                       wmStore: data.wmStore,
+                      strengthRepo: dashStrengthView == null
+                          ? null
+                          : data.registry.forView(dashStrengthView),
+                      strengthView: dashStrengthView,
                     ),
                   ),
                 );
@@ -919,11 +927,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       openTimeline: openCoachTimeline,
                     );
 
-              // ---- PROGRAM: embedded program screen; Week plan rides
-              // its app-bar action.
-              final programTab = programProvider == null
+              // ---- PLAN: phases + progress (tab split 2026-09-28 —
+              // replaces the old everything-Program tab); the ROUTINE
+              // (Program screen) rides its app-bar action.
+              final planTab = programProvider == null
                   ? Scaffold(
-                      appBar: AppBar(title: const Text('Program')),
+                      appBar: AppBar(title: const Text('Plan')),
                       body: const Center(
                         child: Padding(
                           padding: EdgeInsets.all(24),
@@ -933,14 +942,14 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     )
-                  : ProgramScreen(
+                  : PlanScreen(
                       provider: programProvider,
                       analytics: data.analytics,
                       weightView: weightView,
                       weightRepo: weightView == null
                           ? null
                           : data.registry.forView(weightView),
-                      // FORECAST initial state: strength history +
+                      // Forecast initial state: strength history +
                       // climbing ascents (kaya_ascents is read-only —
                       // route through the direct-sheet repo).
                       strengthView: dashStrengthView,
@@ -953,8 +962,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         readOnlyRepo: data.readOnlyRepo,
                         forView: data.registry.forView,
                       ),
-                      wmStore: data.wmStore,
-                      onOpenWeekPlan: openWeekPlan,
+                      onOpenRoutine: openWeekPlan,
                     );
 
               // IndexedStack keeps every tab's state (scroll positions,
@@ -963,7 +971,7 @@ class _HomeScreenState extends State<HomeScreen> {
               // four together.
               return IndexedStack(
                 index: _tab,
-                children: [homeTab, logTab, coachTab, programTab],
+                children: [homeTab, logTab, coachTab, planTab],
               );
             },
           ),
@@ -995,7 +1003,7 @@ class _HomeScreenState extends State<HomeScreen> {
               NavigationDestination(
                 icon: Icon(Icons.track_changes_outlined),
                 selectedIcon: Icon(Icons.track_changes),
-                label: 'Program',
+                label: 'Plan',
               ),
             ],
           ),

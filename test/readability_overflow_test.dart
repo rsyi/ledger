@@ -18,6 +18,7 @@ import 'package:airledger/services/program_provider.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
 import 'package:airledger/ui/domain_screen.dart';
+import 'package:airledger/ui/plan_screen.dart';
 import 'package:airledger/ui/program_screen.dart';
 
 class _FakeRepo implements WarehouseConnector {
@@ -185,7 +186,7 @@ domains:
   });
 
   testWidgets(
-      'program screen (declared/blocks/observed/wilks/verdict) '
+      'plan screen (declared/blocks/progress/verdict) '
       'reflows without overflow at 360dp', (tester) async {
     ProgramProvider.clearCache();
     DomainConfigProvider.clearCache();
@@ -199,7 +200,7 @@ domains:
         };
 
     await tester.pumpWidget(MaterialApp(
-      home: ProgramScreen(
+      home: PlanScreen(
         provider: ProgramProvider(fetcher),
         weightRepo: _FakeRepo(_weighIns()),
         weightView: _view('weight'),
@@ -225,6 +226,40 @@ domains:
     );
     await tester.pumpAndSettle();
     expect(find.text('VERDICT'), findsOneWidget);
+    // Reaching here without a RenderFlex overflow report = pass.
+  });
+
+  testWidgets(
+      'program (routine) screen — header, day tiles, session rows '
+      'reflow without overflow at 360dp', (tester) async {
+    ProgramProvider.clearCache();
+    _sizeAt(tester, const Size(360, 690));
+
+    Future<String?> fetcher(String path) async => switch (path) {
+          'coach/phase.yaml' => phaseYaml,
+          'coach/program.yaml' => programYaml,
+          _ => null,
+        };
+
+    await tester.pumpWidget(MaterialApp(
+      home: ProgramScreen(
+        provider: ProgramProvider(fetcher),
+        strengthRepo: _FakeRepo(_strengthRows()),
+        strengthView: _view('strength'),
+        today: DateTime(2026, 9, 23),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // Header card with the week range + day tiles.
+    expect(find.textContaining('Block 0'), findsOneWidget);
+    expect(find.text('Mon'), findsOneWidget);
+    await tester.dragUntilVisible(
+      find.text('Sun'),
+      find.byType(ListView),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
     // Reaching here without a RenderFlex overflow report = pass.
   });
 }

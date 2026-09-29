@@ -105,12 +105,15 @@ void main() {
     // MC landed (injected runner): the summary carries P(V8).
     expect(summary, contains('P(V8)'));
 
-    // Expressed chart: index line AND true line (baseline hidden, no
-    // capacity toggle → exactly 2 line series).
+    // Expressed chart: capacity + index + true (today falls in the CUT
+    // block, so the capacity line is ON by default — user request
+    // 2026-09-28; baseline hidden → exactly 3 line series).
     final expressed = chartData(tester, 'sim2-expressed-chart');
-    expect(expressed.lineBarsData.length, 2);
-    final idxLine = expressed.lineBarsData[0]; // dashed index first
-    final trueLine = expressed.lineBarsData[1];
+    expect(expressed.lineBarsData.length, 3);
+    final capLine = expressed.lineBarsData[0]; // dotted capacity first
+    final idxLine = expressed.lineBarsData[1]; // dashed index
+    final trueLine = expressed.lineBarsData[2];
+    expect(capLine.dashArray, isNotNull);
     expect(idxLine.dashArray, isNotNull);
     expect(trueLine.dashArray, isNull);
     // The attempt-gate lag: index starts below true (the cut's N=3 is
@@ -125,8 +128,13 @@ void main() {
     expect(find.byKey(const ValueKey('sim2-compare')), findsNothing);
   });
 
-  testWidgets('capacity toggle adds the capacity line', (tester) async {
+  testWidgets('capacity toggle removes the (default-on) capacity line',
+      (tester) async {
     await pumpSection(tester);
+    // In-cut default is ON; toggling off leaves index + true.
+    await tester.tap(find.byKey(const ValueKey('sim2-capacity-toggle')));
+    await tester.pump();
+    expect(chartData(tester, 'sim2-expressed-chart').lineBarsData.length, 2);
     await tester.tap(find.byKey(const ValueKey('sim2-capacity-toggle')));
     await tester.pump();
     expect(chartData(tester, 'sim2-expressed-chart').lineBarsData.length, 3);
@@ -176,9 +184,9 @@ void main() {
     expect(summary, contains('baseline:')); // §8: baseline reported next to it
 
     // Strength falls (report: 968 vs 1023) and the scenario chart now
-    // carries the baseline line too (grey + index + true).
+    // carries the baseline line too (grey + capacity + index + true).
     final expressed = chartData(tester, 'sim2-expressed-chart');
-    expect(expressed.lineBarsData.length, 3);
+    expect(expressed.lineBarsData.length, 4);
     expect(expressed.lineBarsData.last.spots.last.y, lessThan(baseTotal - 30));
 
     // Compare card present with over-budget row.
@@ -328,5 +336,53 @@ void main() {
     expect(bf, hasLength(1));
     expect(find.textContaining('expectation range, not target'),
         findsNWidgets(2));
+  });
+
+  testWidgets('compact mode (Plan tab): chart + summary up front, the rest '
+      'folded and expandable', (tester) async {
+    tester.view.physicalSize = const Size(800, 5200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: ForecastSection(
+            inputs: inputs(),
+            today: _today,
+            mcRunner: testMcRunner,
+            compact: true,
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    // Default view: summary + the ONE combined progress chart (capacity
+    // ON — today is in the cut).
+    expect(find.byKey(const ValueKey('sim2-summary')), findsOneWidget);
+    expect(chartData(tester, 'sim2-expressed-chart').lineBarsData.length, 3);
+
+    // Everything else is folded: the foldout headers exist, their
+    // contents don't (collapsed ExpansionTiles build no children).
+    for (final k in [
+      'sim2-fold-scenarios',
+      'sim2-fold-body',
+      'sim2-fold-climb',
+      'sim2-fold-vo2',
+      'sim2-fold-fatigue',
+    ]) {
+      expect(find.byKey(ValueKey(k)), findsOneWidget, reason: k);
+    }
+    expect(find.byKey(const ValueKey('sim2-bw-chart')), findsNothing);
+    expect(find.byKey(const ValueKey('sim2-f-chart')), findsNothing);
+    expect(find.byKey(const ValueKey('sim2-preset-baseline')), findsNothing);
+
+    // Expanding SCENARIOS & LEVERS reveals the preset chips + dials.
+    await scrollTo(tester, find.byKey(const ValueKey('sim2-fold-scenarios')));
+    await tester.tap(find.byKey(const ValueKey('sim2-fold-scenarios')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sim2-preset-baseline')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-dial-n')), findsOneWidget);
   });
 }

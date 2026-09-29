@@ -111,15 +111,15 @@ class Sim2McJob {
 typedef Sim2McRunner = Future<Sim2McSummary> Function(Sim2McJob job);
 
 Future<Sim2McSummary> _isolateMcRunner(Sim2McJob j) => sim2MonteCarloInIsolate(
-      params: j.params,
-      blocks: j.blocks,
-      start: j.start,
-      presetId: j.presetId,
-      overrides: j.overrides,
-      muDeficit: j.muDeficit,
-      observedBw: j.observedBw,
-      observedIndexTotal: j.observedIndexTotal,
-    );
+  params: j.params,
+  blocks: j.blocks,
+  start: j.start,
+  presetId: j.presetId,
+  overrides: j.overrides,
+  muDeficit: j.muDeficit,
+  observedBw: j.observedBw,
+  observedIndexTotal: j.observedIndexTotal,
+);
 
 // ---------------------------------------------------------------------------
 // The section
@@ -133,11 +133,20 @@ class ForecastSection extends StatefulWidget {
   /// the 200 paths via Isolate.run — never on the UI thread.
   final Sim2McRunner mcRunner;
 
+  /// Decluttered mode (the Plan tab, 2026-09-28 tab split): the default
+  /// view is the summary line + the ONE combined progress chart
+  /// (expressed + capacity, capacity ON by default during cuts);
+  /// scenarios/levers, body comp, climbing, VO2 and the fatigue budget
+  /// fold into expandable sections. False = the original flat layout
+  /// (widget tests exercise every control there).
+  final bool compact;
+
   const ForecastSection({
     super.key,
     required this.inputs,
     required this.today,
     this.mcRunner = _isolateMcRunner,
+    this.compact = false,
   });
 
   @override
@@ -169,6 +178,18 @@ class _ForecastSectionState extends State<ForecastSection> {
     super.initState();
     _params = Sim2Params.fitted();
     _start = sim2StartMonday(widget.today);
+    // During a cut the EXPRESSED line sags by design (deficit +
+    // attempt-gate); the capacity line is the honest progress signal —
+    // show it by default there (user request, 2026-09-28).
+    final day = DateTime.utc(
+      widget.today.year,
+      widget.today.month,
+      widget.today.day,
+    );
+    _showCapacity = widget.inputs.blocks.any(
+      (b) =>
+          b.emphasis == 'cut' && !day.isBefore(b.start) && !day.isAfter(b.end),
+    );
     _recompute();
   }
 
@@ -188,9 +209,7 @@ class _ForecastSectionState extends State<ForecastSection> {
     // Deterministic runs are synchronous — ~120 weekly steps, safe on
     // slider drag (the W2 contract carried over from v1).
     _base = _run(presetId: 'baseline', ov: const Sim2DialOverrides());
-    _scen = _isBaseline
-        ? _base
-        : _run(presetId: _preset, ov: _overrides);
+    _scen = _isBaseline ? _base : _run(presetId: _preset, ov: _overrides);
     _kickMc();
   }
 
@@ -201,15 +220,15 @@ class _ForecastSectionState extends State<ForecastSection> {
     _mcBase = null;
     _mcScen = null;
     Sim2McJob job(String presetId, Sim2DialOverrides ov) => Sim2McJob(
-          params: _params.copy(),
-          blocks: widget.inputs.blocks,
-          start: _start,
-          presetId: presetId,
-          overrides: ov,
-          muDeficit: _mu,
-          observedBw: widget.inputs.observedBw,
-          observedIndexTotal: widget.inputs.observedIndexTotal,
-        );
+      params: _params.copy(),
+      blocks: widget.inputs.blocks,
+      start: _start,
+      presetId: presetId,
+      overrides: ov,
+      muDeficit: _mu,
+      observedBw: widget.inputs.observedBw,
+      observedIndexTotal: widget.inputs.observedIndexTotal,
+    );
     widget.mcRunner(job('baseline', const Sim2DialOverrides())).then((s) {
       if (mounted && token == _mcToken) setState(() => _mcBase = s);
     });
@@ -222,23 +241,22 @@ class _ForecastSectionState extends State<ForecastSection> {
   Sim2McSummary? get _mcForScenario => _isBaseline ? _mcBase : _mcScen;
 
   void _setPreset(String id) => setState(() {
-        _preset = id;
-        _recompute();
-      });
+    _preset = id;
+    _recompute();
+  });
 
   void _setOverrides(Sim2DialOverrides ov) => setState(() {
-        _overrides = ov;
-        _recompute();
-      });
+    _overrides = ov;
+    _recompute();
+  });
 
   void _setMu(double? mu) => setState(() {
-        _mu = mu;
-        _recompute();
-      });
+    _mu = mu;
+    _recompute();
+  });
 
   void _editParam(Sim2ParamDef def) async {
-    final controller =
-        TextEditingController(text: _fmtParam(def.get(_params)));
+    final controller = TextEditingController(text: _fmtParam(def.get(_params)));
     final applied = await showDialog<double>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -250,8 +268,10 @@ class _ForecastSectionState extends State<ForecastSection> {
             TextField(
               controller: controller,
               autofocus: true,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true, signed: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+                signed: true,
+              ),
               decoration: InputDecoration(
                 labelText: 'value [${def.tag}] — prior ${_fmtParam(def.prior)}',
               ),
@@ -290,308 +310,151 @@ class _ForecastSectionState extends State<ForecastSection> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final horizonLabel =
-        DateFormat("MMM d ''yy").format(widget.inputs.blocks.last.end);
+    final horizonLabel = DateFormat(
+      "MMM d ''yy",
+    ).format(widget.inputs.blocks.last.end);
+
+    final summary = _SummaryLine(
+      key: const ValueKey('sim2-summary'),
+      base: _base,
+      scen: _scen,
+      isBaseline: _isBaseline,
+      presetLabel: sim2PresetById(_preset).label,
+      mc: _mcForScenario,
+      horizonLabel: horizonLabel,
+    );
+    final strengthCard = _card(
+      context,
+      title: 'STRENGTH — EXPRESSED TOTAL',
+      trailing: FilterChip(
+        key: const ValueKey('sim2-capacity-toggle'),
+        label: const Text('capacity'),
+        visualDensity: VisualDensity.compact,
+        selected: _showCapacity,
+        onSelected: (v) => setState(() => _showCapacity = v),
+      ),
+      child: _strengthBody(context, horizonLabel),
+    );
+    final paramSheet = _ParamSheet(
+      params: _params,
+      edited: _paramsEdited,
+      onEdit: _editParam,
+      onReset: () => setState(() {
+        _params = Sim2Params.fitted();
+        _recompute();
+      }),
+    );
+    final footer = Text(
+      'sim2 (two-layer §2: S_obs = capacity × expression). The log '
+      'calibrates strength + the recovery budget; §3-§6 (climbing, '
+      'VO2, body comp, calisthenics) are PRIORS, labeled so. Dial '
+      'overrides are global (per-block overrides: later wave). State '
+      'seeded from the Sep 2026 RPE readings [log]'
+      '${widget.inputs.observedBw != null ? '; bw + index refreshed '
+                'from local history' : ''}.',
+      style: AppText.micro(context),
+    );
+
+    if (widget.compact) {
+      // Plan-tab declutter: summary + THE progress chart up front;
+      // everything else folds.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          summary,
+          const SizedBox(height: 8),
+          strengthCard,
+          const SizedBox(height: 8),
+          _foldout(
+            context,
+            key: 'sim2-fold-scenarios',
+            title: 'SCENARIOS & LEVERS',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _PresetChips(selected: _preset, onSelect: _setPreset),
+                const SizedBox(height: 8),
+                _DialsCard(overrides: _overrides, onChanged: _setOverrides),
+                if (!_isBaseline) ...[
+                  const SizedBox(height: 8),
+                  _CompareCard(
+                    key: const ValueKey('sim2-compare'),
+                    base: _base,
+                    scen: _scen,
+                    mcBase: _mcBase,
+                    mcScen: _mcScen,
+                    presetLabel: sim2PresetById(_preset).label,
+                    overridden: !_overrides.isEmpty,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          _foldout(
+            context,
+            key: 'sim2-fold-body',
+            title: 'BODY COMPOSITION',
+            child: _bodyCompBody(context),
+          ),
+          const SizedBox(height: 8),
+          _foldout(
+            context,
+            key: 'sim2-fold-climb',
+            title: 'CLIMBING',
+            child: _climbBody(context, horizonLabel),
+          ),
+          const SizedBox(height: 8),
+          _foldout(
+            context,
+            key: 'sim2-fold-vo2',
+            title: 'VO2 MAX',
+            child: _vo2Body(context),
+          ),
+          const SizedBox(height: 8),
+          _foldout(
+            context,
+            key: 'sim2-fold-fatigue',
+            title: 'FATIGUE BUDGET',
+            child: _fatigueBody(context),
+          ),
+          const SizedBox(height: 8),
+          paramSheet,
+          const SizedBox(height: 6),
+          footer,
+        ],
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _SummaryLine(
-          key: const ValueKey('sim2-summary'),
-          base: _base,
-          scen: _scen,
-          isBaseline: _isBaseline,
-          presetLabel: sim2PresetById(_preset).label,
-          mc: _mcForScenario,
-          horizonLabel: horizonLabel,
-        ),
+        summary,
         const SizedBox(height: 8),
         _PresetChips(selected: _preset, onSelect: _setPreset),
         const SizedBox(height: 8),
-        _DialsCard(
-          overrides: _overrides,
-          onChanged: _setOverrides,
-        ),
+        _DialsCard(overrides: _overrides, onChanged: _setOverrides),
         const SizedBox(height: 8),
-        _card(
-          context,
-          title: 'STRENGTH — EXPRESSED TOTAL',
-          trailing: FilterChip(
-            key: const ValueKey('sim2-capacity-toggle'),
-            label: const Text('capacity'),
-            visualDensity: VisualDensity.compact,
-            selected: _showCapacity,
-            onSelected: (v) => setState(() => _showCapacity = v),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _Sim2Chart(
-                key: const ValueKey('sim2-expressed-chart'),
-                run: _scen,
-                expectationBand: widget.inputs.expectations?.sbdTotalLb,
-                series: [
-                  if (!_isBaseline)
-                    _ChartSeries(
-                      [for (final w in _base.weeks) (w.monday, w.sTrue)],
-                      scheme.outline.withValues(alpha: 0.6),
-                      width: 1.4,
-                    ),
-                  if (_showCapacity)
-                    _ChartSeries(
-                      [for (final w in _scen.weeks) (w.monday, w.sCap)],
-                      scheme.tertiary,
-                      width: 1.6,
-                      dash: const [2, 4],
-                    ),
-                  _ChartSeries(
-                    [for (final w in _scen.weeks) (w.monday, w.sIdx)],
-                    scheme.primary.withValues(alpha: 0.65),
-                    width: 1.8,
-                    dash: const [6, 4],
-                  ),
-                  _ChartSeries(
-                    [for (final w in _scen.weeks) (w.monday, w.sTrue)],
-                    scheme.primary,
-                    width: 2.5,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'true expressed (solid) ${_lb(_scen.last.sTrue)} vs app '
-                'index (dashed) ${_lb(_scen.last.sIdx)} — the index lags '
-                'through the attempt gate; the catch-up is measurement, '
-                'not physiology${_showCapacity ? ' · capacity (dotted) '
-                    '${_lb(_scen.last.sCap)}' : ''}'
-                '${_isBaseline ? '' : ' · baseline in grey'}',
-                style: AppText.micro(context),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                'S ${_lb(_scen.last.squat)} · B ${_lb(_scen.last.bench)} · '
-                'D ${_lb(_scen.last.deadlift)} · P ${_lb(_scen.last.press)} '
-                'at $horizonLabel',
-                style: AppText.tag(context),
-              ),
-              if (widget.inputs.expectations?.sbdTotalLb != null)
-                Text(
-                  key: const ValueKey('sim2-expectation-strength'),
-                  'shaded: SBD '
-                  '${_lb(widget.inputs.expectations!.sbdTotalLb![0])}–'
-                  '${_lb(widget.inputs.expectations!.sbdTotalLb![1])}'
-                  '${widget.inputs.expectations!.ohpLb != null ? ' · OHP '
-                      '${_lb(widget.inputs.expectations!.ohpLb![0])}–'
-                      '${_lb(widget.inputs.expectations!.ohpLb![1])}' : ''}'
-                  ' — expectation range, not target',
-                  style: AppText.micro(context),
-                ),
-            ],
-          ),
-        ),
+        strengthCard,
         const SizedBox(height: 8),
         _card(
           context,
           title: 'BODY COMPOSITION — OBSERVED + FORECAST',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _BwChart(
-                key: const ValueKey('sim2-bw-chart'),
-                base: _base,
-                scen: _scen,
-                isBaseline: _isBaseline,
-                daily: widget.inputs.observedDaily,
-                today: widget.today,
-                expectationBand: widget.inputs.expectations?.bodyweightLb,
-              ),
-              const SizedBox(height: 6),
-              if (widget.inputs.expectations?.bodyweightLb != null)
-                Text(
-                  key: const ValueKey('sim2-expectation-bw'),
-                  'shaded: '
-                  '${widget.inputs.expectations!.bodyweightLb![0].toStringAsFixed(0)}–'
-                  '${widget.inputs.expectations!.bodyweightLb![1].toStringAsFixed(0)} lb'
-                  ' — expectation range, not target',
-                  style: AppText.micro(context),
-                ),
-              _StatsRow(stats: widget.inputs.stats),
-              const SizedBox(height: 10),
-              Text('BF%', style: AppText.tag(context)),
-              _Sim2Chart(
-                key: const ValueKey('sim2-bf-chart'),
-                run: _scen,
-                height: 130,
-                yDecimals: 1,
-                expectationBand: widget.inputs.expectations?.bfPct,
-                series: [
-                  if (!_isBaseline)
-                    _ChartSeries(
-                      [for (final w in _base.weeks) (w.monday, w.bfPct)],
-                      scheme.outline.withValues(alpha: 0.6),
-                      width: 1.4,
-                    ),
-                  _ChartSeries(
-                    [for (final w in _scen.weeks) (w.monday, w.bfPct)],
-                    scheme.tertiary,
-                    width: 2.2,
-                    dash: const [6, 4],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              // Wrap, not Row — the two branch chips overflow at 360dp.
-              Wrap(
-                spacing: 6,
-                runSpacing: -6,
-                children: [
-                  ChoiceChip(
-                    key: const ValueKey('sim2-mu-rule'),
-                    label: const Text('μ=0.30 (§5 rule)'),
-                    visualDensity: VisualDensity.compact,
-                    selected: _mu == null,
-                    onSelected: (_) => _setMu(null),
-                  ),
-                  ChoiceChip(
-                    key: const ValueKey('sim2-mu-zero'),
-                    label: const Text('μ≈0 (13%@154 anchor)'),
-                    visualDensity: VisualDensity.compact,
-                    selected: _mu != null,
-                    onSelected: (_) => _setMu(0.0),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'deficit lean-loss branch — the two readings of §5, '
-                'unresolved until the Nov DEXA · horizon BF '
-                '${_scen.last.bfPct.toStringAsFixed(1)}% at '
-                '${_scen.last.bw.toStringAsFixed(1)} lb',
-                style: AppText.micro(context),
-              ),
-            ],
-          ),
+          child: _bodyCompBody(context),
         ),
         const SizedBox(height: 8),
         _card(
           context,
           title: 'CLIMBING — CONTINUOUS V GRADE',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _Sim2Chart(
-                key: const ValueKey('sim2-climb-chart'),
-                run: _scen,
-                height: 150,
-                yDecimals: 1,
-                series: [
-                  if (!_isBaseline)
-                    _ChartSeries(
-                      [for (final w in _base.weeks) (w.monday, w.c)],
-                      scheme.outline.withValues(alpha: 0.6),
-                      width: 1.4,
-                    ),
-                  _ChartSeries(
-                    [for (final w in _scen.weeks) (w.monday, w.c)],
-                    scheme.secondary,
-                    width: 2.2,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                key: const ValueKey('sim2-pv8'),
-                _mcForScenario == null
-                    ? 'C ${_scen.last.c.toStringAsFixed(1)} at horizon · '
-                        'P(V8) computing (200 MC paths, off-thread) — '
-                        'deterministic line shown'
-                    : 'C ${_scen.last.c.toStringAsFixed(1)} at horizon · '
-                        'P(V8 sent by $horizonLabel) '
-                        '${(_mcForScenario!.pV8Sent * 100).round()}% '
-                        '(MC ${_mcForScenario!.paths} paths, +'
-                        '${_params.sendMargin.toStringAsFixed(1)} send '
-                        'margin [log]) · C p20 '
-                        '${_mcForScenario!.p20C.toStringAsFixed(1)}',
-                style: AppText.micro(context),
-              ),
-            ],
-          ),
+          child: _climbBody(context, horizonLabel),
         ),
         const SizedBox(height: 8),
-        _card(
-          context,
-          title: 'VO2 MAX',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _Sim2Chart(
-                key: const ValueKey('sim2-vo2-chart'),
-                run: _scen,
-                height: 130,
-                series: [
-                  if (!_isBaseline)
-                    _ChartSeries(
-                      [for (final w in _base.weeks) (w.monday, w.vo2)],
-                      scheme.outline.withValues(alpha: 0.6),
-                      width: 1.4,
-                    ),
-                  _ChartSeries(
-                    [for (final w in _scen.weeks) (w.monday, w.vo2)],
-                    Colors.teal,
-                    width: 2.2,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'score = Vabs / bw — the bulk lowers it on its own; '
-                '${_scen.last.vo2.toStringAsFixed(1)} at horizon '
-                '(§4 priors; Cardio up holds ~52)',
-                style: AppText.micro(context),
-              ),
-            ],
-          ),
-        ),
+        _card(context, title: 'VO2 MAX', child: _vo2Body(context)),
         const SizedBox(height: 8),
         _card(
           context,
           title: 'FATIGUE F — BUDGET RED FLAGS',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _Sim2Chart(
-                key: const ValueKey('sim2-f-chart'),
-                run: _scen,
-                height: 130,
-                yDecimals: 1,
-                redFlagAlpha: 0.16,
-                series: [
-                  if (!_isBaseline)
-                    _ChartSeries(
-                      [for (final w in _base.weeks) (w.monday, w.f)],
-                      scheme.outline.withValues(alpha: 0.6),
-                      width: 1.4,
-                    ),
-                  _ChartSeries(
-                    [for (final w in _scen.weeks) (w.monday, w.f)],
-                    scheme.error,
-                    width: 2.2,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'over-budget weeks: ${_scen.overBudgetWeeks}'
-                '${_isBaseline ? '' : ' (baseline ${_base.overBudgetWeeks})'}'
-                ' — red spans are L > L_cap: the model\'s confidence '
-                'collapses there (it is extrapolating into the pattern '
-                'that failed).',
-                style: AppText.micro(context)
-                    ?.copyWith(color: scheme.error),
-              ),
-            ],
-          ),
+          child: _fatigueBody(context),
         ),
         if (!_isBaseline) ...[
           const SizedBox(height: 8),
@@ -606,32 +469,312 @@ class _ForecastSectionState extends State<ForecastSection> {
           ),
         ],
         const SizedBox(height: 8),
-        _ParamSheet(
-          params: _params,
-          edited: _paramsEdited,
-          onEdit: _editParam,
-          onReset: () => setState(() {
-            _params = Sim2Params.fitted();
-            _recompute();
-          }),
+        paramSheet,
+        const SizedBox(height: 6),
+        footer,
+      ],
+    );
+  }
+
+  Widget _strengthBody(BuildContext context, String horizonLabel) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _Sim2Chart(
+          key: const ValueKey('sim2-expressed-chart'),
+          run: _scen,
+          expectationBand: widget.inputs.expectations?.sbdTotalLb,
+          series: [
+            if (!_isBaseline)
+              _ChartSeries(
+                [for (final w in _base.weeks) (w.monday, w.sTrue)],
+                scheme.outline.withValues(alpha: 0.6),
+                width: 1.4,
+              ),
+            if (_showCapacity)
+              _ChartSeries(
+                [for (final w in _scen.weeks) (w.monday, w.sCap)],
+                scheme.tertiary,
+                width: 1.6,
+                dash: const [2, 4],
+              ),
+            _ChartSeries(
+              [for (final w in _scen.weeks) (w.monday, w.sIdx)],
+              scheme.primary.withValues(alpha: 0.65),
+              width: 1.8,
+              dash: const [6, 4],
+            ),
+            _ChartSeries(
+              [for (final w in _scen.weeks) (w.monday, w.sTrue)],
+              scheme.primary,
+              width: 2.5,
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'true expressed (solid) ${_lb(_scen.last.sTrue)} vs app '
+          'index (dashed) ${_lb(_scen.last.sIdx)} — the index lags '
+          'through the attempt gate; the catch-up is measurement, '
+          'not physiology${_showCapacity ? ' · capacity (dotted) '
+                    '${_lb(_scen.last.sCap)}' : ''}'
+          '${_isBaseline ? '' : ' · baseline in grey'}',
+          style: AppText.micro(context),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'S ${_lb(_scen.last.squat)} · B ${_lb(_scen.last.bench)} · '
+          'D ${_lb(_scen.last.deadlift)} · P ${_lb(_scen.last.press)} '
+          'at $horizonLabel',
+          style: AppText.tag(context),
+        ),
+        if (widget.inputs.expectations?.sbdTotalLb != null)
+          Text(
+            key: const ValueKey('sim2-expectation-strength'),
+            'shaded: SBD '
+            '${_lb(widget.inputs.expectations!.sbdTotalLb![0])}–'
+            '${_lb(widget.inputs.expectations!.sbdTotalLb![1])}'
+            '${widget.inputs.expectations!.ohpLb != null ? ' · OHP '
+                      '${_lb(widget.inputs.expectations!.ohpLb![0])}–'
+                      '${_lb(widget.inputs.expectations!.ohpLb![1])}' : ''}'
+            ' — expectation range, not target',
+            style: AppText.micro(context),
+          ),
+      ],
+    );
+  }
+
+  Widget _bodyCompBody(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _BwChart(
+          key: const ValueKey('sim2-bw-chart'),
+          base: _base,
+          scen: _scen,
+          isBaseline: _isBaseline,
+          daily: widget.inputs.observedDaily,
+          today: widget.today,
+          expectationBand: widget.inputs.expectations?.bodyweightLb,
         ),
         const SizedBox(height: 6),
+        if (widget.inputs.expectations?.bodyweightLb != null)
+          Text(
+            key: const ValueKey('sim2-expectation-bw'),
+            'shaded: '
+            '${widget.inputs.expectations!.bodyweightLb![0].toStringAsFixed(0)}–'
+            '${widget.inputs.expectations!.bodyweightLb![1].toStringAsFixed(0)} lb'
+            ' — expectation range, not target',
+            style: AppText.micro(context),
+          ),
+        _StatsRow(stats: widget.inputs.stats),
+        const SizedBox(height: 10),
+        Text('BF%', style: AppText.tag(context)),
+        _Sim2Chart(
+          key: const ValueKey('sim2-bf-chart'),
+          run: _scen,
+          height: 130,
+          yDecimals: 1,
+          expectationBand: widget.inputs.expectations?.bfPct,
+          series: [
+            if (!_isBaseline)
+              _ChartSeries(
+                [for (final w in _base.weeks) (w.monday, w.bfPct)],
+                scheme.outline.withValues(alpha: 0.6),
+                width: 1.4,
+              ),
+            _ChartSeries(
+              [for (final w in _scen.weeks) (w.monday, w.bfPct)],
+              scheme.tertiary,
+              width: 2.2,
+              dash: const [6, 4],
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        // Wrap, not Row — the two branch chips overflow at 360dp.
+        Wrap(
+          spacing: 6,
+          runSpacing: -6,
+          children: [
+            ChoiceChip(
+              key: const ValueKey('sim2-mu-rule'),
+              label: const Text('μ=0.30 (§5 rule)'),
+              visualDensity: VisualDensity.compact,
+              selected: _mu == null,
+              onSelected: (_) => _setMu(null),
+            ),
+            ChoiceChip(
+              key: const ValueKey('sim2-mu-zero'),
+              label: const Text('μ≈0 (13%@154 anchor)'),
+              visualDensity: VisualDensity.compact,
+              selected: _mu != null,
+              onSelected: (_) => _setMu(0.0),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
         Text(
-          'sim2 (two-layer §2: S_obs = capacity × expression). The log '
-          'calibrates strength + the recovery budget; §3-§6 (climbing, '
-          'VO2, body comp, calisthenics) are PRIORS, labeled so. Dial '
-          'overrides are global (per-block overrides: later wave). State '
-          'seeded from the Sep 2026 RPE readings [log]'
-          '${widget.inputs.observedBw != null ? '; bw + index refreshed '
-              'from local history' : ''}.',
+          'deficit lean-loss branch — the two readings of §5, '
+          'unresolved until the Nov DEXA · horizon BF '
+          '${_scen.last.bfPct.toStringAsFixed(1)}% at '
+          '${_scen.last.bw.toStringAsFixed(1)} lb',
           style: AppText.micro(context),
         ),
       ],
     );
   }
 
-  Widget _card(BuildContext context,
-      {required String title, required Widget child, Widget? trailing}) {
+  Widget _climbBody(BuildContext context, String horizonLabel) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _Sim2Chart(
+          key: const ValueKey('sim2-climb-chart'),
+          run: _scen,
+          height: 150,
+          yDecimals: 1,
+          series: [
+            if (!_isBaseline)
+              _ChartSeries(
+                [for (final w in _base.weeks) (w.monday, w.c)],
+                scheme.outline.withValues(alpha: 0.6),
+                width: 1.4,
+              ),
+            _ChartSeries(
+              [for (final w in _scen.weeks) (w.monday, w.c)],
+              scheme.secondary,
+              width: 2.2,
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          key: const ValueKey('sim2-pv8'),
+          _mcForScenario == null
+              ? 'C ${_scen.last.c.toStringAsFixed(1)} at horizon · '
+                    'P(V8) computing (200 MC paths, off-thread) — '
+                    'deterministic line shown'
+              : 'C ${_scen.last.c.toStringAsFixed(1)} at horizon · '
+                    'P(V8 sent by $horizonLabel) '
+                    '${(_mcForScenario!.pV8Sent * 100).round()}% '
+                    '(MC ${_mcForScenario!.paths} paths, +'
+                    '${_params.sendMargin.toStringAsFixed(1)} send '
+                    'margin [log]) · C p20 '
+                    '${_mcForScenario!.p20C.toStringAsFixed(1)}',
+          style: AppText.micro(context),
+        ),
+      ],
+    );
+  }
+
+  Widget _vo2Body(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _Sim2Chart(
+          key: const ValueKey('sim2-vo2-chart'),
+          run: _scen,
+          height: 130,
+          series: [
+            if (!_isBaseline)
+              _ChartSeries(
+                [for (final w in _base.weeks) (w.monday, w.vo2)],
+                scheme.outline.withValues(alpha: 0.6),
+                width: 1.4,
+              ),
+            _ChartSeries(
+              [for (final w in _scen.weeks) (w.monday, w.vo2)],
+              Colors.teal,
+              width: 2.2,
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'score = Vabs / bw — the bulk lowers it on its own; '
+          '${_scen.last.vo2.toStringAsFixed(1)} at horizon '
+          '(§4 priors; Cardio up holds ~52)',
+          style: AppText.micro(context),
+        ),
+      ],
+    );
+  }
+
+  Widget _fatigueBody(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _Sim2Chart(
+          key: const ValueKey('sim2-f-chart'),
+          run: _scen,
+          height: 130,
+          yDecimals: 1,
+          redFlagAlpha: 0.16,
+          series: [
+            if (!_isBaseline)
+              _ChartSeries(
+                [for (final w in _base.weeks) (w.monday, w.f)],
+                scheme.outline.withValues(alpha: 0.6),
+                width: 1.4,
+              ),
+            _ChartSeries(
+              [for (final w in _scen.weeks) (w.monday, w.f)],
+              scheme.error,
+              width: 2.2,
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'over-budget weeks: ${_scen.overBudgetWeeks}'
+          '${_isBaseline ? '' : ' (baseline ${_base.overBudgetWeeks})'}'
+          ' — red spans are L > L_cap: the model\'s confidence '
+          'collapses there (it is extrapolating into the pattern '
+          'that failed).',
+          style: AppText.micro(context)?.copyWith(color: scheme.error),
+        ),
+      ],
+    );
+  }
+
+  /// One collapsed expandable section (the Plan-tab compact mode).
+  Widget _foldout(
+    BuildContext context, {
+    required String key,
+    required String title,
+    required Widget child,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      color: scheme.surfaceContainerHighest,
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: ValueKey(key),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          title: Text(title, style: AppText.title(context)),
+          children: [child],
+        ),
+      ),
+    );
+  }
+
+  Widget _card(
+    BuildContext context, {
+    required String title,
+    required Widget child,
+    Widget? trailing,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     return Card(
       elevation: 0,
@@ -715,8 +858,10 @@ class _SummaryLine extends StatelessWidget {
             if (!isBaseline)
               Padding(
                 padding: const EdgeInsets.only(top: 2),
-                child: Text('baseline: ${line(base)}',
-                    style: AppText.tag(context)),
+                child: Text(
+                  'baseline: ${line(base)}',
+                  style: AppText.tag(context),
+                ),
               ),
           ],
         ),
@@ -812,7 +957,8 @@ class _DialsCard extends StatelessWidget {
       required ValueChanged<double> onValue,
       String Function(double)? fmt,
     }) {
-      final f = fmt ?? (v) => v.toStringAsFixed(step < 0.1 ? 2 : (step < 1 ? 1 : 0));
+      final f =
+          fmt ?? (v) => v.toStringAsFixed(step < 0.1 ? 2 : (step < 1 ? 1 : 0));
       return Row(
         children: [
           SizedBox(width: 56, child: Text(label, style: AppText.tag(context))),
@@ -851,7 +997,10 @@ class _DialsCard extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 1),
         child: Row(
           children: [
-            SizedBox(width: 56, child: Text(label, style: AppText.tag(context))),
+            SizedBox(
+              width: 56,
+              child: Text(label, style: AppText.tag(context)),
+            ),
             Expanded(
               child: Wrap(
                 spacing: 6,
@@ -886,8 +1035,10 @@ class _DialsCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text('DIALS — GLOBAL OVERRIDES',
-                      style: AppText.title(context)),
+                  child: Text(
+                    'DIALS — GLOBAL OVERRIDES',
+                    style: AppText.title(context),
+                  ),
                 ),
                 if (!o.isEmpty)
                   ActionChip(
@@ -1004,13 +1155,12 @@ class _DialsCard extends StatelessWidget {
 double _x(DateTime d) =>
     DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch / 86400000;
 
-Color _emphasisColor(ColorScheme scheme, String emphasis) =>
-    switch (emphasis) {
-      'cut' => scheme.error,
-      'reverse' => scheme.tertiary,
-      'climbing' => scheme.secondary,
-      _ => scheme.primary, // lifting
-    };
+Color _emphasisColor(ColorScheme scheme, String emphasis) => switch (emphasis) {
+  'cut' => scheme.error,
+  'reverse' => scheme.tertiary,
+  'climbing' => scheme.secondary,
+  _ => scheme.primary, // lifting
+};
 
 /// Tinted block bands + RED over-budget spans (§8: flag L > L_cap weeks
 /// in red). Consecutive red weeks merge into one span.
@@ -1027,11 +1177,13 @@ List<VerticalRangeAnnotation> _annotations(
   void closeBand(DateTime end) {
     final s = bandStart;
     if (s == null) return;
-    out.add(VerticalRangeAnnotation(
-      x1: _x(s),
-      x2: _x(end),
-      color: _emphasisColor(scheme, bandEmphasis).withValues(alpha: 0.05),
-    ));
+    out.add(
+      VerticalRangeAnnotation(
+        x1: _x(s),
+        x2: _x(end),
+        color: _emphasisColor(scheme, bandEmphasis).withValues(alpha: 0.05),
+      ),
+    );
   }
 
   for (final w in run.weeks) {
@@ -1051,11 +1203,13 @@ List<VerticalRangeAnnotation> _annotations(
   void closeRed() {
     final s = redStart, e = redEnd;
     if (s == null || e == null) return;
-    out.add(VerticalRangeAnnotation(
-      x1: _x(s),
-      x2: _x(e),
-      color: scheme.error.withValues(alpha: redFlagAlpha),
-    ));
+    out.add(
+      VerticalRangeAnnotation(
+        x1: _x(s),
+        x2: _x(e),
+        color: scheme.error.withValues(alpha: redFlagAlpha),
+      ),
+    );
     redStart = null;
   }
 
@@ -1076,30 +1230,29 @@ FlTitlesData _titles({
   required double xMax,
   required double plotWidth,
   int yDecimals = 0,
-}) =>
-    FlTitlesData(
-      rightTitles: const AxisTitles(),
-      topTitles: const AxisTitles(),
-      leftTitles: AxisTitles(
-        sideTitles: SideTitles(
-          showTitles: true,
-          reservedSize: 40,
-          getTitlesWidget: (value, meta) => Text(
-            value.toStringAsFixed(yDecimals),
-            style: const TextStyle(fontSize: 11),
-          ),
-        ),
+}) => FlTitlesData(
+  rightTitles: const AxisTitles(),
+  topTitles: const AxisTitles(),
+  leftTitles: AxisTitles(
+    sideTitles: SideTitles(
+      showTitles: true,
+      reservedSize: 40,
+      getTitlesWidget: (value, meta) => Text(
+        value.toStringAsFixed(yDecimals),
+        style: const TextStyle(fontSize: 11),
       ),
-      bottomTitles: AxisTitles(
-        sideTitles: dateBottomTitles(
-          minX: xMin,
-          maxX: xMax,
-          plotWidth: plotWidth,
-          style: const TextStyle(fontSize: 11),
-          reservedSize: 28,
-        ),
-      ),
-    );
+    ),
+  ),
+  bottomTitles: AxisTitles(
+    sideTitles: dateBottomTitles(
+      minX: xMin,
+      maxX: xMax,
+      plotWidth: plotWidth,
+      style: const TextStyle(fontSize: 11),
+      reservedSize: 28,
+    ),
+  ),
+);
 
 class _ChartSeries {
   final List<(DateTime, double)> points;
@@ -1162,8 +1315,11 @@ class _Sim2Chart extends StatelessWidget {
             gridData: const FlGridData(show: true, drawVerticalLine: false),
             borderData: FlBorderData(show: false),
             rangeAnnotations: RangeAnnotations(
-              verticalRangeAnnotations:
-                  _annotations(scheme, run, redFlagAlpha: redFlagAlpha),
+              verticalRangeAnnotations: _annotations(
+                scheme,
+                run,
+                redFlagAlpha: redFlagAlpha,
+              ),
               horizontalRangeAnnotations: [
                 if (expectationBand != null)
                   HorizontalRangeAnnotation(
@@ -1304,9 +1460,7 @@ class _BwChart extends StatelessWidget {
                 ),
               if (avg.isNotEmpty)
                 LineChartBarData(
-                  spots: [
-                    for (final w in avg) FlSpot(_x(w.date), w.weightLbs),
-                  ],
+                  spots: [for (final w in avg) FlSpot(_x(w.date), w.weightLbs)],
                   isCurved: false,
                   barWidth: 2.5,
                   color: scheme.primary,
@@ -1348,14 +1502,14 @@ class _StatsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     String signed(double v) => '${v > 0 ? '+' : ''}${v.toStringAsFixed(2)}';
     Widget stat(String label, String value) => Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(value, style: AppText.value(context)),
-              Text(label, style: AppText.micro(context)),
-            ],
-          ),
-        );
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(value, style: AppText.value(context)),
+          Text(label, style: AppText.micro(context)),
+        ],
+      ),
+    );
     return Row(
       children: [
         stat(
@@ -1411,30 +1565,22 @@ class _CompareCard extends StatelessWidget {
         '${base.last.bw.toStringAsFixed(0)} / '
             '${base.last.bfPct.toStringAsFixed(1)}',
         '${scen.last.bw.toStringAsFixed(0)} / '
-            '${scen.last.bfPct.toStringAsFixed(1)}'
+            '${scen.last.bfPct.toStringAsFixed(1)}',
       ),
       ('C', base.last.c.toStringAsFixed(1), scen.last.c.toStringAsFixed(1)),
       ('P(V8 sent)', pv8(mcBase), pv8(mcScen)),
       (
         'VO2',
         base.last.vo2.toStringAsFixed(1),
-        scen.last.vo2.toStringAsFixed(1)
+        scen.last.vo2.toStringAsFixed(1),
       ),
       (
         'muscle-ups M',
         base.last.m.toStringAsFixed(1),
-        scen.last.m.toStringAsFixed(1)
+        scen.last.m.toStringAsFixed(1),
       ),
-      (
-        'F end',
-        base.last.f.toStringAsFixed(2),
-        scen.last.f.toStringAsFixed(2)
-      ),
-      (
-        'over-budget wks',
-        '${base.overBudgetWeeks}',
-        '${scen.overBudgetWeeks}'
-      ),
+      ('F end', base.last.f.toStringAsFixed(2), scen.last.f.toStringAsFixed(2)),
+      ('over-budget wks', '${base.overBudgetWeeks}', '${scen.overBudgetWeeks}'),
     ];
 
     return Card(
@@ -1446,23 +1592,31 @@ class _CompareCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('BASELINE VS ${presetLabel.toUpperCase()}'
-                '${overridden ? ' + DIALS' : ''}',
-                style: AppText.title(context)),
+            Text(
+              'BASELINE VS ${presetLabel.toUpperCase()}'
+              '${overridden ? ' + DIALS' : ''}',
+              style: AppText.title(context),
+            ),
             const SizedBox(height: 6),
             Row(
               children: [
                 const Expanded(flex: 5, child: SizedBox()),
                 Expanded(
-                    flex: 3,
-                    child: Text('baseline',
-                        textAlign: TextAlign.right,
-                        style: AppText.micro(context))),
+                  flex: 3,
+                  child: Text(
+                    'baseline',
+                    textAlign: TextAlign.right,
+                    style: AppText.micro(context),
+                  ),
+                ),
                 Expanded(
-                    flex: 3,
-                    child: Text('scenario',
-                        textAlign: TextAlign.right,
-                        style: AppText.micro(context))),
+                  flex: 3,
+                  child: Text(
+                    'scenario',
+                    textAlign: TextAlign.right,
+                    style: AppText.micro(context),
+                  ),
+                ),
               ],
             ),
             for (final (label, b, s) in rows)
@@ -1471,18 +1625,25 @@ class _CompareCard extends StatelessWidget {
                 child: Row(
                   children: [
                     Expanded(
-                        flex: 5,
-                        child: Text(label, style: AppText.tag(context))),
+                      flex: 5,
+                      child: Text(label, style: AppText.tag(context)),
+                    ),
                     Expanded(
-                        flex: 3,
-                        child: Text(b,
-                            textAlign: TextAlign.right,
-                            style: AppText.tag(context))),
+                      flex: 3,
+                      child: Text(
+                        b,
+                        textAlign: TextAlign.right,
+                        style: AppText.tag(context),
+                      ),
+                    ),
                     Expanded(
-                        flex: 3,
-                        child: Text(s,
-                            textAlign: TextAlign.right,
-                            style: AppText.value(context))),
+                      flex: 3,
+                      child: Text(
+                        s,
+                        textAlign: TextAlign.right,
+                        style: AppText.value(context),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1511,11 +1672,11 @@ class _ParamSheet extends StatelessWidget {
   });
 
   static Color _tagColor(ColorScheme scheme, String tag) => switch (tag) {
-        'fit' => scheme.primary,
-        'log' => scheme.tertiary,
-        'lit' => Colors.teal,
-        _ => scheme.outline, // assume
-      };
+    'fit' => scheme.primary,
+    'log' => scheme.tertiary,
+    'lit' => Colors.teal,
+    _ => scheme.outline, // assume
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -1534,8 +1695,10 @@ class _ParamSheet extends StatelessWidget {
         key: const ValueKey('sim2-params-tile'),
         shape: const Border(),
         tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-        title: Text('MODEL PARAMETERS (§9.5)${edited ? ' — EDITED' : ''}',
-            style: AppText.title(context)),
+        title: Text(
+          'MODEL PARAMETERS (§9.5)${edited ? ' — EDITED' : ''}',
+          style: AppText.title(context),
+        ),
         childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
         children: [
           if (edited)
@@ -1570,16 +1733,22 @@ class _ParamSheet extends StatelessWidget {
                       if (d.get(params) != d.prior)
                         Padding(
                           padding: const EdgeInsets.only(right: 6),
-                          child: Text('prior ${_fmtParam(d.prior)}',
-                              style: AppText.micro(context)),
+                          child: Text(
+                            'prior ${_fmtParam(d.prior)}',
+                            style: AppText.micro(context),
+                          ),
                         ),
                       Container(
                         margin: const EdgeInsets.only(right: 8),
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 5, vertical: 1),
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
                         decoration: BoxDecoration(
-                          color: _tagColor(scheme, d.tag)
-                              .withValues(alpha: 0.15),
+                          color: _tagColor(
+                            scheme,
+                            d.tag,
+                          ).withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
@@ -1590,8 +1759,10 @@ class _ParamSheet extends StatelessWidget {
                           ),
                         ),
                       ),
-                      Text(_fmtParam(d.get(params)),
-                          style: AppText.value(context)),
+                      Text(
+                        _fmtParam(d.get(params)),
+                        style: AppText.value(context),
+                      ),
                     ],
                   ),
                 ),

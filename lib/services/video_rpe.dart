@@ -304,6 +304,50 @@ bool applyRpeOutcome(
   return false;
 }
 
+/// Renders the meta `video_rpe_log` JSON into prompt lines for the
+/// coach (newest first, capped). Shows the estimate, the rpe the user
+/// actually logged, and whether that was an accept or an override —
+/// the calibration signal ("trust my eye less on squat"). Null when
+/// the log is empty/absent/garbled (section omitted).
+String? renderVideoRpeLog(String? rawJson, {int cap = 8}) {
+  if (rawJson == null || rawJson.isEmpty) return null;
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(rawJson);
+  } catch (_) {
+    return null;
+  }
+  if (decoded is! List || decoded.isEmpty) return null;
+  final lines = <String>[];
+  for (final e in decoded.take(cap)) {
+    if (e is! Map) continue;
+    final date = '${e['at'] ?? ''}'.split('T').first;
+    final lift = '${e['exercise'] ?? 'unknown lift'}';
+    final load = e['weight'] == null || e['reps'] == null
+        ? ''
+        : ' ${e['weight']}×${e['reps']}';
+    final est = e['estimate'];
+    final band = e['band'];
+    final bandStr = band is List && band.length == 2
+        ? ' (${band[0]}–${band[1]})'
+        : '';
+    final estStr = est == null ? 'not discernible' : '~$est$bandStr';
+    final finalRpe = e['final_rpe'];
+    final String outcome;
+    if (finalRpe == null) {
+      outcome = 'not logged yet';
+    } else if (est is num && finalRpe is num && est == finalRpe) {
+      outcome = 'logged $finalRpe (accepted)';
+    } else {
+      outcome = 'logged $finalRpe (overrode)';
+    }
+    final why = '${e['reasoning'] ?? ''}'.trim();
+    lines.add('- $date $lift$load — AI $estStr, $outcome'
+        '${why.isEmpty ? '' : ': $why'}');
+  }
+  return lines.isEmpty ? null : lines.join('\n');
+}
+
 // -------------------------------------------------------------- states
 
 sealed class RpeEstimateState {

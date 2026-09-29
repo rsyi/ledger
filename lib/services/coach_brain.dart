@@ -8,6 +8,7 @@ import 'github_client.dart';
 import 'program_current.dart';
 import 'program_provider.dart';
 import 'program_slice_text.dart';
+import 'video_rpe.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 
@@ -83,6 +84,10 @@ class CoachBrain {
 
   final CoachDocFetcher fetchDoc;
 
+  /// Optional ledger-meta reader (engine builds pass repo.metaGet).
+  /// Feeds the video-RPE calibration section; null = section omitted.
+  final Future<String?> Function(String key)? metaGet;
+
   /// Injectable clock for tests.
   final DateTime Function() now;
 
@@ -91,6 +96,7 @@ class CoachBrain {
     required this.repository,
     required this.views,
     required this.fetchDoc,
+    this.metaGet,
     this.now = DateTime.now,
   });
 
@@ -181,12 +187,14 @@ in a desktop Claude session — you cannot edit files from here.''';
     final sliceSection = await _programSliceSection(today);
     final docs = await _docsSection();
     final dump = await _ledgerDump(today);
+    final videoRpe = await _videoRpeSection();
     final sections = [
       systemPrompt,
       'TODAY: ${_fmtDate(today)}',
       ?sliceSection,
       '## Coach docs\n\n$docs',
       '## Ledger data (last ${dumpWindow.inDays} days + planned)\n\n$dump',
+      ?videoRpe,
     ];
     return sections.join('\n\n');
   }
@@ -229,6 +237,24 @@ in a desktop Claude session — you cannot edit files from here.''';
       return rendered;
     } catch (_) {
       // Any parse/resolve failure → fall back gracefully.
+      return null;
+    }
+  }
+
+  /// AI-vs-logged RPE calibration lines from meta `video_rpe_log`
+  /// (written by VideoRpeService at estimate/save time). Null (section
+  /// omitted) when there's no meta seam, no log, or any read error.
+  Future<String?> _videoRpeSection() async {
+    final get = metaGet;
+    if (get == null) return null;
+    try {
+      final rendered = renderVideoRpeLog(
+        await get(VideoRpeService.kLogMetaKey),
+      );
+      if (rendered == null) return null;
+      return '## Video RPE estimates (AI vs logged — calibration)\n\n'
+          '$rendered';
+    } catch (_) {
       return null;
     }
   }

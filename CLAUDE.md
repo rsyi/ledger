@@ -414,6 +414,42 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   v9 baseline N=4/W=30: deterministic 988 / over-budget 38 / MC 986,
   P(V8) 0.80; bulk preset restores the bulk template and still pins
   1023/1022/0.45 (test/sim2_model_test.dart).
+- **Video-attach + AI RPE (2026-09-28)**: `widget: video` end-to-end
+  (Rust `WidgetType::Video` + all three Dart mirrors, switch precedent;
+  dylib rebuilt + strings-checked). strength gained `video_url`
+  (widget video, autofill:false — a carried-over video is fabricated
+  data) + `video_media_id` (editable:false); sibling-dim CONVENTION
+  `<field minus "_url">_media_id` (video_rpe.dart mediaIdFieldFor), no
+  new schema key beyond the widget. Attach = Google Photos PICKER API
+  (Library API's third-party media access died 2025-03-31; picker is
+  the sanctioned path) behind injectable `PhotosPickerGateway`
+  (GmailGateway pattern; scope photospicker.mediaitems.readonly ONLY;
+  google_sign_in 7.x init shared via google_signin_bootstrap.dart —
+  SAME web client id as kaya_gmail): sessions.create → VIEW-intent
+  pickerUri → poll until mediaItemsSet (pollingConfig, 5-min cap) →
+  first VIDEO of mediaItems.list. Picked items have NO productUrl —
+  video_url stores the CONSTRUCTED deep link
+  photos.google.com/lr/photo/<persistent-id> (Library-productUrl
+  shape; verify it opens on device). RPE estimate fires AT ATTACH TIME
+  (the baseUrl dies ~60 min post-pick): `=dv` download → ≤14 evenly
+  spaced frames (4% end inset, ≥100 ms spacing) via a dependency-free
+  MediaMetadataRetriever channel in MainActivity
+  (`com.robertyi.fitness/video_frames`, services/video_frames.dart —
+  deliberately NOT the video_thumbnail plugin: same Android API, no
+  new version pin) → `LlmClient.completeVision` (Anthropic-only,
+  images-then-text, max_tokens 1024; visionModelName() prefers
+  `sonnet`) with exercise/load/set-intent + recent same-lift RPE lines
+  as calibration → strict-JSON parse (rpe∈[1,10] or honest null;
+  garbage throws — never a fabricated number). PROPOSE-ONLY: the chip
+  "AI estimate: ~8.5 (8–9) — tap to accept" under the video field is
+  the ONLY path into rpe (still user-editable after; nothing flows to
+  WM/review until the user saves an rpe). Estimates persist per media
+  id (shared_preferences, edit-reopen safe); meta `video_rpe_log`
+  (cap 20) records estimate → `final_rpe` at save (accepted vs
+  overrode) and renders into CoachBrain's system prompt as a
+  calibration section. That meta is DEVICE-LOCAL — the Mac nightly /
+  weekly-review tabs do NOT see it (deliberate minimal shape; promote
+  to a sheet tab if the coach needs it offline).
 - **Coach** (the big feature, v3 architecture):
   - `coach_chat` synced view rendered ONLY as chat: pinned tinted
     Coach row (unread accent via meta `coach_chat_last_read_ts`) +
@@ -542,6 +578,18 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   steady-state test FIRST.
 
 ## Open follow-ups
+
+- Video-attach + AI RPE (2026-09-28): USER one-time GCP setup before
+  the attach button goes live — console (ryi-data-entry): enable the
+  "Google Photos Picker API"; add scope
+  photospicker.mediaitems.readonly to the OAuth consent screen (testing
+  mode + existing test user suffices); the SAME OAuth clients as
+  kaya_gmail work (Android package+SHA-1 + the Web client id in
+  config.yml integrations.kaya_gmail.server_client_id) — which is
+  ITSELF still pending, so both features light up together. Until
+  then the form renders "Attach video" disabled + hint. On-device
+  verify wanted: the constructed photos.google.com/lr/photo/<id> link
+  opens the right video; first end-to-end estimate quality.
 
 - Cut revision (2026-09-28): NOT built — (1) live next-set suggester
   (in-gym: read the just-logged RPE, propose the next set's load per

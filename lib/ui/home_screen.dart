@@ -566,6 +566,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       repository: data.repository,
                       views: {for (final v in data.views) v.name: v},
                       fetchDoc: CoachBrain.githubFetcher(github),
+                      // Video-RPE calibration section (AI estimate vs
+                      // the rpe the user actually logged).
+                      metaGet: coachLedger?.metaGet,
                     );
               // Progress-dashboard plumbing. weight is integration-
               // paradigm on the LOG tab (Withings-fed) but the VIEW

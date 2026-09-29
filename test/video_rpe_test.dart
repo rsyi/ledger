@@ -185,6 +185,58 @@ void main() {
     });
   });
 
+  group('renderVideoRpeLog', () {
+    test('renders accept, override, pending; newest first; capped', () {
+      final raw = jsonEncode([
+        {
+          'media_id': 'a',
+          'at': '2026-09-28T10:00:00Z',
+          'exercise': 'Barbell Squat',
+          'weight': 225,
+          'reps': 5,
+          'estimate': 8.5,
+          'band': [8, 9],
+          'reasoning': 'last rep slowed',
+          'final_rpe': 8.5,
+        },
+        {
+          'media_id': 'b',
+          'at': '2026-09-27T10:00:00Z',
+          'exercise': 'Overhead Press',
+          'weight': 95,
+          'reps': 5,
+          'estimate': 7,
+          'reasoning': 'crisp',
+          'final_rpe': 8,
+        },
+        {
+          'media_id': 'c',
+          'at': '2026-09-26T10:00:00Z',
+          'exercise': 'Barbell Deadlift',
+          'estimate': null,
+          'reasoning': 'camera angle',
+          'final_rpe': null,
+        },
+      ]);
+      final out = renderVideoRpeLog(raw)!;
+      final lines = out.split('\n');
+      expect(lines.length, 3);
+      expect(lines[0],
+          contains('Barbell Squat 225×5 — AI ~8.5 (8–9), logged 8.5 (accepted)'));
+      expect(lines[1], contains('logged 8 (overrode)'));
+      expect(lines[2], contains('not discernible, not logged yet'));
+      expect(renderVideoRpeLog(raw, cap: 1)!.split('\n').length, 1);
+    });
+
+    test('empty/garbled log → null (section omitted)', () {
+      expect(renderVideoRpeLog(null), isNull);
+      expect(renderVideoRpeLog(''), isNull);
+      expect(renderVideoRpeLog('[]'), isNull);
+      expect(renderVideoRpeLog('not json'), isNull);
+      expect(renderVideoRpeLog('{"a":1}'), isNull);
+    });
+  });
+
   group('LlmClient.completeVision', () {
     ModelConfig cfg() => ModelConfig(
           name: 'sonnet',

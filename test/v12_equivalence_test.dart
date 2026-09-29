@@ -69,20 +69,35 @@ void main() {
     'lifting-emphasis test (block wk 8)': DateTime.utc(2027, 4, 19),
   };
 
+  // `reps_hi` is a v12-declared rep-range key (the accessory double
+  // progression + routine-screen range display) that v11 templates
+  // never carried — it is a sanctioned additive display delta, exactly
+  // like the double-progression weights, and never persisted by
+  // regenerateWeek. Strip it before the byte comparison.
+  List<Map<String, Object?>> stripRangeMarker(
+          List<Map<String, Object?>> entries) =>
+      [
+        for (final e in entries)
+          {
+            for (final k in e.keys)
+              if (k != 'reps_hi') k: e[k],
+          },
+      ];
+
   for (final e in weeks.entries) {
     test('planner output identical for ${e.key}', () {
       final a = buildWeekPlannedEntries(docV11, e.value,
           references: refs, workingMaxes: maxes);
       final b = buildWeekPlannedEntries(docV12, e.value,
           references: refs, workingMaxes: maxes);
-      expect(b, equals(a));
+      expect(stripRangeMarker(b), equals(stripRangeMarker(a)));
       expect(a, isNotEmpty, reason: 'representative week must plan rows');
     });
 
     test('planner output identical for ${e.key} (reference fallback)', () {
       final a = buildWeekPlannedEntries(docV11, e.value, references: refs);
       final b = buildWeekPlannedEntries(docV12, e.value, references: refs);
-      expect(b, equals(a));
+      expect(stripRangeMarker(b), equals(stripRangeMarker(a)));
     });
   }
 

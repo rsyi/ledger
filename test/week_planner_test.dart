@@ -485,9 +485,11 @@ void main() {
     };
 
     test(
-        'key lockdown: generated keys drawn from exactly '
-        '{date, exercise, reps, weight, top} — never rpe/notes/pct', () {
+        'key lockdown: generated keys drawn from exactly {date, exercise, '
+        'reps, weight, top, reps_hi, pct, warmup} — never rpe/notes', () {
       // Block-0 cut weeks + a post-cut (v10) week with wave-top markers.
+      // top/reps_hi/pct/warmup are DISPLAY markers for the routine
+      // screen; regenerateWeek persists only exercise/reps/weight.
       for (final monday in [preMonday, w1Monday,
           DateTime.utc(2026, 12, 14)]) {
         final entries = buildWeekPlannedEntries(program, monday,
@@ -495,15 +497,14 @@ void main() {
         expect(entries, isNotEmpty);
         for (final e in entries) {
           expect(
-              {'date', 'exercise', 'reps', 'weight', 'top'}
-                  .containsAll(e.keys),
+              {'date', 'exercise', 'reps', 'weight', 'top', 'reps_hi',
+                  'pct', 'warmup'}.containsAll(e.keys),
               isTrue,
               reason: 'unexpected key in $e');
           expect(e.keys.toSet().containsAll({'date', 'exercise', 'reps'}),
               isTrue);
           expect(e.containsKey('rpe'), isFalse);
           expect(e.containsKey('notes'), isFalse);
-          expect(e.containsKey('pct'), isFalse);
         }
       }
     });

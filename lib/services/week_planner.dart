@@ -93,13 +93,20 @@ num _roundTo(num x, num step) {
 /// accepted; it's normalised to Monday).
 ///
 /// Returned maps have keys drawn from exactly {date, exercise, reps,
-/// weight, top} — never rpe or notes:
+/// weight, top, reps_hi, pct, warmup} — never rpe or notes:
 ///   - `date`     — UTC-midnight [DateTime] of the entry's weekday
 ///   - `exercise` — the exact logged exercise name (metrics depend on it)
 ///   - `reps`     — planned reps for that one set
 ///   - `weight`   — only when computable; never guessed
 ///   - `top`      — true on wave top-set rows (`reps: top` in the
 ///     program); consumers ignore it when persisting.
+///   - `reps_hi`  — DISPLAY marker: top of the planned rep range
+///     (accessory double-progression rows); never persisted.
+///   - `pct`      — DISPLAY marker: the declared fraction of the
+///     working max the row was priced at (cut-wave tops + %TM volume
+///     slots); never persisted.
+///   - `warmup`   — DISPLAY marker: true on warm-up ramp rows so the
+///     routine screen can list working sets only; never persisted.
 ///
 /// Weight fill, v3 (working-max controller, spec §0: percentages hang off
 /// the working max): when the lift has an entry in [workingMaxes] and a
@@ -259,7 +266,13 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
     final steps = warmupRamp(warmup, mainLiftByExercise[exercise], top);
     return [
       for (final s in steps)
-        {'date': day, 'exercise': exercise, 'reps': s.reps, 'weight': s.weight},
+        {
+          'date': day,
+          'exercise': exercise,
+          'reps': s.reps,
+          'weight': s.weight,
+          'warmup': true,
+        },
     ];
   }
 
@@ -407,16 +420,21 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
           rule: accessoryRule,
         )?.weightLb;
       }
+      final repsHi = item['reps_hi'];
       for (var s = 0; s < sets; s++) {
-        // ONLY exercise + reps + optional weight (+ date). Never
-        // rpe/notes — those describe what happened, and nothing has
-        // happened yet. Weight is filled only from a real reference.
+        // ONLY exercise + reps + optional weight (+ date) get
+        // persisted. Never rpe/notes — those describe what happened,
+        // and nothing has happened yet. Weight is filled only from a
+        // real reference. top/reps_hi/pct are display markers for the
+        // routine screen (WeekPlanner.regenerateWeek drops them).
         working.add({
           'date': day,
           'exercise': exercise,
           'reps': reps,
           'weight': ?weight,
           if (isTop) 'top': true,
+          if (repsHi is num && repsHi != reps) 'reps_hi': repsHi,
+          'pct': ?pct,
         });
       }
     }

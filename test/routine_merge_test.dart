@@ -173,8 +173,9 @@ void main() {
       expect(rows, hasLength(2));
       expect(rows.first['weight'], 105);
       expect(rows.first['reps'], 8); // planner still plans the LOW end
-      // reps_hi never leaks into the emitted row shape.
-      expect(rows.first.keys, isNot(contains('reps_hi')));
+      // reps_hi rides along as a DISPLAY marker (routine screen shows
+      // the 8-12 range); regenerateWeek never persists it.
+      expect(rows.first['reps_hi'], 12);
     });
 
     test('bodyweight accessories stay weightless (no fabrication)', () {

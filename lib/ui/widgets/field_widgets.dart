@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -42,6 +43,12 @@ Widget buildFieldWidget({
   List<String>? adHocSuggestions,
   VoidCallback? onShowHistory,
   void Function(String target, Object? value)? onLadderTap,
+  /// For `widget: video` fields — invoked when the user taps Attach.
+  /// The form owns the Photos Picker flow (session, launch, poll) and
+  /// writes the resulting URL/media-id via its own setState; the widget
+  /// only shows a busy spinner while the future runs. Null renders the
+  /// affordance disabled (picker not configured).
+  Future<void> Function()? onAttachVideo,
   bool isTimerLinked = false,
   /// For widget: timer fields only — current values of every dim this
   /// timer writes into (ladder targets + stop_target). Used to detect
@@ -122,6 +129,14 @@ Widget buildFieldWidget({
         dim: dim,
         value: value,
         onChanged: onChanged,
+      );
+    case WidgetType.video:
+      return _VideoFieldWidget(
+        key: key,
+        dim: dim,
+        value: value,
+        onChanged: onChanged,
+        onAttachVideo: onAttachVideo,
       );
     case WidgetType.timer:
       return _TimerFieldWidget(
@@ -695,6 +710,139 @@ class _SwitchFieldWidget extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Video-attach affordance (`widget: video`). The value is a Google
+/// Photos deep link written by the form's Photos Picker flow — never
+/// typed. States:
+///
+///   - blank + handler present: "Attach video" button (spinner while
+///     the picker flow runs).
+///   - blank + no handler: disabled button + setup hint (picker not
+///     configured — missing Google client id / scope).
+///   - attached: tile with the link host, an open-in-Photos action
+///     (VIEW intent) and a × that clears the field (the form's
+///     onChanged(null) also clears the sibling media-id dim).
+class _VideoFieldWidget extends StatefulWidget {
+  final Dimension dim;
+  final Object? value;
+  final ValueChanged<Object?> onChanged;
+  final Future<void> Function()? onAttachVideo;
+
+  const _VideoFieldWidget({
+    super.key,
+    required this.dim,
+    required this.value,
+    required this.onChanged,
+    this.onAttachVideo,
+  });
+
+  @override
+  State<_VideoFieldWidget> createState() => _VideoFieldWidgetState();
+}
+
+class _VideoFieldWidgetState extends State<_VideoFieldWidget> {
+  bool _busy = false;
+
+  Future<void> _attach() async {
+    final run = widget.onAttachVideo;
+    if (run == null || _busy) return;
+    setState(() => _busy = true);
+    try {
+      // Errors are surfaced by the form (snackbar); the widget only
+      // owns the busy spinner.
+      await run();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _open(String url) async {
+    try {
+      await AndroidIntent(
+        action: 'android.intent.action.VIEW',
+        data: url,
+      ).launch();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not open video: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final url = widget.value?.toString().trim() ?? '';
+    final Widget child;
+    if (url.isEmpty) {
+      child = Row(
+        children: [
+          OutlinedButton.icon(
+            icon: _busy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.videocam_outlined, size: 18),
+            label: Text(_busy ? 'Waiting for pick…' : 'Attach video'),
+            onPressed:
+                widget.onAttachVideo == null || _busy ? null : _attach,
+          ),
+          if (widget.onAttachVideo == null)
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(left: 12),
+                child: Text(
+                  'Google Photos picker not configured',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.7),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      );
+    } else {
+      child = Row(
+        children: [
+          Icon(Icons.videocam, size: 20, color: scheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Video attached — ${Uri.tryParse(url)?.host ?? url}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.open_in_new, size: 18),
+            tooltip: 'Open in Google Photos',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _open(url),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            tooltip: 'Remove video',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => widget.onChanged(null),
+          ),
+        ],
+      );
+    }
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: _labelFor(widget.dim),
+        helperText: widget.dim.description,
+        border: const OutlineInputBorder(),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
+      child: child,
     );
   }
 }

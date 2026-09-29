@@ -26,6 +26,14 @@ enum WidgetType {
   /// meaning unknown, and the working-max variant logic falls back to
   /// notes parsing when the structured value is blank.
   switch_,
+  /// Video-attach affordance for `type: string` dims. The dim's value is
+  /// a URL (Google Photos deep link) to a video attached via the Photos
+  /// Picker flow; the widget renders an attach button + attached-state
+  /// tile — never a free-text input. A sibling dim named
+  /// `<field minus "_url">_media_id` (video_url → video_media_id), when
+  /// present on the view, receives the picker's persistent media-item id
+  /// so the video can be re-fetched later. Blank = no video attached.
+  video,
   /// Stopwatch input. Renders the field as a time-of-day text input with
   /// a Start button; once tapped, shows live elapsed time + one button
   /// per ladder. Each ladder button stamps `m:ss` (or `H:MM:SS` if past

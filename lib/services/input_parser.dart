@@ -421,6 +421,8 @@ WidgetType _parseWidgetType(String s) {
       return WidgetType.autocomplete;
     case 'switch':
       return WidgetType.switch_;
+    case 'video':
+      return WidgetType.video;
     default:
       throw FormatException('Unknown widget type: $s');
   }

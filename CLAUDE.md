@@ -332,6 +332,69 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     loop, 5 sets 08-08..09-26 median 145.6); squat 320 confirmed by
     the median; bench 245 + deadlift 340 manual-pinned (0 of 3
     post-manual sets). tool/wm_replay's §7.1 note is mode-aware.
+- **Plan-tab forecast rework — SINGLE TRAJECTORY, nutrition is the
+  lever (2026-09-28, user directive verbatim: "remove this whole
+  lever-based computation… stick with this program long-term… the only
+  lever really be based on my caloric intake — carbs, protein, total
+  calories (from macrofactor)")**: supersedes the §8 scenario UI (the
+  v12 TAB SPLIT bullet's `compact: true` mode is GONE — one layout).
+  - REMOVED from forecast_section.dart: preset chips (incl. 'Bulk plan
+    (inactive)'), the global dials row (all sliders/chip rows), the
+    baseline-vs-scenario compare card, the §5 μ branch toggle (μ runs
+    the §5 rule). The §9.5 param sheet STAYS (provenance, not levers;
+    still tap-to-edit for inspection). The harness presets/dials
+    machinery survives for tools + the sim2_model_test pins.
+  - ONE trajectory: declared program calendar + `sim2ExtendSteadyState`
+    (flat lifting-emphasis recomp continuation, r=sim2RecompR, 52 wk
+    default — deliberately NO auto bulk/cut cycles; v1 sim_core's
+    rule-4 cycle machine is retired from the default path).
+  - NUTRITION AS INPUT (lib/services/nutrition_model.dart, pure, 15
+    tests): meals rows → per-day sums (day "logged" iff ≥800 kcal —
+    partial exports excluded; missing days are missing, never zero);
+    adaptive maintenance over trailing 28d = mean of implied per-day
+    samples m_d = kcal_d − 3500·Δtrend_d (7d-avg weigh-in trend, EXACT
+    day pairing — carry-forward would fabricate zero-delta pairs);
+    ≥21 pairs → OLS regression with sanity band on β (0.5–2× 1/3500),
+    else fixed slope; <5 pairs → null (honest fallback to declared
+    rates). Band = 2·SD/√n floored 100. r = (14d intake −
+    maintenance)/3500×7; protein g/lb feeds §5 pf(); carbs surface on
+    the card (no carb term in the model — documented). Live numbers
+    2026-09-28: maintenance ~2430 ± 467 (energy_balance, 18 paired d),
+    14d intake 1653 → r −1.55 lb/wk (vs observed −0.8: likely
+    under-logging or maintenance overshoot; the recalibration window
+    opens ~Nov 2 and will offset it).
+  - SCOPING: nutrition r/P override applies to the CURRENT block ONLY
+    (new sim2Run/MC `blockOverrides` param) — later blocks run the
+    declared calendar ("phase declarations stay"; a global override
+    ran the deficit r for the whole 2-yr horizon → bw collapse).
+  - THE ONE LEVER: NUTRITION card (top of the section) — 7/14d kcal ·
+    P · C averages, maintenance ± band (+ recal offset), implied rate,
+    and a ±100 kcal/day what-if stepper (projection only; macros scale
+    proportionally — documented approximation).
+  - AUTO-RECALIBRATION (lib/services/forecast_calibration.dart, pure,
+    14 tests): nightly REPLAY (the forecast tab is replace-all, so no
+    stored-prediction diff) — re-run from 6 wk back anchored to
+    actuals then, compare weekly predicted bw vs actual 7d-avg (band
+    1.25 lb) and predicted INDEX vs observed weekly e1rm totals (band
+    25 lb); persistent = last 3 checks all outside band → guardedRefit:
+    capacity gains a,b × actual/predicted progression ratio CLAMPED
+    0.5–1.5 (the ±50% drift guard; near-flat predicted slope refuses),
+    bw rate error → maintenance offset clamped ±500 kcal. NON-cumulative
+    (recomputed nightly from fitted). State + event log (last 8) in the
+    NEW `forecast_meta` tab (key/value, REPLACE-ALL nightly);
+    ForecastMetaStore (direct Sheets, 15-min cache) feeds the Plan tab's
+    "model tracking: on / adjusted <date> (<what moved>)" line and the
+    app applies the same scales/offset locally so app ≡ nightly.
+  - Nightly writer (program_status_update.dart) runs the same pipeline
+    (nutrition → replay → refit → sim) and writes `forecast` (same
+    headers, now ~114 wks to the extended horizon) + `forecast_meta`.
+    MCP get_coach_context forecast block gained `nutrition` sub-block +
+    `model_tracking` + the single-trajectory note (worker DEPLOYED).
+  - Wiring: plan_screen gained meals repo/view + ForecastMetaStore
+    (home_screen passes dashMealsView + a store built beside WmStore).
+    Tests: forecast_section_test REWRITTEN (11 — asserts the lever UI
+    is GONE), nutrition_model_test 15, forecast_calibration_test 14;
+    ledger-mcp +2 (132 total).
 - **Recomp TRACKING layer (2026-09-28, coach/recomp-tracking-spec.md —
   canonical, user-authored)**: adherence INPUTS vs generated OUTCOMES.
   SCHEMAS (existing keys only — NO Rust/dylib change; engine's

@@ -47,6 +47,12 @@ class AppConfig {
   /// `integrations.kaya_gmail` block; the card shows the GCP setup hint.
   final KayaGmailConfig? kayaGmail;
 
+  /// Optional Whoop API credentials — drives the "Whoop (sleep)" card on
+  /// the Integrations page (distinct from the BLE live-HR Whoop card).
+  /// Null when the build has no `integrations.whoop_api` block; the card
+  /// shows a setup hint.
+  final WhoopApiConfig? whoopApi;
+
   AppConfig({
     required this.spreadsheetId,
     required this.models,
@@ -56,6 +62,7 @@ class AppConfig {
     this.quickbooks,
     this.withings,
     this.kayaGmail,
+    this.whoopApi,
   });
 
   static Future<AppConfig> load() async {
@@ -101,8 +108,35 @@ class AppConfig {
           ? KayaGmailConfig.fromYaml(_yamlMapToJson(
               (node['integrations'] as YamlMap)['kaya_gmail'] as YamlMap))
           : null,
+      whoopApi: node['integrations'] is YamlMap &&
+              (node['integrations'] as YamlMap)['whoop_api'] is YamlMap
+          ? WhoopApiConfig.fromYaml(_yamlMapToJson(
+              (node['integrations'] as YamlMap)['whoop_api'] as YamlMap))
+          : null,
     );
   }
+}
+
+/// `integrations.whoop_api` — Whoop developer-app OAuth credentials
+/// (created at developer.whoop.com). [clientId] is public; [clientSecret]
+/// ships in the APK (Whoop's auth-code flow requires it at token
+/// exchange). Empty / SET_ME → the card shows a setup hint, button-less.
+class WhoopApiConfig {
+  const WhoopApiConfig({required this.clientId, required this.clientSecret});
+
+  final String clientId;
+  final String clientSecret;
+
+  bool get isConfigured =>
+      clientId.isNotEmpty &&
+      clientSecret.isNotEmpty &&
+      clientId != 'SET_ME' &&
+      clientSecret != 'SET_ME';
+
+  static WhoopApiConfig fromYaml(Map<String, dynamic> m) => WhoopApiConfig(
+        clientId: (m['client_id'] ?? '').toString(),
+        clientSecret: (m['client_secret'] ?? '').toString(),
+      );
 }
 
 class WithingsConfig {

@@ -27,6 +27,7 @@ import '../services/video_rpe.dart';
 import '../services/integrations/macrofactor.dart';
 import '../services/integrations/registry.dart';
 import '../services/integrations/whoop.dart';
+import '../services/integrations/whoop_api.dart';
 import '../services/integrations/withings.dart';
 import '../services/coach_brain.dart';
 import '../services/day_synthesis_service.dart';
@@ -252,9 +253,11 @@ class _HomeScreenState extends State<HomeScreen> {
       // sources before pushing the ledger.
       ViewSchema? weightView;
       ViewSchema? mealsView;
+      ViewSchema? dailyNotesView;
       for (final v in views) {
         if (v.name == 'weight') weightView = v;
         if (v.name == 'meals') mealsView = v;
+        if (v.name == 'daily_notes') dailyNotesView = v;
       }
       // _initialize() re-runs on schema reload; tear down the previous
       // service's BLE connection + retry timer before replacing it.
@@ -288,6 +291,17 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           WhoopIntegration(hr: hrService),
+          // Whoop developer API → daily_notes (sleep + recovery). Wholly
+          // distinct from the BLE live-HR WhoopIntegration above: OAuth2
+          // background pull mapping each night's sleep + recovery onto the
+          // daily_notes recovery subjectives (owns sleep_hours /
+          // sleep_quality / readiness; the note stays user-owned).
+          if (dailyNotesView != null)
+            WhoopApiIntegration(
+              config: assetConfig.whoopApi,
+              repo: repo.repo,
+              dailyNotesViewJson: viewSchemaToEngineJson(dailyNotesView),
+            ),
           // Macrofactor exports nutrition to Health Connect; the
           // integration reads HC nutrition records and ingests them as
           // meals rows keyed by hc_id (row-grained kaya pattern).

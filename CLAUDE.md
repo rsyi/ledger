@@ -616,8 +616,9 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   - **Interactive replies: IN-APP via API credits** — CoachBrain on the
     ChatRunner tool loop (streaming Anthropic, max_tokens 4096; context
     = coach/*.md from GitHub (1h cache) + 28-day local ledger dump +
-    last 40 thread messages). Tools: list_templates / read_template /
-    propose_schedule. Proposals land as `kind=proposal` coach_chat rows
+    last 40 thread messages). Tools: read_program_day / propose_schedule
+    (TEMPLATE RETIRE 2026-09-30, Phase C — see below). Proposals land as
+    `kind=proposal` coach_chat rows
     (JSON in `text`, no schema change); the chat renders a card —
     Schedule writes PlanStore + opens the timeline with the entries
     highlighted (initialDate/highlightKeys params), Undo removes them;
@@ -637,8 +638,44 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     verified; user may or may not have added the connector.
   - Coach context docs (Claude-editable): `~/repos/airledger-fitness/
     coach/{goals,routine,metrics,PROMPT}.md` — goals: CUT active;
-    routine: weekly rules ↔ template names (heavy squat/deadlift
-    alternation etc.).
+    routine.md is a DEPRECATED readable fallback (program.yaml `routine:`
+    is authoritative; templates retired 2026-09-30).
+- **Template retire — FULL (2026-09-30, Phase C; user-approved)**: the
+  workout-template concept is gone everywhere. WHY: program.yaml v12+
+  `routine:` (base week + phase_overrides) is the single source of the
+  weekly structure — the app resolves it into a "program slice" +
+  `buildWeekPlannedEntries`, making the static `views/*.template.yml`
+  files (13) redundant and drift-prone.
+  - FITNESS: all 13 `views/*.template.yml` DELETED (pushed). PROMPT.md /
+    routine.md / README.md rewritten to point at the program slice /
+    `routine:` (routine.md kept as a deprecated fallback; template names
+    in its body are historical prose only).
+  - LEDGER: deleted template_loader.dart, template_interpolator.dart,
+    pinned_templates.dart, template_vars_cache.dart, models/template.dart,
+    templates_screen.dart, template_vars_dialog.dart. coach_tools.dart
+    dropped list_templates/read_template; ADDED `read_program_day` (pulls
+    a day's PRESCRIBED rows from the program via buildWeekPlannedEntries —
+    CoachBrain builds the resolver from program.yaml; strength-only, no
+    WM-tab read so main-lift loads may be absent — the coach fills
+    numbers from the ledger dump); propose_schedule now takes `group`
+    (legacy `template` key still accepted for the timeline group label —
+    proposal→PlanStore→highlight flow UNCHANGED). chat_tools.dart dropped
+    list_templates/read_template/apply_template (add_planned_entry stays
+    as the template-free stage path). timeline_screen.dart: removed the
+    recipe "production strip" + fullscreen recipe screen + the Templates
+    app-bar action; the repeat_group BATCH banner (Stop & finish) stays,
+    now gated only on `repeatGroup != null`. The planned-group "Log all"
+    (WeekPlanner.templateLabel = 'program: week plan') is UNCHANGED — it
+    keys on PlannedEntry.templateName (a plain group-label string, never
+    coupled to template FILES) so program-planned + coach-proposal groups
+    still log-all/delete-all.
+  - MCP: no list/read_template TOOLS existed; get_coach_context's `views`
+    list was mis-filtering `.template.yml` (would go empty on delete) →
+    repointed to `.view.yml` (the real views). coach_nightly.sh /
+    coach_relay.sh dropped the `views/*.template.yml` dump (program slice
+    covers the day). Tests: coach_tools +4, mcp coach_context/wm_tools
+    mocks → `.view.yml`; all green (ledger baseline 27 analyze / 7 known
+    failures held; mcp 143/143).
 - **App IA redesign P1+P2+P3 — COMPLETE (2026-09-21)**: spec = airledger
   docs/superpowers/specs/2026-09-22-app-ia-redesign-spec.md. Presentation
   config `app/dashboards.yaml` in airledger-fitness (ENGINE-FREE —

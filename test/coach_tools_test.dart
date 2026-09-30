@@ -124,4 +124,60 @@ void main() {
     });
     expect(sunk.single.entries.single.containsKey('date'), isFalse);
   });
+
+  test('legacy `template` param still labels the group', () async {
+    final t = toolset();
+    await run(t, {
+      'view': 'strength',
+      'date': '2026-09-14',
+      'template': 'Squat day',
+      'entries': [
+        {'exercise': 'Squat'},
+      ],
+    });
+    expect(sunk.single.template, 'Squat day');
+  });
+
+  test('`group` param labels the group', () async {
+    final t = toolset();
+    await run(t, {
+      'view': 'strength',
+      'date': '2026-09-14',
+      'group': 'Press day',
+      'entries': [
+        {'exercise': 'Bench'},
+      ],
+    });
+    expect(sunk.single.template, 'Press day');
+  });
+
+  test('read_program_day omitted without a resolver; present with one',
+      () async {
+    final noResolver = CoachToolset(
+      views: {
+        'strength': _view('strength', ['id', 'date', 'exercise']),
+      },
+      onProposal: (_) async {},
+    );
+    expect(
+      noResolver.build().map((t) => t.name),
+      isNot(contains('read_program_day')),
+    );
+
+    final withResolver = CoachToolset(
+      views: {
+        'strength': _view('strength', ['id', 'date', 'exercise']),
+      },
+      onProposal: (_) async {},
+      programDay: (view, date) async => [
+        {'exercise': 'Squat', 'reps': 5, 'weight': 260},
+      ],
+    );
+    final tool = withResolver
+        .build()
+        .firstWhere((t) => t.name == 'read_program_day');
+    final out = await tool.run({'view': 'strength', 'date': '2026-09-14'});
+    expect(out, contains('Squat'));
+    expect(out, contains('"entry_count": 1'));
+  });
 }

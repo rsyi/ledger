@@ -54,10 +54,9 @@ PROMPT="$(
     printf '\n\n# weekly_review (generated tonight)\n\n%s\n' "$WEEKLY_REVIEW"
   fi
   printf '\n\n# metrics.md\n\n'; cat "$FIT/coach/metrics.md"
-  printf '\n\n# Templates\n\n'
-  for t in "$FIT"/views/*.template.yml; do
-    printf -- '--- %s ---\n' "$(basename "$t")"; cat "$t"; printf '\n'
-  done
+  # Templates retired (2026-09-30): the program_slice above is the
+  # authoritative day-by-day prescription; program.yaml `routine:` holds
+  # the full weekly structure.
   printf '\n\n# Ledger dump\n\n%s\n' "$DUMP"
 )"
 

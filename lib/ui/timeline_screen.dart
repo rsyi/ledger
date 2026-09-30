@@ -28,6 +28,7 @@ import '../services/week_planner.dart' show WeekPlanner;
 import 'chat_screen.dart';
 import 'form_screen.dart';
 import 'widgets/history_panel.dart';
+import 'widgets/rest_timer_sheet.dart';
 
 /// One row in the timeline. Three flavors:
 /// - `_Item.planned`  — from PlanStore, not in sheet yet
@@ -366,18 +367,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
     }
   }
 
-  /// Push the dedicated production screen — big single-button-per-recipe
-  /// layout backed by this state's _startProduction/_finishProduction.
-  /// The screen owns its own items future so it can refresh in-place
-  /// after each action; popping back returns to a freshly-reloaded
-  /// timeline (host._reload runs inside _startProduction/_finish).
-  Future<void> _openFullscreenProduction() async {
-    if (_templates == null || _templates!.isEmpty) return;
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(builder: (_) => _FullscreenBatchScreen(host: this)),
-    );
-  }
-
   /// Logged batches whose end_time is still blank — surfaced as a
   /// banner with a big Stop button. One banner per active batch.
   List<_Item> _activeBatches(List<_Item> items) {
@@ -575,12 +564,10 @@ class _TimelineScreenState extends State<TimelineScreen> {
                   _reload();
                 },
               ),
-            // Recipe production strip + in-progress banner — only for
-            // views that combine repeat_group (batched) with templates
-            // (recipe-like presets). Lets the user tap a sauce name to
-            // start a batch and tap Stop to finish, no form involved.
-            if (widget.view.repeatGroup != null &&
-                (_templates?.isNotEmpty ?? false))
+            // In-progress banner for batched (repeat_group) views: any
+            // logged batch whose end_time is still blank gets a Stop &
+            // finish button that stamps end_time on every row.
+            if (widget.view.repeatGroup != null)
               FutureBuilder<List<_Item>>(
                 future: _items,
                 builder: (context, snap) {
@@ -595,12 +582,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
                           disabled: _producing,
                           onFinish: () => _finishProduction(it),
                         ),
-                      _RecipesStrip(
-                        templates: _templates!,
-                        disabled: _producing,
-                        onStart: _startProduction,
-                        onFullscreen: _openFullscreenProduction,
-                      ),
                     ],
                   );
                 },
@@ -772,21 +753,21 @@ class _TimelineScreenState extends State<TimelineScreen> {
                   ),
                 ),
               );
-              // The chat's apply_template / add_planned_entry tools
-              // mutate PlanStore; refresh the timeline on return so any
-              // new planned entries show up.
+              // The chat's add_planned_entry tool mutates PlanStore;
+              // refresh the timeline on return so any new planned
+              // entries show up.
               if (mounted) _reload();
             },
             tooltip: 'Chat about this view',
           ),
-        // Templates exist to STAGE entries — meaningless on a read-only
-        // surface (kaya_ascents, integration-domain date browsing), so
-        // the icon hides there instead of opening a dead end.
-        if (!_readOnly)
+        // Rest timer — a between-sets affordance on the strength log. A
+        // launch point that doesn't touch the entry form: a small sheet
+        // with 3/5-min presets that notifies on completion.
+        if (!_readOnly && widget.view.name == 'strength')
           IconButton(
-            icon: const Icon(Icons.list_alt),
-            onPressed: _openTemplates,
-            tooltip: 'Templates',
+            icon: const Icon(Icons.timer_outlined),
+            onPressed: () => showRestTimer(context),
+            tooltip: 'Rest timer',
           ),
         // "Update": push not-yet-pushed transactions to QuickBooks as
         // inventory changes. Only shown when this view is QBO-mapped.
@@ -889,19 +870,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
     } finally {
       if (mounted) setState(() => _bulkDeleting = false);
     }
-  }
-
-  Future<void> _openTemplates() async {
-    final applied = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => TemplatesScreen(
-          view: widget.view,
-          repository: widget.repository,
-          onDate: _selectedDate,
-        ),
-      ),
-    );
-    if (applied == true) _reload();
   }
 
   Future<void> _create() async {
@@ -2564,84 +2532,6 @@ class _ExpandedDetails extends StatelessWidget {
   }
 }
 
-/// Horizontal scroll of "Make a batch of X" buttons, one per recipe
-/// template. Tap = auto-log a batch with start_time stamped, no form.
-/// Sits at the top of the timeline for views that combine repeat_group
-/// + templates (i.e. recipe-driven production logs like sauces).
-class _RecipesStrip extends StatelessWidget {
-  final List<Template> templates;
-  final bool disabled;
-  final void Function(Template) onStart;
-  final VoidCallback onFullscreen;
-
-  const _RecipesStrip({
-    required this.templates,
-    required this.disabled,
-    required this.onStart,
-    required this.onFullscreen,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(left: 4, bottom: 6),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Make a batch',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.4,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-                // Fullscreen: opens a dedicated production screen with
-                // big buttons + recent batches. The strip stays here for
-                // quick taps from the timeline.
-                IconButton(
-                  icon: const Icon(Icons.fullscreen, size: 20),
-                  tooltip: 'Production view',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: onFullscreen,
-                ),
-              ],
-            ),
-          ),
-          SizedBox(
-            height: 44,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: templates.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (_, i) {
-                final t = templates[i];
-                return FilledButton.tonalIcon(
-                  icon: const Icon(Icons.play_arrow, size: 18),
-                  label: Text(t.name),
-                  onPressed: disabled ? null : () => onStart(t),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// Banner shown at the top of the timeline for each batch whose end_time
 /// is still blank. Big "Stop & finish" button stamps end_time on every
 /// row in the batch and the banner disappears on reload.
@@ -2720,302 +2610,3 @@ class _InProgressBanner extends StatelessWidget {
   }
 }
 
-
-
-/// Production view — the big-buttons-per-recipe screen the user pushes
-/// from the `_RecipesStrip` fullscreen icon. Optimized for a kitchen
-/// device where the cook is making sauce: tap a sauce → it logs +
-/// shows in the in-progress section; tap Done on the in-progress card
-/// → it closes the batch.
-///
-/// Data lifecycle: owns its own `_items` future fetched from
-/// `host._fetch()`. Each user action calls back into the host's
-/// `_startProduction` / `_finishProduction` (which also reload the
-/// host's timeline), then refreshes our local items so the screen
-/// reflects the new state without a manual pull-to-refresh.
-class _FullscreenBatchScreen extends StatefulWidget {
-  final _TimelineScreenState host;
-  const _FullscreenBatchScreen({required this.host});
-
-  @override
-  State<_FullscreenBatchScreen> createState() => _FullscreenBatchScreenState();
-}
-
-class _FullscreenBatchScreenState extends State<_FullscreenBatchScreen> {
-  late Future<List<_Item>> _items;
-  bool _producing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _items = widget.host._fetch();
-  }
-
-  Future<void> _refreshItems() async {
-    setState(() => _items = widget.host._fetch(forceFresh: true));
-  }
-
-  Future<void> _startBatch(Template t) async {
-    if (_producing) return;
-    setState(() => _producing = true);
-    try {
-      await widget.host._startProduction(t);
-    } finally {
-      if (mounted) {
-        await _refreshItems();
-        setState(() => _producing = false);
-      }
-    }
-  }
-
-  Future<void> _finishBatch(_Item item) async {
-    if (_producing) return;
-    setState(() => _producing = true);
-    try {
-      await widget.host._finishProduction(item);
-    } finally {
-      if (mounted) {
-        await _refreshItems();
-        setState(() => _producing = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final host = widget.host;
-    final view = host.widget.view;
-    final scheme = Theme.of(context).colorScheme;
-    final templates = host._templates ?? const <Template>[];
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.fullscreen_exit),
-          tooltip: 'Collapse',
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text('Production'),
-      ),
-      body: FutureBuilder<List<_Item>>(
-        future: _items,
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final items = snap.data ?? const <_Item>[];
-          final active = host._activeBatches(items);
-          final completed = items
-              .where((it) => it.isBatch && !active.contains(it))
-              .toList();
-          return SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // In-progress at top — most-pressing UI.
-                if (active.isNotEmpty) ...[
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4, bottom: 6),
-                    child: Text(
-                      'IN PROGRESS',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.8,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                  for (final it in active)
-                    _InProgressBanner(
-                      view: view,
-                      item: it,
-                      disabled: _producing,
-                      onFinish: () => _finishBatch(it),
-                    ),
-                  const SizedBox(height: 24),
-                ],
-                Padding(
-                  padding: const EdgeInsets.only(left: 4, bottom: 6),
-                  child: Text(
-                    'MAKE A BATCH',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.8,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-                // Big single-column buttons — wide tap target sized
-                // for kitchen use (gloves, glanced-at screens).
-                for (final t in templates) ...[
-                  _BigRecipeButton(
-                    template: t,
-                    disabled: _producing,
-                    onTap: () => _startBatch(t),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (completed.isNotEmpty) ...[
-                  const SizedBox(height: 24),
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4, bottom: 6),
-                    child: Text(
-                      'RECENT BATCHES',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.8,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                  Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: scheme.outlineVariant),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      children: [
-                        for (var i = 0; i < completed.length; i++) ...[
-                          if (i > 0) const Divider(height: 1),
-                          _BatchSummaryRow(view: view, item: completed[i]),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// One row in the production-view recipe list. Big enough for a
-/// gloved/glanced tap. Shows recipe name + (if present) the recipe's
-/// description on a second line.
-class _BigRecipeButton extends StatelessWidget {
-  final Template template;
-  final bool disabled;
-  final VoidCallback onTap;
-
-  const _BigRecipeButton({
-    required this.template,
-    required this.disabled,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return FilledButton(
-      onPressed: disabled ? null : onTap,
-      style: FilledButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 22),
-        textStyle: const TextStyle(fontSize: 18),
-        alignment: Alignment.centerLeft,
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.play_arrow, size: 28),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  template.name,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                if (template.description != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    template.description!,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w400,
-                      color: scheme.onPrimary.withValues(alpha: 0.75),
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Compact summary line for a completed batch in the production view.
-class _BatchSummaryRow extends StatelessWidget {
-  final ViewSchema view;
-  final _Item item;
-  const _BatchSummaryRow({required this.view, required this.item});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final title = _titleFor(view, item.values);
-    final subtitle = _subtitleFor(view, item.values);
-    final start = item.values['start_time']?.toString();
-    final end = item.values['end_time']?.toString();
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      child: Row(
-        children: [
-          if (start != null && start.isNotEmpty) ...[
-            SizedBox(
-              width: 72,
-              child: Text(
-                start,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-            const SizedBox(width: 14),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                if (subtitle != null)
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          if (end != null && end.isNotEmpty)
-            Icon(
-              Icons.check_circle,
-              size: 16,
-              color: scheme.primary,
-            ),
-        ],
-      ),
-    );
-  }
-}

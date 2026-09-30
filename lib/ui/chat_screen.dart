@@ -36,10 +36,10 @@ class ChatScreen extends StatefulWidget {
   /// Optional — chat opens fine without it, just no run_query.
   final AnalyticsEngine? analytics;
 
-  /// The date the user has selected on the timeline. apply_template
+  /// The date the user has selected on the timeline. add_planned_entry
   /// defaults its target date to this when the user doesn't specify
-  /// otherwise (so "apply cut_squat_heavy" plans for the day they're
-  /// looking at). Null when chat is opened from a non-date context.
+  /// otherwise (so a staged set plans for the day they're looking at).
+  /// Null when chat is opened from a non-date context.
   final DateTime? selectedDate;
 
   /// Optional persisted session to restore. When set, the screen opens
@@ -114,14 +114,10 @@ class _ChatScreenState extends State<ChatScreen> {
               "'sets per exercise last month' — anything that needs to "
               "look at more than the 20 recent rows. Shape: "
               "{measures, dimensions?, filters?, order?, limit?}.",
-        "- list_templates / read_template: discover what plans are "
-            "available for this view, with their variable specs.",
-        "- apply_template: create planned (not-yet-logged) entries on "
-            "a target date. Only call this AFTER the user agrees to a "
-            "specific template + variable values you've shown them.",
-        "- add_planned_entry: create a single planned row. Use for "
-            "ad-hoc additions outside a template. Same confirm rule "
-            "as apply_template.",
+        "- add_planned_entry: create a single planned (not-yet-logged) "
+            "row on a target date. Call once per set/row for a multi-row "
+            "session. Only call AFTER the user agrees to the specific "
+            "values you've shown them.",
         "- log_entry: write directly to the sheet, skipping the "
             "planned step. ONLY when the user explicitly says 'log' "
             "(vs. 'plan' / 'add').",
@@ -133,22 +129,22 @@ class _ChatScreenState extends State<ChatScreen> {
             "shown them. Never propose silently.",
       ],
       "",
-      "For 'what should I do today' style questions: call list_templates "
-          "to see what's available, read_screen_context to see what "
-          "they've done recently, then SUGGEST a template + reasoned "
-          "variable values. Wait for confirm before applying.",
+      "For 'what should I do today' style questions: call "
+          "read_screen_context to see what they've done recently, then "
+          "SUGGEST concrete sets. Wait for confirm before staging them "
+          "with add_planned_entry.",
       "",
       "For 'what's my max X' or 'how much volume last week' style "
           "questions: use run_query — read_screen_context's recent "
           "rows only show 20, run_query goes against all history.",
       "",
-      "For schema/template edits: fetch the current file first "
+      "For schema edits: fetch the current file first "
           "(read_repo_file), show the diff in plain English, wait for "
           "confirm before calling propose_change.",
       "",
       "Format responses as Markdown. Use **bold** for emphasis on "
           "numbers and exercise names, bullet lists for sets/options, "
-          "and `code spans` for field names and template names. Keep "
+          "and `code spans` for field names. Keep "
           "it scannable — short bullets > prose for any list of facts.",
       "",
       "When a tool errors, show the raw error message verbatim in a "

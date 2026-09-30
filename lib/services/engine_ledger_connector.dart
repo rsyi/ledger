@@ -16,6 +16,7 @@ import '../models/database_config.dart';
 import '../models/view_schema.dart';
 import 'engine.dart';
 import 'engine_schema_adapter.dart';
+import 'log_event_bus.dart';
 import 'sheets_repository.dart' show Record;
 import 'sync_scheduler.dart';
 import 'warehouse_connector.dart';
@@ -73,7 +74,11 @@ class EngineLedgerConnector implements WarehouseConnector {
       recordToEngineJson(record),
     );
     SyncScheduler.instance?.onLocalWrite();
-    return recordFromEngineJson(raw);
+    final created = recordFromEngineJson(raw);
+    // Fire-and-forget: post-log features (notifications, the day
+    // synthesis refresh) listen on the bus rather than editing the form.
+    LogEventBus.instance.publish(LogEvent(view.name, created));
+    return created;
   }
 
   @override

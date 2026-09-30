@@ -299,8 +299,8 @@ class _HistoryTile extends StatelessWidget {
   }
 }
 
-/// Jinja env for evaluating a measure's `expr` against a row. Mirrors
-/// the filter set used in [TemplateInterpolator] (custom `round`).
+/// Jinja env for evaluating a measure's `expr` against a row. Registers
+/// a custom `round` filter (jinja 0.6.6's built-in is broken).
 final _jinjaEnv = Environment(
   filters: {
     'round': (Object? value) {

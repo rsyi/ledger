@@ -3,11 +3,21 @@ import 'dart:convert';
 import '../models/coach_proposal.dart';
 import '../models/view_schema.dart';
 import 'chat_runner.dart';
-import 'template_loader.dart';
 
 /// Receives a validated proposal. The chat screen persists it as a
 /// `kind=proposal` coach_chat row; tests just collect it.
 typedef ProposalSink = Future<void> Function(CoachProposal proposal);
+
+/// Resolves the program's PRESCRIBED rows for [view] on [date] — the same
+/// planned entries the routine screen + timeline show (built from the
+/// program's routine week via `buildWeekPlannedEntries`, priced off the
+/// working maxes). Returns an empty list when the day has no prescription
+/// for that view (a rest day, or a non-lifting day for `strength`). The
+/// coach grounds `propose_schedule` in this instead of a static template.
+///
+/// Null (constructed without a resolver — tests) disables `read_program_day`.
+typedef ProgramDayResolver = Future<List<Map<String, Object?>>> Function(
+    String view, DateTime date);
 
 /// Tools for the coach chat's reply turn. Unlike [ChatToolset] (scoped
 /// to one open view), the coach spans views, so every tool takes an
@@ -20,6 +30,11 @@ class CoachToolset {
   final Map<String, ViewSchema> views;
   final ProposalSink onProposal;
 
+  /// Resolves the program's prescribed rows for a view+date. When null,
+  /// `read_program_day` is omitted from [build] (the coach then proposes
+  /// from the program slice already in its prompt).
+  final ProgramDayResolver? programDay;
+
   /// Clock override for testing. Reserved for a future guard that
   /// rejects proposals placed too far in the past. Not yet consumed.
   final DateTime Function() now;
@@ -27,11 +42,14 @@ class CoachToolset {
   CoachToolset({
     required this.views,
     required this.onProposal,
+    this.programDay,
     this.now = DateTime.now,
   });
 
-  List<ChatTool> build() =>
-      [_listTemplates(), _readTemplate(), _proposeSchedule()];
+  List<ChatTool> build() => [
+        if (programDay != null) _readProgramDay(),
+        _proposeSchedule(),
+      ];
 
   ViewSchema _plannableView(Map<String, dynamic> input) {
     final name = (input['view'] as String?)?.trim() ?? '';
@@ -43,81 +61,46 @@ class CoachToolset {
     return view;
   }
 
-  ChatTool _listTemplates() {
+  ChatTool _readProgramDay() {
     return ChatTool(
-      name: 'list_templates',
-      description: 'Lists workout templates for a view — name, '
-          'description, entry count, variables. view is "strength" or '
-          '"cardio". Use before propose_schedule to pick the right '
-          'template (e.g. strength.cut_press_heavy for a combined '
-          'bench+OHP day).',
+      name: 'read_program_day',
+      description: 'Returns the program\'s PRESCRIBED workout for a given '
+          'day — the concrete exercises, sets/reps, and weights the '
+          'routine calls for on that date (priced off the current working '
+          'maxes). view is "strength" or "cardio", date is ISO '
+          'yyyy-MM-dd. Use this to ground propose_schedule in the actual '
+          'program day (by weekday) instead of inventing a plan. An empty '
+          'list means the program schedules nothing for that view that day '
+          '(a rest day, or a non-lifting day).',
       inputSchema: const {
         'type': 'object',
         'properties': {
           'view': {'type': 'string', 'description': 'strength | cardio'},
+          'date': {
+            'type': 'string',
+            'description': 'Target day, ISO yyyy-MM-dd.',
+          },
         },
-        'required': ['view'],
+        'required': ['view', 'date'],
       },
       run: (input) async {
         final view = _plannableView(input);
-        final templates = await TemplateLoader.loadForView(view.name);
-        return const JsonEncoder.withIndent('  ').convert([
-          for (final t in templates)
-            {
-              'name': t.name,
-              if (t.description != null) 'description': t.description,
-              'entry_count': t.entries.length,
-              'variables': t.variables
-                  .map((v) => {
-                        'name': v.name,
-                        'type': v.type.name,
-                        if (v.label != v.name) 'label': v.label,
-                        if (v.defaultValue != null) 'default': v.defaultValue,
-                      })
-                  .toList(),
-            },
-        ]);
-      },
-    );
-  }
-
-  ChatTool _readTemplate() {
-    return ChatTool(
-      name: 'read_template',
-      description: 'Full content of one template (variables + entry '
-          'rows, Jinja unrendered). Use before propose_schedule so the '
-          'entries you propose mirror the template with concrete '
-          'numbers filled in from the ledger data.',
-      inputSchema: const {
-        'type': 'object',
-        'properties': {
-          'view': {'type': 'string', 'description': 'strength | cardio'},
-          'name': {'type': 'string', 'description': 'Template name.'},
-        },
-        'required': ['view', 'name'],
-      },
-      run: (input) async {
-        final view = _plannableView(input);
-        final name = (input['name'] as String).trim();
-        final templates = await TemplateLoader.loadForView(view.name);
-        final t = templates.where((t) => t.name == name).firstOrNull;
-        if (t == null) {
-          throw StateError('Template "$name" not found for ${view.name}. '
-              'Known: ${templates.map((t) => t.name).join(', ')}');
+        final dateStr = (input['date'] as String?)?.trim() ?? '';
+        final parsed = DateTime.tryParse(dateStr);
+        if (parsed == null) {
+          throw StateError('date must be ISO yyyy-MM-dd (got "$dateStr")');
         }
+        final resolver = programDay;
+        if (resolver == null) {
+          throw StateError('program day resolution is unavailable');
+        }
+        final day = DateTime(parsed.year, parsed.month, parsed.day);
+        final entries = await resolver(view.name, day);
         return const JsonEncoder.withIndent('  ').convert({
-          'name': t.name,
-          'view': t.view,
-          if (t.description != null) 'description': t.description,
-          'variables': t.variables
-              .map((v) => {
-                    'name': v.name,
-                    'type': v.type.name,
-                    if (v.label != v.name) 'label': v.label,
-                    if (v.defaultValue != null) 'default': v.defaultValue,
-                  })
-              .toList(),
-          'entries': t.entries,
+          'view': view.name,
+          'date': dateStr,
+          'entry_count': entries.length,
+          'entries': entries,
         });
       },
     );
@@ -129,10 +112,13 @@ class CoachToolset {
       description: 'Presents a concrete workout plan to the user as an '
           'in-chat card with Schedule / Not now buttons. Writes '
           'NOTHING — the user confirms in the UI. entries are concrete '
-          'field→value rows (numbers already filled in — no Jinja). '
-          'Include a template name when the plan follows one, so the '
-          'timeline groups the entries under it. After calling, do not '
-          'claim anything was scheduled; the card handles it.',
+          'field→value rows (numbers already filled in). Ground the plan '
+          'in the program day: call read_program_day first and mirror its '
+          'prescribed exercises/weights, adjusting only as the '
+          'conversation warrants. Pass a `group` label (e.g. the day\'s '
+          'name) so the timeline groups the entries under one header. '
+          'After calling, do not claim anything was scheduled; the card '
+          'handles it.',
       inputSchema: const {
         'type': 'object',
         'properties': {
@@ -141,9 +127,10 @@ class CoachToolset {
             'type': 'string',
             'description': 'Target day, ISO yyyy-MM-dd.',
           },
-          'template': {
+          'group': {
             'type': 'string',
-            'description': 'Template this plan follows (optional).',
+            'description': 'Group label for the timeline header, e.g. the '
+                'program day\'s name (optional).',
           },
           'summary': {
             'type': 'string',
@@ -201,10 +188,14 @@ class CoachToolset {
           }
           entries.add(entry);
         }
+        // `group` is the timeline group label (was `template`). Accept the
+        // legacy `template` key too so an older tool call still groups.
+        final group = ((input['group'] ?? input['template']) as String?)
+            ?.trim();
         final proposal = CoachProposal(
           view: view.name,
           date: DateTime(parsed.year, parsed.month, parsed.day),
-          template: (input['template'] as String?)?.trim(),
+          template: (group?.isEmpty ?? true) ? null : group,
           summary: (input['summary'] as String?)?.trim() ?? '',
           entries: entries,
         );

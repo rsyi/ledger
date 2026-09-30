@@ -53,6 +53,11 @@ dependencies:
   # verified against these.
   google_sign_in: 7.2.0
   android_intent_plus: 6.1.0
+  # Local notifications: post-log coach nudges + the rest-timer-done
+  # alert. Immediate show() only (no zoned scheduling), so the timezone
+  # package isn't needed. Android channel + POST_NOTIFICATIONS runtime
+  # permission wired in NotificationService / the manifest.
+  flutter_local_notifications: ^19.4.2
 
 dev_dependencies:
   flutter_test:

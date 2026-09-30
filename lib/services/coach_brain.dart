@@ -11,6 +11,7 @@ import 'program_slice_text.dart';
 import 'video_rpe.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
+import 'week_planner.dart' show buildWeekPlannedEntries;
 
 /// Fetches one coach doc by repo path (e.g. `coach/goals.md`). Returns
 /// the file's contents, or null when the file doesn't exist. Throwing is
@@ -21,7 +22,7 @@ typedef CoachDocFetcher = Future<String?> Function(String path);
 /// credits — no Mac relay involved. Context assembly: coach docs from
 /// GitHub (1 h cache), a 28-day local ledger dump, and the current
 /// thread's chat history (up to 40 messages). Available tools:
-/// list_templates / read_template / propose_schedule. The caller persists
+/// read_program_day / propose_schedule. The caller persists
 /// the returned text as a `role=coach, kind=reply` row; proposal rows are
 /// persisted by the [ProposalSink] callback (onProposal) during the loop.
 /// The nightly briefing still arrives through the synced `coach_chat`
@@ -128,8 +129,12 @@ class CoachBrain {
     final userTurn = '## Chat history (oldest first)\n\n'
         '${renderHistory(history)}\n\n'
         'Reply to the newest user message(s) now.';
-    final tools =
-        CoachToolset(views: views, onProposal: onProposal, now: now).build();
+    final tools = CoachToolset(
+      views: views,
+      onProposal: onProposal,
+      programDay: _programDayResolver,
+      now: now,
+    ).build();
     final runner = ChatRunner(model);
     final texts = <String>[];
     await for (final ev in runner.runStream(
@@ -171,12 +176,13 @@ markdown is fine — short lines, a few bullets. Do NOT output JSON in
 your text.
 
 You have tools. When he asks to plan or schedule a workout (or agrees
-to a plan you suggested), use list_templates / read_template to ground
-the plan in a template, fill in concrete numbers from the ledger data,
-and call propose_schedule — it shows him a card with Schedule / Not
-now buttons. Never claim something is scheduled; the card handles
-confirmation. Follow the program slice's weekly template and carryover
-rule; state your reasoning in one line. If he asks to change goals or
+to a plan you suggested), use read_program_day to pull the program's
+prescribed exercises + weights for that day, fill in concrete numbers
+from the ledger data, and call propose_schedule — it shows him a card
+with Schedule / Not now buttons. Never claim something is scheduled;
+the card handles confirmation. Follow the program slice's weekly
+template and carryover rule; state your reasoning in one line. If he
+asks to change goals or
 routine, describe the change and note that editing coach/*.yaml happens
 in a desktop Claude session — you cannot edit files from here.''';
 
@@ -239,6 +245,51 @@ in a desktop Claude session — you cannot edit files from here.''';
       // Any parse/resolve failure → fall back gracefully.
       return null;
     }
+  }
+
+  /// Resolves the program's PRESCRIBED rows for [view] on [date] — the
+  /// same planned entries the routine screen + timeline show, built from
+  /// the program's routine week via [buildWeekPlannedEntries]. Feeds the
+  /// coach's `read_program_day` tool so proposals mirror the actual
+  /// program day (by weekday) instead of a static template.
+  ///
+  /// Only `strength` yields planner rows (the planner emits strength
+  /// entries; cardio/climbing are prose in the program slice already in
+  /// the prompt) — other views return an empty list. Weights are priced
+  /// from the program's rep/%-based fill; the working-max tab isn't read
+  /// here, so main-lift working weights may be absent — the coach fills
+  /// concrete numbers from the ledger data in its prompt.
+  Future<List<Map<String, Object?>>> _programDayResolver(
+    String view,
+    DateTime date,
+  ) async {
+    if (view != 'strength') return const [];
+    final provider = ProgramProvider(fetchDoc, now: now);
+    final docs = await provider.load();
+    final programYaml = docs.program;
+    if (programYaml == null) return const [];
+    final entries = buildWeekPlannedEntries(
+      programYaml,
+      date,
+      snapToWeekStart: false,
+    );
+    final dayUtc = DateTime.utc(date.year, date.month, date.day);
+    // Keep only rows for the requested day; strip the internal `date`
+    // marker (the proposal carries the date at the top level) and the
+    // routine-screen-only display markers.
+    final out = <Map<String, Object?>>[];
+    for (final e in entries) {
+      final d = e['date'];
+      if (d is! DateTime) continue;
+      if (DateTime.utc(d.year, d.month, d.day) != dayUtc) continue;
+      final row = Map<String, Object?>.from(e)
+        ..remove('date')
+        ..remove('top')
+        ..remove('reps_hi')
+        ..remove('pct');
+      out.add(row);
+    }
+    return out;
   }
 
   /// AI-vs-logged RPE calibration lines from meta `video_rpe_log`

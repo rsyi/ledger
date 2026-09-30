@@ -12,13 +12,10 @@ import '../models/planned_entry.dart';
 import '../models/quickbooks_config.dart';
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
-import '../models/template.dart';
 import '../services/derive.dart';
 import '../services/qbo_push_store.dart';
 import '../services/qbo_service.dart';
 import '../services/row_cache.dart';
-import '../services/template_interpolator.dart';
-import '../services/template_loader.dart';
 import '../services/github_client.dart';
 import '../services/list_display_render.dart';
 import '../services/llm_client.dart';
@@ -30,7 +27,6 @@ import '../services/warehouse_connector.dart';
 import '../services/week_planner.dart' show WeekPlanner;
 import 'chat_screen.dart';
 import 'form_screen.dart';
-import 'templates_screen.dart';
 import 'widgets/history_panel.dart';
 
 /// One row in the timeline. Three flavors:
@@ -204,15 +200,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// fetch failed (calendar simply has no markers).
   Set<DateTime>? _loggedDates;
 
-  /// Templates for this view. Drives the "Recipes" production strip
-  /// when the view also declares a repeat_group — each template becomes
-  /// a one-tap "Make a batch of X" button that auto-logs the batch
-  /// without opening a form. Null while loading; empty when the view
-  /// has no templates.
-  List<Template>? _templates;
-
-  /// True when a one-tap recipe button or finish button is mid-flight.
-  /// Gates duplicate taps + disables the buttons visually.
+  /// True when a batch finish button is mid-flight. Gates duplicate taps
+  /// + disables the button visually.
   bool _producing = false;
 
   /// keyStrings of logged tiles currently expanded inline. Tap toggles;
@@ -257,7 +246,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
     super.initState();
     _items = _fetch();
     _loadLoggedDates();
-    _loadTemplates();
     _loadQboStatuses();
     widget.llmCache?.addListener(_onLlmUpdate);
     if (_highlightKeys.isNotEmpty) {
@@ -347,60 +335,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
       ));
     } finally {
       if (mounted) setState(() => _qboPushing = false);
-    }
-  }
-
-  Future<void> _loadTemplates() async {
-    try {
-      final ts = await TemplateLoader.loadForView(widget.view.name);
-      if (!mounted) return;
-      setState(() => _templates = ts);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _templates = const []);
-    }
-  }
-
-  /// One-tap production: render a recipe template's entries with no
-  /// variables, stamp them as a single fresh batch, write straight to
-  /// the sheet — bypassing the form AND the plan store. The user sees
-  /// the in-progress banner appear at the top once the writes land.
-  Future<void> _startProduction(Template template) async {
-    if (_producing || _readOnly) return;
-    setState(() => _producing = true);
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final rendered = TemplateInterpolator.apply(
-        template,
-        widget.view,
-        const {},
-      );
-      final groupKey = widget.view.repeatGroup?.groupKey;
-      final batchId = const Uuid().v4();
-      final now = DateTime.now();
-      final stamp = DateFormat('h:mm:ss a').format(now);
-      for (final entry in rendered) {
-        final record = Map<String, Object?>.from(entry);
-        record[widget.view.dateField ?? 'date'] = now;
-        record['start_time'] = stamp;
-        if (groupKey != null) record[groupKey] = batchId;
-        record['id'] = const Uuid().v4();
-        applyDerives(widget.view, record);
-        await widget.repository.create(widget.view, record);
-      }
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text('Started ${template.name}'),
-          duration: const Duration(milliseconds: 800),
-        ),
-      );
-      _reload(fresh: true);
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('Start failed: $e')));
-    } finally {
-      if (mounted) setState(() => _producing = false);
     }
   }
 

@@ -214,6 +214,53 @@ void main() {
       expect(r.painDays, hasLength(1));
       expect(r.painDays.single.text, contains('elbow'));
     });
+
+    test('objective recovery_score averaged + surfaced', () {
+      final r = recoveryWeekOf(
+        rows: [
+          RecoveryRow(date: d(0), recoveryScore: 40, sleepHours: 7),
+          RecoveryRow(date: d(1), recoveryScore: 60),
+        ],
+        weekStart: wk,
+      );
+      expect(r.avgRecoveryScore, closeTo(50.0, 0.001));
+      // recovery_score alone counts as reported (no subjectives needed).
+      expect(r.daysReported, 2);
+    });
+  });
+
+  group('mergeRecoveryRows', () {
+    test('objective sleep_hours + recovery_score win; subjectives carried',
+        () {
+      final merged = mergeRecoveryRows(
+        objective: [
+          RecoveryRow(date: d(0), sleepHours: 7.2, recoveryScore: 65),
+        ],
+        manual: [
+          RecoveryRow(
+            date: d(0),
+            sleepHours: 6.0, // overridden by objective
+            fatigue: 3,
+            pain: 'knee',
+          ),
+        ],
+      );
+      final row = merged.single;
+      expect(row.sleepHours, 7.2); // objective wins
+      expect(row.recoveryScore, 65);
+      expect(row.fatigue, 3); // manual carried
+      expect(row.pain, 'knee');
+    });
+
+    test('objective-only day survives; manual-only day survives', () {
+      final merged = mergeRecoveryRows(
+        objective: [RecoveryRow(date: d(0), recoveryScore: 55)],
+        manual: [RecoveryRow(date: d(1), fatigue: 2)],
+      );
+      expect(merged, hasLength(2));
+      expect(merged[0].recoveryScore, 55);
+      expect(merged[1].fatigue, 2);
+    });
   });
 
   group('full weekly review + markdown', () {

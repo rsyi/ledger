@@ -197,9 +197,17 @@ class HomeDashboard extends StatefulWidget {
   final WarehouseConnector? calisthenicsRepo;
 
   /// daily_notes view + ledger connector — feeds the recomp RECOVERY
-  /// row (sleep/fatigue/soreness/pain subjectives, 2026-09-27 schema).
+  /// row's MANUAL subjectives (sleep_quality/fatigue/soreness/pain/
+  /// readiness, 2026-09-27 schema).
   final ViewSchema? notesView;
   final WarehouseConnector? notesRepo;
+
+  /// recovery view + ledger connector (Whoop API → recovery tab,
+  /// 2026-09-30) — the OBJECTIVE recovery source (sleep_hours +
+  /// recovery_score). Preferred over daily_notes where a day has both;
+  /// null → the review falls back to the daily_notes subjectives alone.
+  final ViewSchema? recoveryView;
+  final WarehouseConnector? recoveryRepo;
 
   /// dashboards.yaml provider (shared 1 h cache) — feeds the hero's
   /// `phases:` eigenvector config. Null → no hero, legacy grid.
@@ -245,6 +253,8 @@ class HomeDashboard extends StatefulWidget {
     this.calisthenicsRepo,
     this.notesView,
     this.notesRepo,
+    this.recoveryView,
+    this.recoveryRepo,
     this.dashboards,
     this.onOpenProgram,
     this.onOpenWeekPlan,
@@ -870,7 +880,10 @@ class HomeDashboardState extends State<HomeDashboard> {
       ));
     }
 
-    final recovery = [
+    // MANUAL recovery subjectives (daily_notes) + OBJECTIVE Whoop data
+    // (recovery tab, 2026-09-30). Merge per day, objective sleep_hours +
+    // recovery_score winning where present (mergeRecoveryRows).
+    final manualRecovery = [
       for (final r in await rows(widget.notesRepo, widget.notesView))
         if (_recDate(r['date']) case final d?)
           RecoveryRow(
@@ -884,6 +897,19 @@ class HomeDashboardState extends State<HomeDashboard> {
             note: _recText(r['note']),
           ),
     ];
+    final objectiveRecovery = [
+      for (final r in await rows(widget.recoveryRepo, widget.recoveryView))
+        if (_recDate(r['date']) case final d?)
+          RecoveryRow(
+            date: d,
+            sleepHours: asNum(r['sleep_hours'])?.toDouble(),
+            recoveryScore: asNum(r['recovery_score'])?.toDouble(),
+          ),
+    ];
+    final recovery = mergeRecoveryRows(
+      objective: objectiveRecovery,
+      manual: manualRecovery,
+    );
 
     final body = <BodyRow>[];
     double? latestBf;

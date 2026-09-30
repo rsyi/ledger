@@ -31,6 +31,8 @@ class IconResolver {
     'mountain-snow': LucideIcons.mountainSnow,
     'scale': LucideIcons.scale,
     'target': LucideIcons.target,
+    'moon': LucideIcons.moon,
+    'bed': LucideIcons.bed,
     // Meals / food
     'utensils': LucideIcons.utensils,
     'apple': LucideIcons.apple,

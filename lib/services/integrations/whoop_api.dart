@@ -1,14 +1,25 @@
-/// Whoop API → daily_notes (sleep + recovery) integration.
+/// Whoop API → `recovery` view (objective sleep + recovery) integration.
 ///
 /// DISTINCT from the BLE live-HR `WhoopIntegration` in whoop.dart — that
 /// one streams the Heart Rate Broadcast (0x180D) during workouts and
 /// writes zone stamps. THIS one is a background-pull (Withings pattern):
 /// OAuth2 authorization-code against the Whoop developer API, tokens in
 /// secure storage with a refresh flow, and a rolling-window pull that
-/// maps each night's sleep + each day's recovery onto the daily_notes
-/// view (one row/day, match-by-date ingest), OWNING sleep_hours /
-/// sleep_quality / readiness while leaving the free-text note to the
-/// user (fill-if-blank).
+/// maps each night's sleep + each day's recovery onto its OWN `recovery`
+/// view (one row/day, match-by-date ingest), OWNING all the objective
+/// device fields (sleep_hours / sleep_performance_pct /
+/// sleep_efficiency_pct / sleep_consistency_pct / recovery_score /
+/// hrv_ms / resting_hr / respiratory_rate) while leaving the free-text
+/// `notes` to the user (fill-if-blank).
+///
+/// HISTORY (2026-09-30): this integration used to write into daily_notes,
+/// bucketing sleep% → sleep_quality 1-5 and recovery% → readiness 1-5.
+/// Per the user directive ("Whoop sleep/recovery should be its own sheet
+/// like climbing/weight/meals"), it now owns a first-class `recovery`
+/// sheet and stores the RAW %/scores (richer + honest); daily_notes keeps
+/// its MANUAL recovery subjectives for hand-journaling. Any sleep values
+/// the OLD build left in daily_notes are harmless leftovers — not
+/// migrated, and no longer touched here.
 library;
 
 import 'dart:convert';
@@ -38,41 +49,17 @@ const _kRollingWindow = Duration(days: 14);
 // Pure transforms (TDD'd in test/whoop_api_transform_test.dart).
 // ---------------------------------------------------------------------------
 
-/// Map a Whoop sleep-performance percentage (0-100) to the daily_notes
-/// 1-5 sleep_quality scale (5 = best). 20-wide bands, top-anchored so a
-/// ~90% night reads a clean 5:
-///   >=90 → 5 · >=75 → 4 · >=60 → 3 · >=45 → 2 · else → 1.
-int whoopSleepQuality(num pct) {
-  if (pct >= 90) return 5;
-  if (pct >= 75) return 4;
-  if (pct >= 60) return 3;
-  if (pct >= 45) return 2;
-  return 1;
-}
-
-/// Map a Whoop recovery score (0-100) to the daily_notes 1-5 readiness
-/// scale (5 = fully ready). Whoop's own colour bands are green >=67 /
-/// yellow 34-66 / red <34; we spread that to five buckets:
-///   >=80 → 5 · >=67 → 4 · >=60 → 3 · >=40 → 2 · else → 1.
-/// (Pins from the transform test: 82 → 5, 40 → 2.)
-int whoopReadiness(num pct) {
-  if (pct >= 80) return 5;
-  if (pct >= 67) return 4;
-  if (pct >= 60) return 3;
-  if (pct >= 40) return 2;
-  return 1;
-}
-
-/// Transform Whoop v2 sleep records into partial daily-note ingest
+/// Transform Whoop v2 sleep records into partial `recovery` ingest
 /// records keyed on the WAKE date (the sleep `end`'s local day). Naps
 /// and score-less (in-progress / pending) records are skipped. One row
 /// per wake-date; the latest-ending night wins a collision.
 ///
 /// Record shape (v2 /activity/sleep): {id, nap: bool, start, end,
-/// score: {sleep_performance_percentage, stage_summary:
+/// score: {sleep_performance_percentage, sleep_efficiency_percentage,
+/// sleep_consistency_percentage, respiratory_rate, stage_summary:
 /// {total_in_bed_time_milli, total_awake_time_milli}}}. Sleep-hours =
-/// (in-bed − awake) ms → hours, 1dp.
-List<Map<String, dynamic>> whoopSleepToNotes(List<dynamic> records) {
+/// (in-bed − awake) ms → hours, 1dp. All %/scores stored RAW.
+List<Map<String, dynamic>> whoopSleepToRecovery(List<dynamic> records) {
   final byDay = <String, Map<String, dynamic>>{};
   final endByDay = <String, int>{};
   for (final s in records) {
@@ -103,16 +90,15 @@ List<Map<String, dynamic>> whoopSleepToNotes(List<dynamic> records) {
         hours = _round1((inBed - awake) / 3600000.0);
       }
     }
-    final perf = score['sleep_performance_percentage'] as num?;
 
     final rec = <String, dynamic>{
       'date': {'kind': 'date', 'value': day},
-      if (hours != null) 'sleep_hours': {'kind': 'float', 'value': hours},
-      if (perf != null)
-        'sleep_quality': {
-          'kind': 'int',
-          'value': whoopSleepQuality(perf),
-        },
+      if (hours != null) 'sleep_hours': _float(hours),
+      ..._num(score, 'sleep_performance_percentage', 'sleep_performance_pct'),
+      ..._num(score, 'sleep_efficiency_percentage', 'sleep_efficiency_pct'),
+      ..._num(score, 'sleep_consistency_percentage', 'sleep_consistency_pct'),
+      // Whoop attaches respiratory_rate to the sleep score.
+      ..._num(score, 'respiratory_rate', 'respiratory_rate'),
     };
     byDay[day] = rec;
     endByDay[day] = endMs;
@@ -121,18 +107,19 @@ List<Map<String, dynamic>> whoopSleepToNotes(List<dynamic> records) {
   return [for (final d in days) byDay[d]!];
 }
 
-/// Transform Whoop v2 recovery records into a day → readiness (1-5) map,
+/// Transform Whoop v2 recovery records into a day → objective-fields map,
 /// keyed on the recovery's `created_at` local day. Score-less records are
-/// skipped. Later `created_at` wins a same-day collision.
-Map<String, int> whoopRecoveryToReadiness(List<dynamic> records) {
-  final out = <String, int>{};
+/// skipped. Later `created_at` wins a same-day collision. Fields:
+/// recovery_score, hrv_ms (hrv_rmssd_milli), resting_hr
+/// (resting_heart_rate).
+Map<String, Map<String, dynamic>> whoopRecoveryFields(List<dynamic> records) {
+  final out = <String, Map<String, dynamic>>{};
   final atByDay = <String, int>{};
   for (final r in records) {
     if (r is! Map) continue;
     final score = r['score'];
     if (score is! Map) continue;
-    final pct = score['recovery_score'] as num?;
-    if (pct == null) continue;
+    if (score['recovery_score'] == null) continue;
     final createdStr = (r['created_at'] ?? r['updated_at']) as String?;
     if (createdStr == null) continue;
     final created = DateTime.tryParse(createdStr);
@@ -141,33 +128,48 @@ Map<String, int> whoopRecoveryToReadiness(List<dynamic> records) {
     final day = _isoDate(created.toUtc());
     final existing = atByDay[day];
     if (existing != null && existing >= ms) continue;
-    out[day] = whoopReadiness(pct);
+    out[day] = <String, dynamic>{
+      ..._num(score, 'recovery_score', 'recovery_score'),
+      ..._num(score, 'hrv_rmssd_milli', 'hrv_ms'),
+      ..._num(score, 'resting_heart_rate', 'resting_hr'),
+    };
     atByDay[day] = ms;
   }
   return out;
 }
 
-/// Fold the readiness-by-day map into the sleep records (matched on the
-/// same daily_notes date), producing the final ingest record list. A
-/// readiness day with no matching sleep still yields a row (readiness
-/// only). Output sorted by date.
-List<Map<String, dynamic>> whoopMergeDailyNotes({
+/// Fold the recovery-by-day fields into the sleep records (matched on the
+/// same `recovery` date), producing the final ingest record list. A
+/// recovery day with no matching sleep still yields a row (recovery
+/// fields only). Output sorted by date.
+List<Map<String, dynamic>> whoopMergeRecovery({
   required List<Map<String, dynamic>> sleep,
-  required Map<String, int> readiness,
+  required Map<String, Map<String, dynamic>> recovery,
 }) {
   final byDay = <String, Map<String, dynamic>>{};
   for (final s in sleep) {
     final day = ((s['date'] as Map)['value']) as String;
     byDay[day] = Map<String, dynamic>.from(s);
   }
-  readiness.forEach((day, r) {
+  recovery.forEach((day, fields) {
     final rec = byDay.putIfAbsent(
         day, () => {'date': {'kind': 'date', 'value': day}});
-    rec['readiness'] = {'kind': 'int', 'value': r};
+    rec.addAll(fields);
   });
   final days = byDay.keys.toList()..sort();
   return [for (final d in days) byDay[d]!];
 }
+
+/// Read a numeric field off a Whoop `score` map under [srcKey] and emit
+/// it (as an engine float cell) under [dstKey]. Absent/non-numeric →
+/// nothing (omit-don't-clear).
+Map<String, dynamic> _num(Map score, String srcKey, String dstKey) {
+  final v = score[srcKey];
+  if (v is num) return {dstKey: _float(v.toDouble())};
+  return const {};
+}
+
+Map<String, dynamic> _float(double v) => {'kind': 'float', 'value': v};
 
 double _round1(double v) => (v * 10).roundToDouble() / 10;
 
@@ -183,14 +185,14 @@ class WhoopApiIntegration implements Integration {
   WhoopApiIntegration({
     required this.config,
     required this.repo,
-    required this.dailyNotesViewJson,
+    required this.recoveryViewJson,
   });
 
   final WhoopApiConfig? config;
   final EngineLedgerRepository repo;
 
-  /// Engine JSON of the daily_notes view (with date_field applied).
-  final Map<String, dynamic> dailyNotesViewJson;
+  /// Engine JSON of the `recovery` view (with date_field applied).
+  final Map<String, dynamic> recoveryViewJson;
 
   static const _storage = FlutterSecureStorage();
   static const _kAccess = 'whoop_api_access';
@@ -203,14 +205,25 @@ class WhoopApiIntegration implements Integration {
   static const _kError = 'integration_whoop_api_error';
   static const _kDays = 'integration_whoop_api_days';
 
-  static const _ownedFields = ['sleep_hours', 'sleep_quality', 'readiness'];
+  // All objective device fields are owned; the free-text note stays
+  // user-owned (fill-if-blank).
+  static const _ownedFields = [
+    'sleep_hours',
+    'sleep_performance_pct',
+    'sleep_efficiency_pct',
+    'sleep_consistency_pct',
+    'recovery_score',
+    'hrv_ms',
+    'resting_hr',
+    'respiratory_rate',
+  ];
 
   @override
   String get id => 'whoop_api';
   @override
-  String get displayName => 'Whoop (sleep)';
+  String get displayName => 'Whoop (sleep + recovery)';
   @override
-  String get targetDescription => '→ daily notes';
+  String get targetDescription => '→ recovery';
   @override
   bool get isConfigured => config?.isConfigured ?? false;
 
@@ -327,19 +340,19 @@ class WhoopApiIntegration implements Integration {
       final sleepRecs = await _getAll(_kSleepUrl, token, start, end);
       final recoveryRecs = await _getAll(_kRecoveryUrl, token, start, end);
 
-      final records = whoopMergeDailyNotes(
-        sleep: whoopSleepToNotes(sleepRecs),
-        readiness: whoopRecoveryToReadiness(recoveryRecs),
+      final records = whoopMergeRecovery(
+        sleep: whoopSleepToRecovery(sleepRecs),
+        recovery: whoopRecoveryFields(recoveryRecs),
       );
 
       if (records.isNotEmpty) {
-        // match-by-date (no match_field) — one daily_notes row per day.
-        // note stays fill-if-blank so a manual journal entry is never
+        // match-by-date (no match_field) — one recovery row per day.
+        // notes stays fill-if-blank so a manual note is never
         // overwritten by an empty Whoop pull.
-        await repo.ingest(dailyNotesViewJson, {
+        await repo.ingest(recoveryViewJson, {
           'source': 'whoop_api',
           'owned_fields': _ownedFields,
-          'fill_if_blank_fields': const ['note'],
+          'fill_if_blank_fields': const ['notes'],
           'records': records,
         });
         for (final r in records) {

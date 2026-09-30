@@ -657,6 +657,17 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       }
       return MetricSeries(points: points, goal: m.goal, unit: m.unit);
 
+    // Recovery domain (Whoop API → recovery tab): one row per day, so a
+    // per-day max over the named numeric column IS the daily value.
+    case 'recovery_score':
+    case 'hrv_ms':
+    case 'sleep_hours':
+      final points = maxPerDaySeries(inputs.records, valueKey: m.id);
+      if (points.isEmpty) {
+        return const MetricUnavailable('no recovery data yet');
+      }
+      return MetricSeries(points: points, goal: m.goal, unit: m.unit);
+
     default:
       return MetricUnavailable('unknown metric "${m.id}"');
   }
@@ -683,6 +694,9 @@ const _headlineLabels = {
   'grade_pyramid': 'top',
   'session_frequency': 'sess/wk',
   'hr_4x4_series': 'max HR',
+  'recovery_score': 'recovery',
+  'hrv_ms': 'HRV',
+  'sleep_hours': 'sleep',
 };
 
 /// Which metrics feed the headline strip. Declared `headline:` ids win

@@ -253,11 +253,11 @@ class _HomeScreenState extends State<HomeScreen> {
       // sources before pushing the ledger.
       ViewSchema? weightView;
       ViewSchema? mealsView;
-      ViewSchema? dailyNotesView;
+      ViewSchema? recoveryView;
       for (final v in views) {
         if (v.name == 'weight') weightView = v;
         if (v.name == 'meals') mealsView = v;
-        if (v.name == 'daily_notes') dailyNotesView = v;
+        if (v.name == 'recovery') recoveryView = v;
       }
       // _initialize() re-runs on schema reload; tear down the previous
       // service's BLE connection + retry timer before replacing it.
@@ -291,16 +291,21 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           WhoopIntegration(hr: hrService),
-          // Whoop developer API → daily_notes (sleep + recovery). Wholly
-          // distinct from the BLE live-HR WhoopIntegration above: OAuth2
-          // background pull mapping each night's sleep + recovery onto the
-          // daily_notes recovery subjectives (owns sleep_hours /
-          // sleep_quality / readiness; the note stays user-owned).
-          if (dailyNotesView != null)
+          // Whoop developer API → the OWN `recovery` view (objective sleep
+          // + recovery). Wholly distinct from the BLE live-HR
+          // WhoopIntegration above: OAuth2 background pull mapping each
+          // night's sleep + each day's recovery onto its own first-class
+          // recovery tab (owns the objective device fields sleep_hours /
+          // sleep_performance_pct / sleep_efficiency_pct /
+          // sleep_consistency_pct / recovery_score / hrv_ms / resting_hr /
+          // respiratory_rate; the free-text note stays user-owned).
+          // daily_notes KEEPS its manual recovery subjectives — Whoop no
+          // longer writes there (2026-09-30).
+          if (recoveryView != null)
             WhoopApiIntegration(
               config: assetConfig.whoopApi,
               repo: repo.repo,
-              dailyNotesViewJson: viewSchemaToEngineJson(dailyNotesView),
+              recoveryViewJson: viewSchemaToEngineJson(recoveryView),
             ),
           // Macrofactor exports nutrition to Health Connect; the
           // integration reads HC nutrition records and ingests them as
@@ -665,6 +670,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ViewSchema? dashCardioView;
               ViewSchema? dashCalisthenicsView;
               ViewSchema? dashNotesView;
+              ViewSchema? dashRecoveryView;
               for (final v in data.views) {
                 if (v.name == 'weight') weightView = v;
                 if (v.name == 'program_status') statusView = v;
@@ -678,6 +684,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 // RECOVERY sources.
                 if (v.name == 'calisthenics') dashCalisthenicsView = v;
                 if (v.name == 'daily_notes') dashNotesView = v;
+                // Objective recovery (Whoop API → recovery tab,
+                // 2026-09-30): preferred over daily_notes subjectives for
+                // the review's Recovery section.
+                if (v.name == 'recovery') dashRecoveryView = v;
               }
               final programProvider = github == null
                   ? null
@@ -994,6 +1004,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         notesView: dashNotesView,
                         notesRepo: dashboardRepoFor(
                           dashNotesView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
+                        recoveryView: dashRecoveryView,
+                        recoveryRepo: dashboardRepoFor(
+                          dashRecoveryView,
                           readOnlyRepo: data.readOnlyRepo,
                           forView: data.registry.forView,
                         ),

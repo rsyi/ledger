@@ -139,7 +139,10 @@ class Cardio4x4Row {
   });
 }
 
-/// One daily_notes row's recovery subjectives.
+/// One day's recovery signals — MANUAL subjectives (daily_notes) plus the
+/// OBJECTIVE Whoop fields (the `recovery` view, 2026-09-30). The loader
+/// merges both sources per date, preferring the objective recovery sheet
+/// for sleep_hours + recovery_score where present (see [mergeRecoveryRows]).
 class RecoveryRow {
   final DateTime date;
   final double? sleepHours;
@@ -150,6 +153,9 @@ class RecoveryRow {
   final String? pain;
   final String? note;
 
+  /// Objective Whoop recovery score (0-100) — from the `recovery` view.
+  final double? recoveryScore;
+
   const RecoveryRow({
     required this.date,
     this.sleepHours,
@@ -159,7 +165,44 @@ class RecoveryRow {
     this.readiness,
     this.pain,
     this.note,
+    this.recoveryScore,
   });
+}
+
+/// Merge OBJECTIVE recovery-sheet rows (Whoop) with MANUAL daily_notes
+/// subjectives, one output row per calendar day. Objective sleep_hours +
+/// recovery_score WIN where present; the manual subjectives
+/// (sleep_quality/fatigue/soreness/readiness/pain/note) are carried from
+/// daily_notes. A day present in only one source yields that source's
+/// fields alone. Objective-only fallback still fills sleep_hours so the
+/// review has data even before the user hand-journals.
+List<RecoveryRow> mergeRecoveryRows({
+  required List<RecoveryRow> objective,
+  required List<RecoveryRow> manual,
+}) {
+  final byDay = <DateTime, RecoveryRow>{};
+  for (final r in manual) {
+    byDay[_day(r.date)] = r;
+  }
+  for (final o in objective) {
+    final day = _day(o.date);
+    final m = byDay[day];
+    byDay[day] = RecoveryRow(
+      date: day,
+      // Objective wins for the fields Whoop measures.
+      sleepHours: o.sleepHours ?? m?.sleepHours,
+      recoveryScore: o.recoveryScore ?? m?.recoveryScore,
+      // Manual-only subjectives carried through.
+      sleepQuality: m?.sleepQuality,
+      fatigue: m?.fatigue,
+      soreness: m?.soreness,
+      readiness: m?.readiness,
+      pain: m?.pain,
+      note: m?.note,
+    );
+  }
+  final days = byDay.keys.toList()..sort();
+  return [for (final d in days) byDay[d]!];
 }
 
 /// One weight row (weigh-in + optional weekly waist).
@@ -677,6 +720,9 @@ class RecoveryWeek {
   final double? avgSoreness;
   final double? avgReadiness;
 
+  /// Objective Whoop recovery score (0-100), averaged over the week.
+  final double? avgRecoveryScore;
+
   /// Pain OUTRANKS the averages as a coaching signal.
   final List<PainDay> painDays;
 
@@ -687,6 +733,7 @@ class RecoveryWeek {
     this.avgFatigue,
     this.avgSoreness,
     this.avgReadiness,
+    this.avgRecoveryScore,
     this.painDays = const [],
   });
 }
@@ -715,6 +762,7 @@ RecoveryWeek recoveryWeekOf({
           r.fatigue != null ||
           r.soreness != null ||
           r.readiness != null ||
+          r.recoveryScore != null ||
           (r.pain ?? '').isNotEmpty)
       .length;
   return RecoveryWeek(
@@ -724,6 +772,7 @@ RecoveryWeek recoveryWeekOf({
     avgFatigue: avg((r) => r.fatigue),
     avgSoreness: avg((r) => r.soreness),
     avgReadiness: avg((r) => r.readiness),
+    avgRecoveryScore: avg((r) => r.recoveryScore),
     painDays: [
       for (final r in week)
         if ((r.pain ?? '').trim().isNotEmpty)
@@ -1208,20 +1257,27 @@ List<CoachAnswer> _decide({
       n: 8,
       question: 'Recovery adequate?',
       verdict: ReviewVerdict.noData,
-      answer: 'No data — no recovery subjectives logged '
-          '(daily_notes sleep/fatigue/soreness fields).',
+      answer: 'No data — no Whoop recovery (recovery tab) nor manual '
+          'subjectives logged (daily_notes sleep/fatigue/soreness).',
     ));
   } else {
     final fatigueHigh =
         recovery.avgFatigue != null && recovery.avgFatigue! >= 3.5;
     final sleepLow =
         recovery.avgSleepHours != null && recovery.avgSleepHours! < 6.5;
+    // Whoop recovery green >=67 / yellow 34-66 / red <34 — a week
+    // averaging in the yellow-to-red band is a "no".
+    final recoveryLow =
+        recovery.avgRecoveryScore != null && recovery.avgRecoveryScore! < 50;
     answers.add(CoachAnswer(
       n: 8,
       question: 'Recovery adequate?',
-      verdict:
-          fatigueHigh || sleepLow ? ReviewVerdict.no : ReviewVerdict.yes,
+      verdict: fatigueHigh || sleepLow || recoveryLow
+          ? ReviewVerdict.no
+          : ReviewVerdict.yes,
       answer: [
+        if (recovery.avgRecoveryScore != null)
+          'recovery ${_f1(recovery.avgRecoveryScore!)}%',
         if (recovery.avgSleepHours != null)
           'sleep ${_f1(recovery.avgSleepHours!)} h',
         if (recovery.avgFatigue != null)
@@ -1431,6 +1487,8 @@ String renderWeeklyReviewMarkdown(WeeklyReview r) {
   } else {
     final rec = r.recovery;
     b.writeln([
+      if (rec.avgRecoveryScore != null)
+        'Whoop recovery ${_f1(rec.avgRecoveryScore!)}%',
       if (rec.avgSleepHours != null) 'sleep ${_f1(rec.avgSleepHours!)} h',
       if (rec.avgSleepQuality != null)
         'quality ${_f1(rec.avgSleepQuality!)}/5',

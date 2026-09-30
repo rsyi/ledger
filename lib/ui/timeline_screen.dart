@@ -27,6 +27,7 @@ import '../services/log_now.dart';
 import '../services/plan_store.dart';
 import '../services/sheets_repository.dart';
 import '../services/warehouse_connector.dart';
+import '../services/week_planner.dart' show WeekPlanner;
 import 'chat_screen.dart';
 import 'form_screen.dart';
 import 'templates_screen.dart';
@@ -1623,7 +1624,11 @@ class _TemplateHeader extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              name,
+              // The auto-planner's group reads as a clear call to action;
+              // coach-proposed / other groups keep their own name.
+              name == WeekPlanner.templateLabel
+                  ? 'From your program — tap to log'
+                  : name,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 color: scheme.onSurface,
               ),

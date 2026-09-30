@@ -40,7 +40,9 @@ import '../services/schema_sync.dart';
 import '../services/sheets_repository.dart';
 import '../services/transient_retry.dart';
 import '../services/warehouse_connector.dart';
+import '../services/plan_store.dart';
 import '../services/program_provider.dart';
+import '../services/today_program_call.dart';
 import '../services/week_planner.dart';
 import '../services/forecast_meta_store.dart';
 import '../services/wm_store.dart';
@@ -1040,6 +1042,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       _DomainSections(
                         key: _domainsKey,
                         provider: domainProvider,
+                        programProvider: programProvider,
                         entryViews: entryViews,
                         readOnlyViews: readOnlyViews,
                         onOpenDomain: openDomain,
@@ -1256,6 +1259,10 @@ class _DomainSections extends StatefulWidget {
   /// Null when the build has no `github:` config — fallback only.
   final DomainConfigProvider? provider;
 
+  /// Program source for the "today:" domain badges. Null → no badges
+  /// (the list still renders).
+  final ProgramProvider? programProvider;
+
   /// Writable trackers (input overlay, not read-only, not coach_chat).
   final List<ViewSchema> entryViews;
 
@@ -1271,6 +1278,7 @@ class _DomainSections extends StatefulWidget {
   const _DomainSections({
     super.key,
     required this.provider,
+    required this.programProvider,
     required this.entryViews,
     required this.readOnlyViews,
     required this.onOpenDomain,
@@ -1281,13 +1289,53 @@ class _DomainSections extends StatefulWidget {
   State<_DomainSections> createState() => _DomainSectionsState();
 }
 
+/// What today's program calls for, per view name, plus which of those
+/// views already have today's planned rows sitting in PlanStore (the
+/// "waiting to log" state).
+class _TodayCalls {
+  final Map<String, String> byView;
+  final Set<String> waiting;
+  const _TodayCalls(this.byView, this.waiting);
+  static const empty = _TodayCalls({}, {});
+}
+
 class _DomainSectionsState extends State<_DomainSections> {
   Future<List<DomainConfig>?>? _load;
+  _TodayCalls _today = _TodayCalls.empty;
 
   @override
   void initState() {
     super.initState();
     _load = widget.provider?.load();
+    _loadToday();
+  }
+
+  /// Loads today's per-domain program call (program.yaml is 1 h cached,
+  /// so this is cheap) and marks the views that already have today's
+  /// planned rows. Best-effort: any failure leaves the badges off.
+  Future<void> _loadToday() async {
+    final provider = widget.programProvider;
+    if (provider == null) return;
+    try {
+      final docs = await provider.load();
+      final program = docs.program;
+      if (program == null) return;
+      final today = DateTime.now();
+      final byView = todayProgramCallByView(program, docs.phase, today);
+      // Which of those views already have today's planned rows?
+      final viewByName = {for (final v in widget.entryViews) v.name: v};
+      final waiting = <String>{};
+      for (final name in byView.keys) {
+        final view = viewByName[name];
+        if (view == null) continue;
+        final planned = await PlanStore.loadForDate(view, today);
+        if (planned.isNotEmpty) waiting.add(name);
+      }
+      if (!mounted) return;
+      setState(() => _today = _TodayCalls(byView, waiting));
+    } catch (_) {
+      // No badges on failure — the list still works.
+    }
   }
 
   /// Pull-to-refresh: bust the shared doc cache and refetch. (The home
@@ -1295,11 +1343,14 @@ class _DomainSectionsState extends State<_DomainSections> {
   /// harmless.)
   Future<void> reload() async {
     final provider = widget.provider;
-    if (provider == null) return;
+    if (provider == null) {
+      await _loadToday();
+      return;
+    }
     DomainConfigProvider.clearCache();
     final next = provider.load();
     setState(() => _load = next);
-    await next;
+    await Future.wait([next, _loadToday()]);
   }
 
   @override
@@ -1364,6 +1415,11 @@ class _DomainSectionsState extends State<_DomainSections> {
   }
 
   Widget _domainTile(BuildContext context, DomainConfig d, ViewSchema view) {
+    final scheme = Theme.of(context).colorScheme;
+    // Today's program call for this domain (badge), keyed by the domain's
+    // primary view name.
+    final call = _today.byView[view.name];
+    final waiting = _today.waiting.contains(view.name);
     return ListTile(
       leading: IconResolver.resolve(
         d.icon ?? view.icon,
@@ -1371,12 +1427,22 @@ class _DomainSectionsState extends State<_DomainSections> {
         color: Theme.of(context).colorScheme.onSurfaceVariant,
       ),
       title: Text(d.name),
-      subtitle: view.description == null
-          ? null
+      subtitle: call == null
+          ? (view.description == null
+              ? null
+              : Text(
+                  view.description!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ))
           : Text(
-              view.description!,
+              waiting ? 'Today: $call · waiting to log' : 'Today: $call',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
             ),
       trailing: const Icon(Icons.chevron_right),
       onTap: () => widget.onOpenDomain(d, view),

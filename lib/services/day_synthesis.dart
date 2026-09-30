@@ -39,15 +39,72 @@ class SynthSet {
   const SynthSet({required this.exercise, this.weight, this.reps});
 }
 
-/// The macro targets in force today (from the program slice). Any may be
-/// null (block-0 nulls → "no target").
+/// The macro targets in force today (from the program slice).
+///
+/// The CUT phase (block 0) exposes RELATIVE protein — `protein_g_per_lb`
+/// (e.g. [0.8, 1.0]) — and no hard carb target (carbs are a soft floor,
+/// not a ceiling), while the post-Dec-14 recomp phase exposes ABSOLUTE
+/// grams ([protein_g_day] / [carbs_g_day] / [fat_g_day_min]). Both shapes
+/// feed this class; [resolvedProteinBand] flattens them to an absolute
+/// g/day band using [bodyweightLb] so the prompt always has a real target
+/// to judge intake against (the cut previously fell through to a bare "no
+/// target" because only the absolute keys were read).
 class SynthTargets {
-  /// [lo, hi] grams/day; the low end is the floor we compare against.
+  /// ABSOLUTE [lo, hi] grams/day; the low end is the floor we compare
+  /// against. Present only in the recomp phase.
   final List<double>? proteinGDay;
+
+  /// RELATIVE protein band ([g/lb-of-bodyweight lo, hi]). Present in the
+  /// cut phase; resolved to absolute grams via [bodyweightLb].
+  final List<double>? proteinGPerLb;
+
+  /// Current 7-day-average bodyweight (lb) — prices [proteinGPerLb].
+  final double? bodyweightLb;
+
+  /// ABSOLUTE carb band [lo, hi] grams/day. Present only in the recomp
+  /// phase; the cut has no hard carb target (a soft floor lives in the
+  /// GOALS surface config, not the program slice).
   final List<double>? carbsGDay;
   final double? fatGDayMin;
 
-  const SynthTargets({this.proteinGDay, this.carbsGDay, this.fatGDayMin});
+  const SynthTargets({
+    this.proteinGDay,
+    this.proteinGPerLb,
+    this.bodyweightLb,
+    this.carbsGDay,
+    this.fatGDayMin,
+  });
+
+  /// The protein target as an ABSOLUTE g/day band, resolving the cut's
+  /// per-lb band against [bodyweightLb] when the absolute band is absent.
+  /// Null when neither an absolute band nor (per-lb band + bodyweight) is
+  /// available — the caller then falls back to [proteinPerLbText].
+  List<double>? get resolvedProteinBand {
+    if (proteinGDay != null && proteinGDay!.isNotEmpty) return proteinGDay;
+    final perLb = proteinGPerLb;
+    final bw = bodyweightLb;
+    if (perLb != null && perLb.isNotEmpty && bw != null && bw > 0) {
+      return [for (final x in perLb) x * bw];
+    }
+    return null;
+  }
+
+  /// The per-lb protein band as display text ("0.8–1.0 g/lb"), or null
+  /// when no per-lb band is declared. Used as the honest fallback when a
+  /// per-lb target exists but bodyweight is unavailable — better than
+  /// "no target".
+  String? get proteinPerLbText {
+    final perLb = proteinGPerLb;
+    if (perLb == null || perLb.isEmpty) return null;
+    // 1 decimal when exact at tenths (0.8 → "0.8"), else 2 (1.05 → "1.05").
+    String n(double v) => (v * 10).roundToDouble() == v * 10
+        ? v.toStringAsFixed(1)
+        : v.toStringAsFixed(2);
+    if (perLb.length >= 2 && perLb[1] != perLb[0]) {
+      return '${n(perLb[0])}–${n(perLb[1])} g/lb';
+    }
+    return '${n(perLb[0])} g/lb';
+  }
 }
 
 /// The program's call for today, distilled from the routine prose + planned
@@ -225,8 +282,24 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
   b.writeln();
 
   b.writeln('MACRO TARGETS TODAY:');
-  b.writeln('- protein floor: ${_target(c.targets.proteinGDay)}');
-  b.writeln('- carbs: ${_target(c.targets.carbsGDay)}');
+  final resolvedProtein = c.targets.resolvedProteinBand;
+  if (resolvedProtein != null) {
+    b.writeln('- protein floor: ${_target(resolvedProtein)}');
+  } else if (c.targets.proteinPerLbText != null) {
+    // Per-lb target declared but no bodyweight to price it — honest text.
+    b.writeln('- protein floor: ${c.targets.proteinPerLbText}');
+  } else {
+    b.writeln('- protein floor: no target');
+  }
+  // Carbs: absolute band when the recomp phase declares one; otherwise the
+  // cut has no hard carb target (carbs are a floor, not a ceiling — never
+  // "no target", which reads as "nothing to hit").
+  if (c.targets.carbsGDay != null) {
+    b.writeln('- carbs: ${_target(c.targets.carbsGDay)}');
+  } else {
+    b.writeln('- carbs: no hard target on the cut (carbs are a floor, '
+        'not a ceiling — enough to fuel training)');
+  }
   b.writeln(
     '- fat floor: ${c.targets.fatGDayMin == null ? 'no target' : '${c.targets.fatGDayMin!.round()}g'}',
   );
@@ -239,8 +312,8 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
   }
   if (c.cardioToCome) left.add('4x4 cardio');
   if (c.climbToCome) left.add('climbing (${c.program.climbCall})');
-  final pf = c.targets.proteinGDay;
-  if (pf != null && c.proteinSoFar < pf[0]) {
+  final pf = c.targets.resolvedProteinBand;
+  if (pf != null && pf.isNotEmpty && c.proteinSoFar < pf[0]) {
     left.add('${(pf[0] - c.proteinSoFar).round()}g more protein to the floor');
   }
   if (left.isEmpty) {

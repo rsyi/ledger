@@ -704,6 +704,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   readOnlyRepo: data.readOnlyRepo,
                   forView: data.registry.forView,
                 ),
+                // Bodyweight prices the cut's per-lb protein band into an
+                // absolute g/day target (7d avg, same as the GOALS tab).
+                weightView: weightView,
+                weightRepo: weightView == null
+                    ? null
+                    : data.registry.forView(weightView),
+                analytics: data.analytics,
                 provider: programProvider,
               );
               // Feature 3: post-log notification driver — one boot-time

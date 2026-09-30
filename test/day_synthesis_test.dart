@@ -131,4 +131,96 @@ void main() {
       expect(buildDaySynthesisPrompt(ctx(hour: 0)), contains('12am'));
     });
   });
+
+  // The cut-phase bug: the slice exposes protein_g_per_lb (relative) + no
+  // absolute carb target, so the old absolute-only read fell through to
+  // "no macro targets set". These pin the resolution + honest fallbacks.
+  group('cut per-lb protein resolution', () {
+    test('per-lb band × bodyweight → absolute g/day band', () {
+      // 0.8–1.0 g/lb at 162 lb → 130–162 g.
+      const t = SynthTargets(
+        proteinGPerLb: [0.8, 1.0],
+        bodyweightLb: 162,
+      );
+      expect(t.resolvedProteinBand, [162 * 0.8, 162 * 1.0]);
+      expect(t.resolvedProteinBand![0].round(), 130);
+      expect(t.resolvedProteinBand![1].round(), 162);
+    });
+
+    test('absolute band wins over the per-lb band when both present', () {
+      const t = SynthTargets(
+        proteinGDay: [160, 175],
+        proteinGPerLb: [0.8, 1.0],
+        bodyweightLb: 162,
+      );
+      expect(t.resolvedProteinBand, [160, 175]);
+    });
+
+    test('missing bodyweight → no resolved band, but per-lb text stands in',
+        () {
+      const t = SynthTargets(proteinGPerLb: [0.8, 1.0]);
+      expect(t.resolvedProteinBand, isNull);
+      expect(t.proteinPerLbText, '0.8–1.0 g/lb');
+    });
+
+    test('prompt shows the resolved cut protein band, not "no target"', () {
+      final c = ctx(
+        targets: const SynthTargets(
+          proteinGPerLb: [0.8, 1.0],
+          bodyweightLb: 162,
+        ),
+        logged: const SynthLogged(meals: [SynthMeal(proteinG: 40)]),
+      );
+      final p = buildDaySynthesisPrompt(c);
+      expect(p, contains('protein floor: 130–162g'));
+      expect(p, isNot(contains('protein floor: no target')));
+      // Floor is 130 (0.8×162), ate 40 → 90 remaining surfaced.
+      expect(p, contains('90g more protein to the floor'));
+    });
+
+    test('prompt falls back to per-lb text when bodyweight is unavailable',
+        () {
+      final c = ctx(
+        targets: const SynthTargets(proteinGPerLb: [0.8, 1.0]),
+        logged: const SynthLogged(meals: [SynthMeal(proteinG: 40)]),
+      );
+      final p = buildDaySynthesisPrompt(c);
+      expect(p, contains('protein floor: 0.8–1.0 g/lb'));
+      expect(p, isNot(contains('protein floor: no target')));
+      // No absolute floor to compute a remaining gram count against.
+      expect(p, isNot(contains('more protein to the floor')));
+    });
+
+    test('cut carbs read as a floor, not "no target"', () {
+      final p = buildDaySynthesisPrompt(ctx(
+        targets: const SynthTargets(
+          proteinGPerLb: [0.8, 1.0],
+          bodyweightLb: 162,
+        ),
+      ));
+      expect(p, contains('carbs: no hard target on the cut'));
+      expect(p, isNot(contains('carbs: no target')));
+    });
+
+    test('recomp absolute carb band still renders as an absolute band', () {
+      final p = buildDaySynthesisPrompt(ctx(
+        phase: 'recomp',
+        targets: const SynthTargets(
+          proteinGDay: [160, 175],
+          carbsGDay: [225, 300],
+        ),
+      ));
+      expect(p, contains('carbs: 225–300g'));
+    });
+
+    test('agrees with the GOALS surface on the cut target (162 lb, 0.8 g/lb)',
+        () {
+      // goals_service prices protein/lb × bw the same way (protein g/lb
+      // band low = 0.8, bw = 162 → 130 g floor). The synthesis card must
+      // cite the same floor so the two surfaces never disagree.
+      const t = SynthTargets(proteinGPerLb: [0.8, 1.0], bodyweightLb: 162);
+      final goalsFloor = (0.8 * 162).round(); // 130
+      expect(t.resolvedProteinBand![0].round(), goalsFloor);
+    });
+  });
 }

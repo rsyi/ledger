@@ -4,13 +4,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/model_config.dart';
 import '../models/view_schema.dart';
+import 'analytics_engine.dart';
 import 'day_synthesis.dart';
 import 'llm_client.dart';
 import 'plan_store.dart';
 import 'program_current.dart';
+import 'program_observed.dart' show observedWeightStats;
 import 'program_provider.dart';
 import 'today_program_call.dart';
 import 'warehouse_connector.dart';
+import 'weight_series.dart' show loadDailyWeighIns;
+import 'wilks.dart' show contemporaneousBodyweightLbs;
 
 /// The synthesis plus the small tally the post-log notification reads. The
 /// synthesis text is what the card shows; the tally lets a notification
@@ -74,6 +78,14 @@ class DaySynthesisService {
   final WarehouseConnector? cardioRepo;
   final ViewSchema? climbingView;
   final WarehouseConnector? climbingRepo;
+
+  /// Weight view/repo (+ optional analytics) feed the 7-day-average
+  /// bodyweight that prices the cut's per-lb protein band into an
+  /// absolute g/day target — same machinery the GOALS surface uses.
+  final ViewSchema? weightView;
+  final WarehouseConnector? weightRepo;
+  final AnalyticsEngine? analytics;
+
   final ProgramProvider? provider;
   final DateTime Function() now;
 
@@ -88,6 +100,9 @@ class DaySynthesisService {
     required this.cardioRepo,
     required this.climbingView,
     required this.climbingRepo,
+    this.weightView,
+    this.weightRepo,
+    this.analytics,
     required this.provider,
     this.now = DateTime.now,
   });
@@ -186,9 +201,28 @@ class DaySynthesisService {
       } catch (_) {/* honest empty */}
     }
 
+    // Current 7-day-average bodyweight (lb) — prices the cut's per-lb
+    // protein band. Same resolution the GOALS surface uses: 7d avg, then
+    // the contemporaneous weigh-in as a fallback. Null when no weigh-ins.
+    double? bodyweightLb;
+    if (weightView != null && weightRepo != null) {
+      try {
+        final series = await loadDailyWeighIns(
+          analytics: analytics,
+          view: weightView,
+          repo: weightRepo,
+        );
+        final daily = series.daily;
+        if (daily.isNotEmpty) {
+          bodyweightLb = observedWeightStats(daily, clock).bw7dAvg ??
+              contemporaneousBodyweightLbs(daily, clock);
+        }
+      } catch (_) {/* honest null — falls back to per-lb text */}
+    }
+
     // Program call + routine prose + targets from the slice.
     var program = const SynthProgramDay();
-    var targets = const SynthTargets();
+    var targets = SynthTargets(bodyweightLb: bodyweightLb);
     var phase = '';
     final p = provider;
     if (p != null) {
@@ -198,7 +232,11 @@ class DaySynthesisService {
           final slice = programCurrent(docs.program!, docs.phase, clock);
           if (slice != null) {
             targets = SynthTargets(
+              // Recomp phase exposes absolute grams; the cut exposes the
+              // relative per-lb band + a soft (non-slice) carb floor.
               proteinGDay: _pair(slice.targetsInForce['protein_g_day']),
+              proteinGPerLb: _pair(slice.targetsInForce['protein_g_per_lb']),
+              bodyweightLb: bodyweightLb,
               carbsGDay: _pair(slice.targetsInForce['carbs_g_day']),
               fatGDayMin: _num(slice.targetsInForce['fat_g_day_min']),
             );

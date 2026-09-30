@@ -1,7 +1,7 @@
 /// Withings → weight integration.
 ///
 /// OAuth2 (in-app WebView consent intercepting the custom-scheme
-/// callback airledger://oauth/withings), tokens in secure storage,
+/// callback ledger://oauth/withings), tokens in secure storage,
 /// `getmeas` pulls transformed to engine ingest batches, and a
 /// rolling-window reconcile — backed by the engine's provenance
 /// table — that both unwinds deletions and re-ingests the window's
@@ -23,7 +23,7 @@ import 'integration.dart';
 const _kAuthorizeUrl = 'https://account.withings.com/oauth2_user/authorize2';
 const _kTokenUrl = 'https://wbsapi.withings.net/v2/oauth2';
 const _kMeasureUrl = 'https://wbsapi.withings.net/measure';
-const _kRedirectUri = 'airledger://oauth/withings';
+const _kRedirectUri = 'ledger://oauth/withings';
 const _kScope = 'user.metrics';
 const _kMinPullInterval = Duration(hours: 6);
 const _kReconcileWindow = Duration(days: 90);
@@ -189,7 +189,7 @@ class WithingsIntegration implements Integration {
         builder: (_) => OAuthWebViewScreen(
           title: 'Connect Withings',
           authorizeUrl: url,
-          callbackScheme: 'airledger',
+          callbackScheme: 'ledger',
         ),
       ),
     );

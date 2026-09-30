@@ -883,4 +883,107 @@ void main() {
       expect(monday.first.values['weight'], isA<num>());
     });
   });
+
+  group('scheduleDay (manual "Add to log" from the Program screen)', () {
+    setUp(() => SharedPreferences.setMockInitialValues({}));
+
+    test('copies the source day\'s session onto the target date, warm-ups '
+        'dropped', () async {
+      final view = _strengthView();
+      // Wednesday 2026-09-30 (bench heavy day) → schedule onto Sunday.
+      final source = DateTime.utc(2026, 9, 30);
+      final target = DateTime(2026, 10, 4);
+      final added = await WeekPlanner.scheduleDay(
+        strengthView: view,
+        program: program,
+        sourceDay: source,
+        targetDay: target,
+        workingMaxes: const {'bench': 245.0, 'squat': 320.0, 'press': 150.0},
+      );
+      expect(added, isNotEmpty);
+      // All land on the TARGET date, tagged as program rows, no warm-ups.
+      for (final e in added) {
+        expect(e.date, DateTime(2026, 10, 4));
+        expect(e.templateName, WeekPlanner.templateLabel);
+      }
+      final onTarget = await PlanStore.loadForDate(view, target);
+      expect(onTarget, hasLength(added.length));
+      // Bench top set present (a working set, warm-ups excluded).
+      expect(
+        onTarget.map((e) => e.values['exercise']),
+        contains('Flat Barbell Bench Press'),
+      );
+    });
+
+    test('rest day schedules nothing', () async {
+      final view = _strengthView();
+      final sunday = DateTime.utc(2026, 9, 27); // rest
+      final added = await WeekPlanner.scheduleDay(
+        strengthView: view,
+        program: program,
+        sourceDay: sunday,
+        targetDay: sunday,
+      );
+      expect(added, isEmpty);
+    });
+
+    test('replaces existing program rows already on the target date', () async {
+      final view = _strengthView();
+      final stale = PlannedEntry.create(
+        view: view,
+        date: DateTime(2026, 10, 4),
+        values: {'exercise': 'Old Move', 'reps': 5},
+        templateName: WeekPlanner.templateLabel,
+      );
+      final userRow = PlannedEntry.create(
+        view: view,
+        date: DateTime(2026, 10, 4),
+        values: {'exercise': 'Face Pull', 'reps': 15},
+        templateName: 'my own',
+      );
+      await PlanStore.addAll(view, [stale, userRow]);
+      await WeekPlanner.scheduleDay(
+        strengthView: view,
+        program: program,
+        sourceDay: DateTime.utc(2026, 9, 30),
+        targetDay: DateTime(2026, 10, 4),
+      );
+      final onTarget = await PlanStore.loadForDate(view, DateTime(2026, 10, 4));
+      // Stale program row gone; user's own row untouched.
+      expect(onTarget.map((e) => e.values['exercise']), isNot(contains('Old Move')));
+      expect(onTarget.map((e) => e.localId), contains(userRow.localId));
+    });
+  });
+
+  group('scheduleWeek (manual "Schedule this week")', () {
+    setUp(() => SharedPreferences.setMockInitialValues({}));
+
+    test('writes the whole Mon–Sun week including past days, replacing '
+        'stale program rows', () async {
+      final view = _strengthView();
+      final monday = DateTime.utc(2026, 9, 28);
+      final stale = PlannedEntry.create(
+        view: view,
+        date: DateTime(2026, 9, 28),
+        values: {'exercise': 'Old Move', 'reps': 5},
+        templateName: WeekPlanner.templateLabel,
+      );
+      await PlanStore.addAll(view, [stale]);
+      final added = await WeekPlanner.scheduleWeek(
+        strengthView: view,
+        program: program,
+        weekStart: monday,
+        workingMaxes: const {'squat': 320.0, 'bench': 245.0, 'press': 150.0},
+      );
+      expect(added, isNotEmpty);
+      // Monday IS included (no today-forward cutoff) and the stale row is
+      // gone.
+      final mon = await PlanStore.loadForDate(view, DateTime(2026, 9, 28));
+      expect(mon.map((e) => e.values['exercise']), isNot(contains('Old Move')));
+      expect(mon, isNotEmpty);
+      for (final e in added) {
+        expect(e.values.containsKey('rpe'), isFalse);
+      }
+    });
+  });
 }

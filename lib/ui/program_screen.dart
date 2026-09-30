@@ -252,6 +252,7 @@ class _ProgramScreenState extends State<ProgramScreen> {
               today: _today,
               hasWmStore: widget.wmStore != null,
               wmBusy: _wmBusy,
+              strengthView: widget.strengthView,
               onSetTrainingMax: _setTrainingMaxDialog,
               onConfirmSeed: (lift) =>
                   _wmAction(() => widget.wmStore!.confirmSeed(lift)),
@@ -295,6 +296,11 @@ class _RoutineView extends StatelessWidget {
   final DateTime today;
   final bool hasWmStore;
   final bool wmBusy;
+
+  /// Target view for scheduling planned rows. Null → the schedule
+  /// actions are hidden (no view to write into).
+  final ViewSchema? strengthView;
+
   final VoidCallback onSetTrainingMax;
   final ValueChanged<String> onConfirmSeed;
   final VoidCallback onRefreshMaxes;
@@ -305,6 +311,7 @@ class _RoutineView extends StatelessWidget {
     required this.today,
     required this.hasWmStore,
     required this.wmBusy,
+    required this.strengthView,
     required this.onSetTrainingMax,
     required this.onConfirmSeed,
     required this.onRefreshMaxes,

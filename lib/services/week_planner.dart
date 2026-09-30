@@ -576,6 +576,119 @@ class WeekPlanner {
     return entries;
   }
 
+  /// Converts one program-built entry map (from [buildWeekPlannedEntries])
+  /// into a persistable [PlannedEntry] on [date], carrying only the fields
+  /// that get logged (exercise / reps / weight). Warm-up rows are dropped
+  /// — the routine's "add to log" mirrors the working sets, not the ramp
+  /// (warm-ups are done by feel). Returns null for a warm-up row.
+  static PlannedEntry? _plannedFrom(
+    ViewSchema view,
+    Map<String, Object?> e,
+    DateTime date,
+  ) {
+    if (e['warmup'] == true) return null;
+    return PlannedEntry.create(
+      view: view,
+      date: DateTime(date.year, date.month, date.day),
+      values: {
+        'exercise': e['exercise'],
+        'reps': e['reps'],
+        'weight': ?e['weight'],
+      },
+      templateName: templateLabel,
+    );
+  }
+
+  /// Manual "Schedule this week" (Program screen): writes the whole
+  /// displayed [weekStart] Mon–Sun week's planned strength rows into
+  /// PlanStore, replacing any still-planned program rows already in that
+  /// window (same replace semantics as [regenerateWeek] but user-invoked,
+  /// with NO today-forward cutoff — a user scheduling a week wants every
+  /// day, including earlier ones). Returns the entries it added.
+  ///
+  /// The week is priced for EXACTLY the displayed Mon–Sun days
+  /// (`snapToWeekStart: false`), matching the routine screen's window.
+  static Future<List<PlannedEntry>> scheduleWeek({
+    required ViewSchema strengthView,
+    required Map<Object?, Object?> program,
+    required DateTime weekStart,
+    Map<String, double> references = const {},
+    Map<String, double> workingMaxes = const {},
+    Map<String, double> capRpeByLift = const {},
+    List<StrengthRow> accessoryHistory = const [],
+  }) async {
+    final fmt = DateFormat('yyyy-MM-dd');
+    final start = DateTime.utc(weekStart.year, weekStart.month, weekStart.day);
+    final weekDays = {
+      for (var i = 0; i < 7; i++) fmt.format(start.add(Duration(days: i))),
+    };
+    await PlanStore.removeWhere(
+      strengthView,
+      (e) =>
+          e.templateName == templateLabel &&
+          weekDays.contains(fmt.format(e.date)),
+    );
+    final built = buildWeekPlannedEntries(
+      program,
+      start,
+      references: references,
+      workingMaxes: workingMaxes,
+      capRpeByLift: capRpeByLift,
+      accessoryHistory: accessoryHistory,
+      snapToWeekStart: false,
+    );
+    final entries = <PlannedEntry>[
+      for (final e in built)
+        ?_plannedFrom(strengthView, e, e['date'] as DateTime),
+    ];
+    if (entries.isNotEmpty) await PlanStore.addAll(strengthView, entries);
+    return entries;
+  }
+
+  /// Manual "Add to log" for ONE day (Program screen day card): takes the
+  /// program's session for [sourceDay] and writes it into PlanStore dated
+  /// [targetDay] (default: [sourceDay] itself). Existing still-planned
+  /// program rows on [targetDay] are replaced. Returns the entries added
+  /// (empty when the source day is a rest day — nothing to schedule).
+  static Future<List<PlannedEntry>> scheduleDay({
+    required ViewSchema strengthView,
+    required Map<Object?, Object?> program,
+    required DateTime sourceDay,
+    required DateTime targetDay,
+    Map<String, double> references = const {},
+    Map<String, double> workingMaxes = const {},
+    Map<String, double> capRpeByLift = const {},
+    List<StrengthRow> accessoryHistory = const [],
+  }) async {
+    final fmt = DateFormat('yyyy-MM-dd');
+    final src = DateTime.utc(sourceDay.year, sourceDay.month, sourceDay.day);
+    // Price the source day in its own Mon–Sun window, then pick just it.
+    final srcMonday = src.subtract(Duration(days: src.weekday - 1));
+    final built = buildWeekPlannedEntries(
+      program,
+      srcMonday,
+      references: references,
+      workingMaxes: workingMaxes,
+      capRpeByLift: capRpeByLift,
+      accessoryHistory: accessoryHistory,
+      snapToWeekStart: false,
+    ).where((e) => e['date'] == src).toList();
+
+    final target =
+        DateTime.utc(targetDay.year, targetDay.month, targetDay.day);
+    await PlanStore.removeWhere(
+      strengthView,
+      (e) =>
+          e.templateName == templateLabel &&
+          fmt.format(e.date) == fmt.format(target),
+    );
+    final entries = <PlannedEntry>[
+      for (final e in built) ?_plannedFrom(strengthView, e, target),
+    ];
+    if (entries.isNotEmpty) await PlanStore.addAll(strengthView, entries);
+    return entries;
+  }
+
   /// Ensures the current week's planned rows exist (once per week per
   /// [planVersion]).
   ///

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/models/database_config.dart';
@@ -13,6 +15,25 @@ import 'package:airledger/services/wilks.dart'
 import 'package:airledger/services/wm_store.dart';
 import 'package:airledger/services/wm_tabs.dart';
 import 'package:airledger/ui/home_dashboard.dart';
+import 'package:airledger/ui/widgets/skeleton.dart';
+
+/// A connector whose reads never complete — holds every card in its
+/// loading state so the skeleton (not the filled value) is on screen.
+class _HangingRepo implements WarehouseConnector {
+  @override
+  DatabaseConfig get config => throw UnimplementedError();
+  @override
+  Future<void> ensureTable(ViewSchema view) async {}
+  @override
+  Future<List<Record>> list(ViewSchema view, {DateTime? onDate}) =>
+      Completer<List<Record>>().future; // never resolves
+  @override
+  Future<Record> create(ViewSchema view, Record record) async => record;
+  @override
+  Future<void> update(ViewSchema view, Record record) async {}
+  @override
+  Future<void> delete(ViewSchema view, Record record) async {}
+}
 
 /// Serves a canned WM snapshot (readings tab). No network.
 class _FakeWmStore extends WmStore {
@@ -108,6 +129,35 @@ void main() {
     expect(find.text('no weigh-in data'), findsOneWidget);
     expect(find.text('no strength data yet'), findsOneWidget);
     expect(find.text('no status data'), findsNWidgets(2));
+  });
+
+  testWidgets('loading cards show stable SKELETONS, never a bare "…" '
+      '(staggered-load fix 2026-09-30)', (tester) async {
+    // Every source hangs → all four cards stay in their loading state.
+    final hang = _HangingRepo();
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      wmStore: null,
+      strengthView: _strengthView,
+      strengthRepo: hang,
+      weightView: _weightView,
+      weightRepo: hang,
+      statusView: _statusView,
+      statusRepo: hang,
+      today: DateTime(2026, 9, 23),
+    )));
+    // One frame only — do NOT settle (the futures never complete).
+    await tester.pump();
+    // The old reflowing "…" placeholder is gone everywhere.
+    expect(find.text('…'), findsNothing);
+    // Skeleton bars are on screen instead, pulsing.
+    expect(find.byType(SkeletonBar), findsWidgets);
+    expect(find.byType(PulsingOpacity), findsWidgets);
+    // Card chrome (titles) still renders — layout is stable, the cards
+    // don't appear/disappear as data arrives.
+    expect(find.text('BODY'), findsOneWidget);
+    expect(find.text('STRENGTH'), findsOneWidget);
+    // Clean up the still-animating pulse controllers.
+    await tester.pumpWidget(const SizedBox());
   });
 
   // dashboards.yaml with the explicit last-bulk window (start derived

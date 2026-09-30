@@ -111,6 +111,14 @@ class DaySynthesisService {
 
   static const _prefsKey = 'day_synthesis';
 
+  /// Cache-content version. BUMP whenever a change upstream of the LLM
+  /// (the assembled context, the target resolution, the prompt) would
+  /// make an already-stored synthesis wrong. On read, a stored synthesis
+  /// tagged with an older version is ignored → regenerated. v2 (bump
+  /// 2026-09-30): busts caches written before the cut macro-target fix
+  /// (commit 7573f0c) that still say "no macro targets set today".
+  static const _cacheVersion = 2;
+
   static String _dayKey(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
       '${d.month.toString().padLeft(2, '0')}-'
@@ -123,6 +131,9 @@ class DaySynthesisService {
       final raw = prefs.getString(_prefsKey);
       if (raw == null) return null;
       final m = jsonDecode(raw) as Map<String, Object?>;
+      // Ignore caches written before a content-affecting fix (missing
+      // version = pre-versioning = older than v2's macro-target fix).
+      if ((m['v'] as num?)?.toInt() != _cacheVersion) return null;
       if (m['day'] != _dayKey(now())) return null; // stale — new day
       return DaySynthesisResult.tryFromJson(jsonEncode(m['result']));
     } catch (_) {
@@ -135,7 +146,11 @@ class DaySynthesisService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
         _prefsKey,
-        jsonEncode({'day': _dayKey(now()), 'result': r.toJson()}),
+        jsonEncode({
+          'v': _cacheVersion,
+          'day': _dayKey(now()),
+          'result': r.toJson(),
+        }),
       );
     } catch (_) {/* best-effort */}
   }

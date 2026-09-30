@@ -85,6 +85,45 @@ void main() {
     expect(await tomorrow.cached(), isNull);
   });
 
+  test('cached ignores a pre-versioning cache from the SAME day '
+      '(macro-target fix invalidation)', () async {
+    // A synthesis stored the old way (no `v` key) — e.g. the "no macro
+    // targets set today" text written before commit 7573f0c. Same day, so
+    // the day check alone would have returned it; the version gate must
+    // drop it.
+    SharedPreferences.setMockInitialValues({
+      'day_synthesis': jsonEncode({
+        'day': '2026-09-30',
+        'result': {
+          'text': 'No macro targets set today.',
+          'generated_at': '2026-09-30T09:00:00.000',
+          'lifts_hit': 0,
+          'lifts_planned': 0,
+          'climb_to_come': false,
+        },
+      }),
+    });
+    final llm = LlmClient([_anthropic()], httpClient: _reply('Fresh.'));
+    final svc = _svc(llm);
+    // The stale cache is ignored (version mismatch), not served.
+    expect(await svc.cached(), isNull);
+  });
+
+  test('a freshly generated (versioned) cache is served back same day',
+      () async {
+    final llm = LlmClient([_anthropic()], httpClient: _reply('Versioned.'));
+    final svc = _svc(llm);
+    await svc.generate();
+    final c = await svc.cached();
+    expect(c, isNotNull);
+    expect(c!.text, 'Versioned.');
+    // The stored payload carries the version tag.
+    final prefs = await SharedPreferences.getInstance();
+    final m = jsonDecode(prefs.getString('day_synthesis')!)
+        as Map<String, Object?>;
+    expect(m['v'], isNotNull);
+  });
+
   test('LLM failure returns null (keeps the previous synthesis)', () async {
     final failing = LlmClient(
       [_anthropic()],

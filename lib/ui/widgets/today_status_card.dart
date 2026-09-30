@@ -10,6 +10,7 @@ import '../../services/program_current.dart';
 import '../../services/program_provider.dart';
 import '../../services/today_status.dart';
 import '../../services/warehouse_connector.dart';
+import 'skeleton.dart';
 
 /// Progress-tab header card: a plain-language read on how today is going
 /// against the plan — FOOD (Macrofactor meals vs macro targets) + TRAINING
@@ -319,11 +320,20 @@ class TodayStatusCardState extends State<TodayStatusCard> {
                   synth.text,
                   style: TextStyle(color: scheme.onSurface, fontSize: 14),
                 )
+              else if (_synthesizing)
+                // Consistent with the progress cards' skeletons: greyed,
+                // fixed-height, pulsing text-shaped bars instead of a
+                // bare "Reading your day…" that then reflows into the read.
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 2),
+                  child: CardSkeleton(bars: [
+                    (width: double.infinity, height: 12),
+                    (width: 220, height: 12),
+                  ]),
+                )
               else
                 Text(
-                  _synthesizing
-                      ? 'Reading your day…'
-                      : 'Not enough logged yet — log a meal or a set.',
+                  'Not enough logged yet — log a meal or a set.',
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
                     fontSize: 14,

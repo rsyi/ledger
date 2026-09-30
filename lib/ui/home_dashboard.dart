@@ -148,6 +148,7 @@ import '../services/wilks.dart'
 import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
 import 'app_text.dart';
+import 'widgets/skeleton.dart';
 
 class HomeDashboard extends StatefulWidget {
   /// Working-max controller tabs (3-min cached). Null → STRENGTH renders
@@ -1102,7 +1103,9 @@ class HomeDashboardState extends State<HomeDashboard> {
         _today,
         weekStartDay: wsDay,
       ),
-      templateLine: templateOneLiner(slice),
+      // Plain-language day summary (no wave/yaml jargon) — built from the
+      // planned lines, same as the today-badges (2026-09-30 jargon sweep).
+      templateLine: todayCleanSummary(docs?.program, slice, _today),
     );
   }
 
@@ -1582,7 +1585,7 @@ class HomeDashboardState extends State<HomeDashboard> {
         future: _body,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const _Dim('…');
+            return const CardSkeleton.card();
           }
           final d = snap.data;
           if (d == null) return const _Dim('no weigh-in data');
@@ -1647,7 +1650,16 @@ class HomeDashboardState extends State<HomeDashboard> {
         future: _strength,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const _Dim('…');
+            // STRENGTH is the slow card (WmStore network) — a taller
+            // skeleton matching the per-lift rows keeps the layout stable
+            // while the other cards fill ahead of it.
+            return const CardSkeleton(bars: [
+              (width: 120, height: 12),
+              (width: 160, height: 16),
+              (width: 160, height: 16),
+              (width: 160, height: 16),
+              (width: 160, height: 16),
+            ]);
           }
           final d = snap.data;
           if (d == null || d.isEmpty) {
@@ -1714,7 +1726,11 @@ class HomeDashboardState extends State<HomeDashboard> {
         future: _exec,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const _Dim('…');
+            return const CardSkeleton(bars: [
+              (width: 150, height: 12),
+              (width: 150, height: 12),
+              (width: 150, height: 12),
+            ]);
           }
           final d = snap.data;
           final week = d?.week;
@@ -1766,7 +1782,7 @@ class HomeDashboardState extends State<HomeDashboard> {
         future: _engine,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const _Dim('…');
+            return const CardSkeleton.card();
           }
           final d = snap.data;
           if (d == null) return const _Dim('no status data');
@@ -2072,7 +2088,10 @@ class HomeDashboardState extends State<HomeDashboard> {
         future: Future.wait<Object?>([_exec, _engine, _drivers, _recomp]),
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const _Dim('…');
+            return const CardSkeleton(bars: [
+              (width: 200, height: 14),
+              (width: 160, height: 12),
+            ]);
           }
           final d = snap.data?[0] as _ExecData?;
           final e = snap.data?[1] as _EngineData?;

@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:yaml/yaml.dart';
 import 'package:airledger/services/home_synthesis.dart';
 import 'package:airledger/services/program_current.dart';
 import 'package:airledger/services/program_metrics.dart'
@@ -292,6 +295,68 @@ void main() {
     test('null when the day is empty or slice missing', () {
       expect(templateOneLiner(slice()), isNull);
       expect(templateOneLiner(null), isNull);
+    });
+  });
+
+  group('todayCleanSummary (jargon sweep 2026-09-30)', () {
+    // Against the live cut program.yaml — the same source the today-badges
+    // use. Cut-wave anchor week: Monday 2026-09-28 is wave week 1.
+    final repo = File('../airledger-fitness/coach/program.yaml');
+    final program = repo.existsSync()
+        ? Map<Object?, Object?>.from(loadYaml(repo.readAsStringSync()) as Map)
+        : null;
+    final mon = DateTime(2026, 9, 28);
+    DateTime day(int offset) => mon.add(Duration(days: offset));
+
+    // The yaml key names + wave vocabulary that must NEVER reach the card.
+    const banned = [
+      'strength_wave_cut',
+      'strength_wave',
+      'wave top',
+      'wave',
+      'per strength',
+      '@ ',
+      'RPE',
+      'training max',
+      '_',
+    ];
+
+    String? summary(DateTime d) => todayCleanSummary(
+          program!,
+          programCurrent(program, null, d),
+          d,
+        );
+
+    test('Wednesday reads as plain lift tokens, no jargon', () {
+      if (program == null) return; // fitness checkout absent
+      final s = summary(day(2)); // Wednesday
+      expect(s, isNotNull);
+      // Bench heavy + squat/press volume — spelled out, "+"-joined.
+      expect(s, contains('Bench'));
+      expect(s!.toLowerCase(), contains('volume'));
+      expect(s, contains('+'));
+      for (final term in banned) {
+        expect(s.contains(term), isFalse,
+            reason: 'jargon leaked: "$term" in "$s"');
+      }
+    });
+
+    test('no weekday of the cut week leaks a yaml key or wave term', () {
+      if (program == null) return;
+      for (var i = 0; i < 7; i++) {
+        final s = summary(day(i));
+        if (s == null) continue; // rest day
+        for (final term in banned) {
+          expect(s.contains(term), isFalse,
+              reason: 'jargon "$term" leaked on day $i: "$s"');
+        }
+        // Starts with a capital — badge-style, not raw prose.
+        expect(s[0], s[0].toUpperCase());
+      }
+    });
+
+    test('null program or slice → null (no crash)', () {
+      expect(todayCleanSummary(null, null, mon), isNull);
     });
   });
 

@@ -12,6 +12,8 @@ import 'program_current.dart';
 import 'program_metrics.dart'
     show GradedSet, StrengthRow, epleyE1rm, gradeSets, mainLiftByExercise,
         rpeAdjustedE1rm, weekStartOf;
+import 'routine_display.dart' show SessionLine, daySummary, sessionLinesByDay;
+import 'week_planner.dart' show buildWeekPlannedEntries;
 import 'wm_tabs.dart';
 
 // ---------------------------------------------------------------------------
@@ -439,9 +441,50 @@ String verdictChipText(String label) {
   return best == null ? null : (weekMonday: best, maxHr: bestHr!);
 }
 
+/// PLAIN-LANGUAGE one-line summary of today's session for the ENGINE /
+/// "This week" card's "Today:" line — e.g. "Bench heavy + squat volume
+/// + press volume". Built from the SAME planned lines the routine screen
+/// and today-badges show (buildWeekPlannedEntries → sessionLinesByDay →
+/// [daySummary]), so it carries NO yaml key names or wave jargon — the
+/// raw morning prose ("wave top per strength_wave_cut, …") never reaches
+/// this surface. [daySummary] joins main lifts + non-barbell tokens with
+/// " · "; we render "+" for the badge-style line. Null when the day is a
+/// rest day or no slice/program resolved.
+///
+/// The old [templateOneLiner] (raw morning prose) is kept only for the
+/// detail-sheet "Today" entry, where the full prose is acceptable.
+String? todayCleanSummary(
+  Map<Object?, Object?>? program,
+  ProgramSlice? slice,
+  DateTime day,
+) {
+  if (program == null || slice == null) return null;
+  final entries = buildWeekPlannedEntries(program, day, snapToWeekStart: false);
+  final dayUtc = DateTime.utc(day.year, day.month, day.day);
+  final lines = <SessionLine>[];
+  sessionLinesByDay(entries).forEach((d, ls) {
+    if (d == dayUtc) lines.addAll(ls);
+  });
+  final summary = daySummary(
+    lines: lines,
+    morning: slice.todayTemplate['morning']?.toString(),
+    afternoon: slice.todayTemplate['afternoon']?.toString(),
+  );
+  if (summary == 'Rest') return null;
+  // Capitalize the first word, join with "+" for the compact badge line.
+  final joined = summary.replaceAll(' · ', ' + ');
+  return joined.isEmpty
+      ? null
+      : joined[0].toUpperCase() + joined.substring(1);
+}
+
 /// One-line summary of today's template: the morning session, else the
 /// afternoon prefixed "PM: ", truncated to [maxLen] characters. Null when
 /// the day is a rest day or no slice resolved.
+///
+/// RAW PROSE — retained for the detail-sheet "Today" entry only; the
+/// card's "Today:" line uses [todayCleanSummary] to keep yaml jargon
+/// ("wave", "strength_wave_cut") off the surface.
 String? templateOneLiner(ProgramSlice? slice, {int maxLen = 84}) {
   if (slice == null) return null;
   final morning = slice.todayTemplate['morning']?.toString().trim() ?? '';

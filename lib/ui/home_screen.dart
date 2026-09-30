@@ -29,11 +29,14 @@ import '../services/integrations/registry.dart';
 import '../services/integrations/whoop.dart';
 import '../services/integrations/withings.dart';
 import '../services/coach_brain.dart';
+import '../services/day_synthesis_service.dart';
 import '../services/domain_config.dart';
 import '../services/github_client.dart';
 import '../services/icon_resolver.dart';
 import '../services/llm_client.dart';
 import '../services/llm_response_cache.dart';
+import '../services/notification_service.dart';
+import '../services/post_log_notifier.dart';
 import '../services/qbo_service.dart';
 import '../services/schema_loader.dart';
 import '../services/schema_sync.dart';
@@ -670,6 +673,49 @@ class _HomeScreenState extends State<HomeScreen> {
               final domainProvider = github == null
                   ? null
                   : DomainConfigProvider(CoachBrain.githubFetcher(github));
+
+              // Feature 1: AI day-synthesis service — assembles today's
+              // meals/sets/4x4/climbing vs the routine + macro targets and
+              // synthesizes a short read via the LLM. Disabled (→ the card
+              // falls back to static lines) under disable_post_log / no
+              // Anthropic model. Cheap to build; the LLM call is lazy.
+              final synthesisService = DaySynthesisService(
+                llm: data.llm,
+                modelName: data.llm == null
+                    ? null
+                    : synthesisModelName(data.models),
+                mealsView: dashMealsView,
+                mealsRepo: dashboardRepoFor(
+                  dashMealsView,
+                  readOnlyRepo: data.readOnlyRepo,
+                  forView: data.registry.forView,
+                ),
+                strengthView: dashStrengthView,
+                strengthRepo: dashStrengthView == null
+                    ? null
+                    : data.registry.forView(dashStrengthView),
+                cardioView: dashCardioView,
+                cardioRepo: dashCardioView == null
+                    ? null
+                    : data.registry.forView(dashCardioView),
+                climbingView: dashClimbingView,
+                climbingRepo: dashboardRepoFor(
+                  dashClimbingView,
+                  readOnlyRepo: data.readOnlyRepo,
+                  forView: data.registry.forView,
+                ),
+                provider: programProvider,
+              );
+              // Feature 3: post-log notification driver — one boot-time
+              // singleton, listens on LogEventBus (never touches the form).
+              if (synthesisService.enabled &&
+                  PostLogNotifier.instance == null) {
+                final notifier = PostLogNotifier(synthesis: synthesisService)
+                  ..start();
+                PostLogNotifier.instance = notifier;
+                // Ask for the Android 13+ POST_NOTIFICATIONS grant once.
+                unawaited(NotificationService.instance?.requestPermission());
+              }
               // Plan is a tab — hero taps / sheet actions select it
               // instead of pushing a duplicate screen (index 4 in the
               // 5-tab shell).
@@ -877,6 +923,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ? null
                             : data.registry.forView(dashStrengthView),
                         provider: programProvider,
+                        synthesis: synthesisService,
                         onOpen: () => _selectTab(2),
                       ),
                       HomeDashboard(

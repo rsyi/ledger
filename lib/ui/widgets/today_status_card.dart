@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../models/view_schema.dart';
+import '../../services/day_synthesis_service.dart';
+import '../../services/log_event_bus.dart';
 import '../../services/plan_store.dart';
 import '../../services/program_current.dart';
 import '../../services/program_provider.dart';
@@ -26,6 +30,12 @@ class TodayStatusCard extends StatefulWidget {
   /// without a target.
   final ProgramProvider? provider;
 
+  /// AI day-synthesis (Feature 1). When present + enabled, the card leads
+  /// with a short unprompted read on how the day is going against the plan
+  /// (climbing-to-come aware, macro-timing aware). Null / disabled →
+  /// falls back to the two static lines. Never blocks the tab.
+  final DaySynthesisService? synthesis;
+
   /// Tap handler — the shell selects the Log tab.
   final VoidCallback onOpen;
 
@@ -36,6 +46,7 @@ class TodayStatusCard extends StatefulWidget {
     required this.strengthView,
     required this.strengthRepo,
     required this.provider,
+    this.synthesis,
     required this.onOpen,
   });
 
@@ -46,10 +57,73 @@ class TodayStatusCard extends StatefulWidget {
 class TodayStatusCardState extends State<TodayStatusCard> {
   TodayStatus? _status;
 
+  // --- AI synthesis (Feature 1) ---
+  DaySynthesisResult? _synthesis;
+  bool _synthesizing = false;
+  bool _expanded = false;
+  StreamSubscription<LogEvent>? _logSub;
+  Timer? _synthDebounce;
+
+  bool get _synthEnabled => widget.synthesis?.enabled == true;
+
   @override
   void initState() {
     super.initState();
     refresh();
+    _loadCachedSynthesis();
+    // Auto-refresh the synthesis when new data is logged (debounced so a
+    // batch of set logs = one regeneration). Never blocks the tab.
+    _logSub = LogEventBus.instance.stream.listen((_) => _scheduleSynthesis());
+  }
+
+  @override
+  void dispose() {
+    _logSub?.cancel();
+    _synthDebounce?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadCachedSynthesis() async {
+    final svc = widget.synthesis;
+    if (svc == null || !svc.enabled) return;
+    final cached = await svc.cached();
+    if (!mounted) return;
+    if (cached != null) {
+      setState(() => _synthesis = cached);
+    } else {
+      // No synthesis yet today — generate one in the background.
+      unawaited(regenerateSynthesis());
+    }
+  }
+
+  void _scheduleSynthesis() {
+    if (!_synthEnabled) return;
+    _synthDebounce?.cancel();
+    _synthDebounce = Timer(
+      const Duration(seconds: 4),
+      () => unawaited(regenerateSynthesis()),
+    );
+  }
+
+  /// (Re)runs the LLM synthesis. Shows a refreshing state; on failure keeps
+  /// the last synthesis. Also refreshes the static lines.
+  Future<void> regenerateSynthesis() async {
+    final svc = widget.synthesis;
+    if (svc == null || !svc.enabled || _synthesizing) return;
+    if (mounted) setState(() => _synthesizing = true);
+    DaySynthesisResult? result;
+    try {
+      result = await svc.generate();
+    } catch (_) {
+      result = null;
+    }
+    if (!mounted) return;
+    setState(() {
+      if (result != null) _synthesis = result;
+      _synthesizing = false;
+    });
+    // Keep the summary lines in step.
+    unawaited(refresh());
   }
 
   /// Recomputes the two lines from live rows + the day's targets.
@@ -149,6 +223,9 @@ class TodayStatusCardState extends State<TodayStatusCard> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    if (_synthEnabled) return _buildSynthesis(context, scheme);
+
+    // Fallback: the original two static lines (disable_post_log / no LLM).
     final status = _status;
     return Material(
       color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
@@ -170,11 +247,7 @@ class TodayStatusCardState extends State<TodayStatusCard> {
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _line(
-                            context,
-                            status.foodText,
-                            status.foodState,
-                          ),
+                          _line(context, status.foodText, status.foodState),
                           const SizedBox(height: 4),
                           _line(
                             context,
@@ -185,6 +258,94 @@ class TodayStatusCardState extends State<TodayStatusCard> {
                       ),
               ),
               Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Feature 1: the AI day-synthesis card. Leads with the short synthesis;
+  /// tap toggles the detailed two-line summary. A refresh icon regenerates.
+  Widget _buildSynthesis(BuildContext context, ColorScheme scheme) {
+    final synth = _synthesis;
+    final status = _status;
+    return Material(
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      child: InkWell(
+        onTap: () => setState(() => _expanded = !_expanded),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.auto_awesome, size: 16, color: scheme.tertiary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Today',
+                    style: TextStyle(
+                      color: scheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const Spacer(),
+                  if (_synthesizing)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  else
+                    IconButton(
+                      icon: const Icon(Icons.refresh, size: 18),
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: () => unawaited(regenerateSynthesis()),
+                      tooltip: 'Refresh',
+                    ),
+                  const SizedBox(width: 8),
+                ],
+              ),
+              const SizedBox(height: 6),
+              if (synth != null)
+                Text(
+                  synth.text,
+                  style: TextStyle(color: scheme.onSurface, fontSize: 14),
+                )
+              else
+                Text(
+                  _synthesizing
+                      ? 'Reading your day…'
+                      : 'Not enough logged yet — log a meal or a set.',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 14,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              if (_expanded && status != null) ...[
+                const SizedBox(height: 12),
+                Divider(height: 1, color: scheme.outlineVariant),
+                const SizedBox(height: 12),
+                _line(context, status.foodText, status.foodState),
+                const SizedBox(height: 4),
+                _line(context, status.exerciseText, status.exerciseState),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: widget.onOpen,
+                    child: const Text('Open Log'),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

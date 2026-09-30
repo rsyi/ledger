@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'services/engine.dart';
+import 'services/notification_service.dart';
 import 'ui/home_screen.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   // Eagerly load the Rust engine + log its version so any FFI / jniLibs
   // misconfiguration shows up under the `flutter:` logcat tag before
   // the first schema parse rather than at the first form open.
@@ -15,6 +19,9 @@ void main() {
     // ignore: avoid_print
     print('[airledger.engine] load failed: $e\n$st');
   }
+  // Local notifications (post-log nudges + rest-timer-done). Best-effort —
+  // init swallows failures so the app never blocks on it.
+  unawaited(NotificationService.init());
   runApp(const LedgerApp());
 }
 

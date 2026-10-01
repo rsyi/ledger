@@ -253,20 +253,23 @@ double _sum(List<SynthMeal> meals, double? Function(SynthMeal) f) {
   return total;
 }
 
-/// Builds the compact LLM prompt for the day synthesis. Short output is
-/// requested explicitly (2–3 bullets or one short paragraph). The context
-/// lines are all facts — the model reasons over them; it must not invent
-/// numbers or claim unlogged work.
+/// Builds the compact LLM prompt for the day synthesis. Output is kept
+/// VERY short (the Today tab leads with progress bars — the read is a
+/// one-liner nudge, not a report). The context lines are all facts — the
+/// model reasons over them; it must not invent numbers or claim unlogged
+/// work.
 String buildDaySynthesisPrompt(DaySynthesisContext c) {
   final b = StringBuffer();
   b.writeln(
     'You are Robert\'s training coach giving a SHORT, unprompted read on '
-    'how today is going against the plan. Be concise and actionable: 2–3 '
-    'short bullets or one short paragraph, plain language, no preamble. '
-    'Give timing- and remaining-work-aware nutrition/training advice '
-    '(e.g. carbs before a climb, protein to hit the floor). Advise only '
-    'from the facts below — never invent numbers and never claim work '
-    'that is not logged. If a session is still to come, say so.',
+    'how today is going against the plan. HARD LIMIT: one or two sentences '
+    '(roughly 30 words), plain language, no preamble, no bullet list, no '
+    'markdown headers. Lead with the single most useful, timing-aware nudge '
+    '(e.g. carbs before a climb, protein to hit the floor, a still-to-come '
+    'session). The macros/calories are already shown as bars, so do not '
+    'recite every number — add judgment, not a recap. Advise only from the '
+    'facts below — never invent numbers and never claim work that is not '
+    'logged.',
   );
   b.writeln();
   b.writeln('Local time: ${_fmtHour(c.hour)}.');

@@ -398,17 +398,10 @@ class TodayStatusCardState extends State<TodayStatusCard> {
                           fontWeight: FontWeight.w600,
                         ),
                       )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _line(context, status.foodText, status.foodState),
-                          const SizedBox(height: 4),
-                          _line(
-                            context,
-                            status.exerciseText,
-                            status.exerciseState,
-                          ),
-                        ],
+                    : _line(
+                        context,
+                        status.exerciseText,
+                        status.exerciseState,
                       ),
               ),
               Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
@@ -490,25 +483,18 @@ class TodayStatusCardState extends State<TodayStatusCard> {
               ],
             ),
             const SizedBox(height: 8),
-            // --- always-on food + training summary (tap → Log) ---
+            // --- today's session line (tap → Log). Food/macros moved to
+            // the DailyProgressCard bars above this card (2026-09-30). ---
             InkWell(
               onTap: widget.onOpen,
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: status == null
                     ? const CardSkeleton(bars: [
-                        (width: double.infinity, height: 12),
                         (width: 180, height: 12),
                       ])
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _line(context, status.foodText, status.foodState),
-                          const SizedBox(height: 4),
-                          _line(context, status.exerciseText,
-                              status.exerciseState),
-                        ],
-                      ),
+                    : _line(context, status.exerciseText,
+                        status.exerciseState),
               ),
             ),
             const SizedBox(height: 12),

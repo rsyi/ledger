@@ -229,7 +229,13 @@ class GoalsScreenState extends State<GoalsScreen> {
     final title = phase.isEmpty
         ? phase
         : phase[0].toUpperCase() + phase.substring(1);
-    return _GoalsData(phaseTitle: title, goals: goals);
+    // macros + calorie_band are DAY-scale inputs — they moved to the
+    // Today tab's progress bars (2026-09-30). Week keeps the genuinely
+    // week-scale eigenvectors (hard sets, climbing, cardio frequency).
+    const dayScale = {'macros', 'calorie_band'};
+    final weekGoals =
+        goals.where((g) => !dayScale.contains(g.config.id)).toList();
+    return _GoalsData(phaseTitle: title, goals: weekGoals);
   }
 
   static DateTime? _date(Object? raw) => raw is DateTime

@@ -57,7 +57,7 @@ import 'coach_chat_screen.dart';
 import 'domain_screen.dart';
 import 'program_screen.dart';
 import 'coach_threads_screen.dart';
-import 'widgets/day_inputs_card.dart';
+import 'widgets/daily_progress_card.dart';
 import 'home_dashboard.dart';
 import 'goals_screen.dart';
 import 'app_text.dart';
@@ -156,7 +156,10 @@ class _HomeScreenState extends State<HomeScreen> {
       _tabHistory.remove(i);
       _tab = i;
     });
-    if (i == 0) _todayStatusKey.currentState?.refresh();
+    if (i == 0) {
+      _todayStatusKey.currentState?.refresh();
+      _dailyProgressKey.currentState?.reload();
+    }
   }
 
   /// Handle on the progress dashboard so pull-to-refresh can bust its
@@ -176,9 +179,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// immediately (pull-to-refresh recomputes it too).
   final _todayStatusKey = GlobalKey<TodayStatusCardState>();
 
-  /// Handle on the Today tab's Day/Tomorrow planned-inputs card, so
-  /// pull-to-refresh re-reads the program docs alongside the status card.
-  final _dayInputsKey = GlobalKey<DayInputsCardState>();
+  /// Handle on the Today tab's daily-progress (calorie + macro bars) card,
+  /// so pull-to-refresh re-reads meals/weight/targets alongside the status
+  /// card.
+  final _dailyProgressKey = GlobalKey<DailyProgressCardState>();
 
   @override
   void initState() {
@@ -556,7 +560,10 @@ class _HomeScreenState extends State<HomeScreen> {
             if (didPop || _tabHistory.isEmpty) return;
             final prev = _tabHistory.removeLast();
             setState(() => _tab = prev);
-            if (prev == 0) _todayStatusKey.currentState?.refresh();
+            if (prev == 0) {
+              _todayStatusKey.currentState?.refresh();
+              _dailyProgressKey.currentState?.reload();
+            }
           },
           child: Scaffold(
           body: Builder(
@@ -1054,17 +1061,35 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 body: RefreshIndicator(
                   // Gated sync + recompute of the status card, then a
-                  // re-read of the program docs behind the day-inputs card.
+                  // re-read of the daily-progress bars (meals/weight).
                   onRefresh: () async {
                     _todayStatusKey.currentState?.refresh();
-                    _dayInputsKey.currentState?.reload();
+                    _dailyProgressKey.currentState?.reload();
                   },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
-                      // Today-vs-plan: how the day is going against the
-                      // plan (food + training). Tap the AI read → coach
-                      // thread; the food/training lines → Log.
+                      // HERO: today's intake as calorie + macro progress
+                      // bars (day-scale — the macros/calories that used to
+                      // sit on the Week tab, shown for today).
+                      DailyProgressCard(
+                        key: _dailyProgressKey,
+                        provider: programProvider,
+                        dashboards: domainProvider,
+                        analytics: data.analytics,
+                        mealsView: dashMealsView,
+                        mealsRepo: dashboardRepoFor(
+                          dashMealsView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
+                        weightView: weightView,
+                        weightRepo: weightView == null
+                            ? null
+                            : data.registry.forView(weightView),
+                      ),
+                      // Today's session line + the short AI read (tap the
+                      // read → coach thread; the session line → Log).
                       TodayStatusCard(
                         key: _todayStatusKey,
                         mealsView: dashMealsView,
@@ -1085,12 +1110,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         registry: IntegrationRegistry.instance,
                         onOpen: () => _selectTab(3),
                         onOpenCoachThread: openTodayCoachThread,
-                      ),
-                      // Day/Tomorrow planned inputs — the program's
-                      // prescribed session for each day.
-                      DayInputsCard(
-                        key: _dayInputsKey,
-                        provider: programProvider,
                       ),
                     ],
                   ),

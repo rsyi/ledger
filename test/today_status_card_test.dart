@@ -125,7 +125,7 @@ void main() {
     expect(find.textContaining('**', findRichText: true), findsNothing);
   });
 
-  testWidgets('food + training lines are always visible (no expand needed)',
+  testWidgets('card is the coach read only — no food/training lines',
       (tester) async {
     await tester.pumpWidget(_host(TodayStatusCard(
       mealsView: null,
@@ -137,8 +137,11 @@ void main() {
       onOpen: () {},
     )));
     await tester.pumpAndSettle();
-    // The static training line shows without any tap to expand.
-    expect(find.textContaining('Training:'), findsOneWidget);
+    // Food moved to the macro bars; training to its own card + the program
+    // checklist. This card carries only the AI read now.
+    expect(find.textContaining('Food:'), findsNothing);
+    expect(find.textContaining('Training:'), findsNothing);
+    expect(find.textContaining('Read.', findRichText: true), findsOneWidget);
   });
 
   testWidgets('tapping the AI read opens the coach thread with the seed',

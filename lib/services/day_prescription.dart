@@ -58,3 +58,22 @@ const _weekdayAbbr = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /// Three-letter weekday abbreviation for [d] (Mon-first).
 String weekdayAbbr(DateTime d) => _weekdayAbbr[d.weekday - 1];
+
+/// Tidies routine prose for DISPLAY: strips the internal periodisation
+/// jargon ("wave", "strength_wave_cut") that means nothing to the user.
+/// The canonical program.yaml keeps the precise terms (the coach/model
+/// rely on them) — this only cleans what the card renders.
+String tidyProgramProse(String s) {
+  var t = s;
+  t = t.replaceAll('wave top per strength_wave_cut', 'top set');
+  t = t.replaceAll('top work per the wave', 'top set');
+  t = t.replaceAll('top per strength_wave_cut', 'top set');
+  t = t.replaceAll('per the wave', '');
+  t = t.replaceAll('per strength_wave_cut', '');
+  t = t.replaceAll('strength_wave_cut', 'the cut plan');
+  // Clean up the spacing/punctuation left behind by the deletions.
+  t = t.replaceAll(RegExp(r'\s+'), ' ');
+  t = t.replaceAll(RegExp(r'\s+([,.;])'), r'\1');
+  t = t.replaceAll('( ', '(');
+  return t.trim();
+}

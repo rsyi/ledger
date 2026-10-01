@@ -284,10 +284,15 @@ class _BodyData {
   final ObservedWeightStats stats;
   final double? targetRate;
   final PhaseVerdict? verdict;
+
+  /// The most recent single weigh-in (raw, not the 7-day average).
+  final double? todayWeight;
+
   const _BodyData({
     required this.stats,
     required this.targetRate,
     required this.verdict,
+    this.todayWeight,
   });
 }
 
@@ -520,7 +525,21 @@ class HomeDashboardState extends State<HomeDashboard> {
             recentRates: stats.recentRates,
             bw3wkChange: stats.bw3wkChange,
           );
-    return _BodyData(stats: stats, targetRate: targetRate, verdict: verdict);
+    // Most recent single weigh-in (raw) for the "today" number.
+    double? todayWeight;
+    DateTime? best;
+    for (final r in w?.daily ?? const <WeightRow>[]) {
+      if (best == null || r.date.isAfter(best)) {
+        best = r.date;
+        todayWeight = r.weightLbs;
+      }
+    }
+    return _BodyData(
+      stats: stats,
+      targetRate: targetRate,
+      verdict: verdict,
+      todayWeight: todayWeight,
+    );
   }
 
   /// Strength ledger → mapped rows. Errors (ledger unreadable) degrade
@@ -1318,10 +1337,19 @@ class HomeDashboardState extends State<HomeDashboard> {
   Future<void> _openBodySheet() async {
     final d = await _body;
     final avg = d?.stats.bw7dAvg;
+    final today = d?.todayWeight;
     final rate = d?.stats.bwRateLbWk;
     await _showDetailSheet(
       title: 'Body',
       entries: [
+        _DetailEntry(
+          label: 'Today',
+          value: today == null ? '—' : '${today.toStringAsFixed(1)} lb',
+          explain:
+              'Your most recent single weigh-in. Day-to-day weight is noisy '
+              '(water, food, salt) — the 7-day average below is the signal to '
+              'steer by.',
+        ),
         _DetailEntry(
           label: '7-day avg',
           value: avg == null ? '—' : '${avg.toStringAsFixed(1)} lb',
@@ -1639,17 +1667,24 @@ class HomeDashboardState extends State<HomeDashboard> {
           final d = snap.data;
           if (d == null) return const _Dim('no weigh-in data');
           final avg = d.stats.bw7dAvg;
+          final today = d.todayWeight;
           final rate = d.stats.bwRateLbWk;
+          // Big number = today's raw weigh-in (falls back to the 7-day
+          // avg when there's no single reading); the avg sits beneath so
+          // both are visible.
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _BigNumber(
-                value: avg == null ? '—' : avg.toStringAsFixed(1),
+                value: (today ?? avg) == null
+                    ? '—'
+                    : (today ?? avg)!.toStringAsFixed(1),
                 unit: ' lb',
               ),
               const SizedBox(height: 2),
               Text(
                 [
+                  if (avg != null) '7-day avg ${avg.toStringAsFixed(1)}',
                   rate == null ? '— /wk' : '${_fmtSigned(rate)}/wk',
                   if (d.targetRate != null)
                     'target ${_fmtSigned(d.targetRate!)}',

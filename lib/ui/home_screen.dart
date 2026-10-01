@@ -59,6 +59,8 @@ import 'program_screen.dart';
 import 'coach_threads_screen.dart';
 import 'widgets/daily_progress_card.dart';
 import 'widgets/program_day_card.dart';
+import 'widgets/recovery_card.dart';
+import 'widgets/training_progress_card.dart';
 import 'home_dashboard.dart';
 import 'goals_screen.dart';
 import 'app_text.dart';
@@ -114,6 +116,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
 class _HomeScreenState extends State<HomeScreen> {
   late Future<_Bootstrap> _bootstrap;
 
@@ -159,7 +163,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     if (i == 0) {
       _todayStatusKey.currentState?.refresh();
+      _recoveryKey.currentState?.reload();
       _dailyProgressKey.currentState?.reload();
+      _trainingProgressKey.currentState?.reload();
+      _todayProgramKey.currentState?.reload();
     }
   }
 
@@ -185,11 +192,47 @@ class _HomeScreenState extends State<HomeScreen> {
   /// card.
   final _dailyProgressKey = GlobalKey<DailyProgressCardState>();
 
-  /// Today tab's Tomorrow prescription card + the Log tab's today-program
-  /// reference card — reloaded on their tabs' pull-to-refresh (both also
-  /// self-refresh on log events).
-  final _tomorrowKey = GlobalKey<ProgramDayCardState>();
+  /// Today tab's per-day cards + the Log tab's today-program reference
+  /// card — reloaded on their tabs' pull-to-refresh (several also
+  /// self-refresh on log events / day change via didUpdateWidget).
+  final _todayProgramKey = GlobalKey<ProgramDayCardState>();
   final _logProgramKey = GlobalKey<ProgramDayCardState>();
+  final _recoveryKey = GlobalKey<RecoveryCardState>();
+  final _trainingProgressKey = GlobalKey<TrainingProgressCardState>();
+
+  /// The day the Today tab is showing (date-only). The top-of-tab day
+  /// navigator shifts it; every card on the tab reflects it.
+  DateTime _dayViewDate = _dateOnly(DateTime.now());
+
+  void _shiftDay(int delta) => setState(
+      () => _dayViewDate = _dayViewDate.add(Duration(days: delta)));
+
+  bool get _dayViewIsToday {
+    final t = _dateOnly(DateTime.now());
+    return _dayViewDate == t;
+  }
+
+  /// Relative label for the day navigator ("Today"/"Tomorrow"/"Yesterday"
+  /// or a weekday-date).
+  String _dayViewLabel() {
+    final diff = _dayViewDate.difference(_dateOnly(DateTime.now())).inDays;
+    switch (diff) {
+      case 0:
+        return 'Today';
+      case 1:
+        return 'Tomorrow';
+      case -1:
+        return 'Yesterday';
+      default:
+        const months = [
+          'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+        ];
+        const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        return '${days[_dayViewDate.weekday - 1]} '
+            '${months[_dayViewDate.month - 1]} ${_dayViewDate.day}';
+    }
+  }
 
   @override
   void initState() {
@@ -569,7 +612,10 @@ class _HomeScreenState extends State<HomeScreen> {
             setState(() => _tab = prev);
             if (prev == 0) {
               _todayStatusKey.currentState?.refresh();
+              _recoveryKey.currentState?.reload();
               _dailyProgressKey.currentState?.reload();
+              _trainingProgressKey.currentState?.reload();
+              _todayProgramKey.currentState?.reload();
             }
           },
           child: Scaffold(
@@ -1067,19 +1113,105 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
                 body: RefreshIndicator(
-                  // Gated sync + recompute of the status card, then a
-                  // re-read of the daily-progress bars (meals/weight).
+                  // Gated sync (via the coach card) + a re-read of every
+                  // per-day card for the selected day.
                   onRefresh: () async {
                     _todayStatusKey.currentState?.refresh();
+                    _recoveryKey.currentState?.reload();
                     _dailyProgressKey.currentState?.reload();
-                    _tomorrowKey.currentState?.reload();
+                    _trainingProgressKey.currentState?.reload();
+                    _todayProgramKey.currentState?.reload();
                   },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
-                      // HERO: today's intake as calorie + macro progress
-                      // bars (day-scale — the macros/calories that used to
-                      // sit on the Week tab, shown for today).
+                      // DAY NAVIGATOR — shift the whole tab across days
+                      // (‹ yesterday · today · tomorrow ›). Tap the label
+                      // to jump back to today.
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+                        child: Row(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.chevron_left),
+                              onPressed: () => _shiftDay(-1),
+                              tooltip: 'Previous day',
+                            ),
+                            Expanded(
+                              child: InkWell(
+                                onTap: _dayViewIsToday
+                                    ? null
+                                    : () => setState(() => _dayViewDate =
+                                        _dateOnly(DateTime.now())),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      _dayViewLabel(),
+                                      textAlign: TextAlign.center,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleMedium
+                                          ?.copyWith(
+                                              fontWeight: FontWeight.w700),
+                                    ),
+                                    if (!_dayViewIsToday)
+                                      Text(
+                                        'tap to return to today',
+                                        textAlign: TextAlign.center,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.chevron_right),
+                              onPressed: () => _shiftDay(1),
+                              tooltip: 'Next day',
+                            ),
+                          ],
+                        ),
+                      ),
+                      // 1. Readiness: Whoop recovery + hours slept.
+                      RecoveryCard(
+                        key: _recoveryKey,
+                        recoveryView: dashRecoveryView,
+                        recoveryRepo: dashboardRepoFor(
+                          dashRecoveryView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
+                        date: _dayViewDate,
+                      ),
+                      // 2. Coach's read (today only) — the ONLY AI
+                      // commentary; the plan below is template-driven.
+                      if (_dayViewIsToday)
+                        TodayStatusCard(
+                          key: _todayStatusKey,
+                          mealsView: dashMealsView,
+                          mealsRepo: dashboardRepoFor(
+                            dashMealsView,
+                            readOnlyRepo: data.readOnlyRepo,
+                            forView: data.registry.forView,
+                          ),
+                          strengthView: dashStrengthView,
+                          strengthRepo: dashStrengthView == null
+                              ? null
+                              : data.registry.forView(dashStrengthView),
+                          provider: programProvider,
+                          synthesis: synthesisService,
+                          registry: IntegrationRegistry.instance,
+                          onOpen: () => _selectTab(3),
+                          onOpenCoachThread: openTodayCoachThread,
+                        ),
+                      // 3. Macro progress.
                       DailyProgressCard(
                         key: _dailyProgressKey,
                         provider: programProvider,
@@ -1095,38 +1227,28 @@ class _HomeScreenState extends State<HomeScreen> {
                         weightRepo: weightView == null
                             ? null
                             : data.registry.forView(weightView),
+                        date: _dayViewDate,
                       ),
-                      // Today's session line + the short AI read (tap the
-                      // read → coach thread; the session line → Log).
-                      TodayStatusCard(
-                        key: _todayStatusKey,
-                        mealsView: dashMealsView,
-                        mealsRepo: dashboardRepoFor(
-                          dashMealsView,
-                          readOnlyRepo: data.readOnlyRepo,
-                          forView: data.registry.forView,
-                        ),
+                      // 4. Training progress (what was logged).
+                      TrainingProgressCard(
+                        key: _trainingProgressKey,
                         strengthView: dashStrengthView,
                         strengthRepo: dashStrengthView == null
                             ? null
                             : data.registry.forView(dashStrengthView),
-                        provider: programProvider,
-                        synthesis: synthesisService,
-                        // Gated refresh → sync-first: the registry runs
-                        // the quiet Withings/Macrofactor/Whoop pulls and
-                        // (on a climb day) the Kaya guided sync.
-                        registry: IntegrationRegistry.instance,
-                        onOpen: () => _selectTab(3),
-                        onOpenCoachThread: openTodayCoachThread,
+                        date: _dayViewDate,
                       ),
-                      // TOMORROW: what the program prescribes tomorrow
-                      // (full routine prose — front-lever work, HLR,
-                      // muscle-ups and all), below the AI read.
+                      // 5. The PROGRAM for the selected day — a checklist
+                      // that ticks green as sets are logged.
                       ProgramDayCard(
-                        key: _tomorrowKey,
+                        key: _todayProgramKey,
                         provider: programProvider,
-                        label: 'Tomorrow',
-                        dayOffset: 1,
+                        label: _dayViewLabel(),
+                        date: _dayViewDate,
+                        strengthView: dashStrengthView,
+                        strengthRepo: dashStrengthView == null
+                            ? null
+                            : data.registry.forView(dashStrengthView),
                       ),
                     ],
                   ),
@@ -1339,7 +1461,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           key: _logProgramKey,
                           provider: programProvider,
                           label: 'Today',
-                          dayOffset: 0,
+                          date: _dateOnly(DateTime.now()),
                           strengthView: dashStrengthView,
                           strengthRepo: dashStrengthView == null
                               ? null

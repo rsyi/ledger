@@ -37,6 +37,9 @@ class DailyProgressCard extends StatefulWidget {
   final ViewSchema? weightView;
   final WarehouseConnector? weightRepo;
 
+  /// The day to show (date-only).
+  final DateTime date;
+
   const DailyProgressCard({
     super.key,
     required this.provider,
@@ -46,6 +49,7 @@ class DailyProgressCard extends StatefulWidget {
     required this.mealsRepo,
     required this.weightView,
     required this.weightRepo,
+    required this.date,
   });
 
   @override
@@ -72,7 +76,14 @@ class DailyProgressCardState extends State<DailyProgressCard> {
     _future = _compute();
   }
 
-  /// Re-reads meals/weight/targets (pull-to-refresh, log events).
+  @override
+  void didUpdateWidget(DailyProgressCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final a = oldWidget.date, b = widget.date;
+    if (a.year != b.year || a.month != b.month || a.day != b.day) reload();
+  }
+
+  /// Re-reads meals/weight/targets (pull-to-refresh, log events, day change).
   void reload() => setState(() => _future = _compute());
 
   Future<void> _editMaintenance() async {
@@ -154,8 +165,8 @@ class DailyProgressCardState extends State<DailyProgressCard> {
   }
 
   Future<List<MacroBar>?> _compute() async {
-    final today = DateTime.now();
-    final dayStart = DateTime(today.year, today.month, today.day);
+    final dayStart =
+        DateTime(widget.date.year, widget.date.month, widget.date.day);
     final dayEnd = dayStart.add(const Duration(days: 1));
 
     // --- today's intake + the full meals list (for maintenance) ---

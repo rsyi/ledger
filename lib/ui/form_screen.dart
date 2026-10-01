@@ -337,6 +337,11 @@ class _FormScreenState extends State<FormScreen> {
       // ~60 min after the pick. Fire-and-forget; the chip below the
       // field tracks pending/ready/failed via the service listener.
       // PROPOSE-ONLY: nothing here (or in the service) writes rpe.
+      if (!svc.canEstimate) {
+        // No AI estimate on this build — still cache a thumbnail so the
+        // clip can be previewed in-app later.
+        unawaited(svc.captureThumbnail(res));
+      }
       if (svc.canEstimate) {
         final exercise = _shared['exercise']?.toString();
         unawaited(svc.estimate(

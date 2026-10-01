@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -28,8 +27,10 @@ import '../services/warehouse_connector.dart';
 import '../services/week_planner.dart' show WeekPlanner;
 import 'chat_screen.dart';
 import 'form_screen.dart';
+import '../services/video_rpe.dart' show mediaIdFieldFor;
 import 'widgets/history_panel.dart';
 import 'widgets/rest_timer_sheet.dart';
+import 'widgets/video_preview.dart';
 
 /// One row in the timeline. Three flavors:
 /// - `_Item.planned`  — from PlanStore, not in sheet yet
@@ -1903,41 +1904,30 @@ class _RecordTile extends StatelessWidget {
     );
   }
 
-  /// The row's attached video deep link (first `widget: video` dim with a
-  /// value), or null.
-  String? _videoUrl() {
+  /// The row's attached video: deep link + picker media id (for the
+  /// cached thumbnail), from the first `widget: video` dim with a value.
+  ({String url, String? mediaId})? _videoRef() {
     for (final d in view.dimensions) {
       if (d.input?.widget != WidgetType.video) continue;
       final s = item.values[d.name]?.toString().trim();
-      if (s != null && s.isNotEmpty) return s;
+      if (s == null || s.isEmpty) continue;
+      final mid = item.values[mediaIdFieldFor(d.name)]?.toString().trim();
+      return (url: s, mediaId: (mid == null || mid.isEmpty) ? null : mid);
     }
     return null;
   }
 
   /// A colored "watch" icon on any row with a video — visible in the
-  /// collapsed tile. Tap opens the clip (Google Photos deep link) via the
-  /// system viewer.
+  /// collapsed tile. Tap → a preview sheet (cached thumbnail) → tap the
+  /// thumbnail to play (Google Photos deep link via the system viewer).
   Widget? _videoButton(BuildContext context) {
-    final url = _videoUrl();
-    if (url == null) return null;
+    final ref = _videoRef();
+    if (ref == null) return null;
     final scheme = Theme.of(context).colorScheme;
     return IconButton(
       icon: Icon(Icons.play_circle, size: 20, color: scheme.primary),
       tooltip: 'Watch video',
-      onPressed: () async {
-        try {
-          await AndroidIntent(
-            action: 'android.intent.action.VIEW',
-            data: url,
-          ).launch();
-        } catch (e) {
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Could not open video: $e')),
-            );
-          }
-        }
-      },
+      onPressed: () => showVideoPreviewSheet(context, ref.url, ref.mediaId),
     );
   }
 

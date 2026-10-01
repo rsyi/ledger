@@ -28,6 +28,7 @@ import 'integrations/photos_picker_gateway.dart' show videoDownloadUrl;
 import 'llm_client.dart';
 import 'video_attach.dart';
 import 'video_frames.dart';
+import 'video_thumb_store.dart';
 
 /// Sibling-dim convention for `widget: video` fields: the picker's
 /// persistent media-item id is stored next to the URL dim in
@@ -453,6 +454,9 @@ class VideoRpeService extends ChangeNotifier {
       if (frames.isEmpty) {
         throw StateError('No frames could be extracted from the video');
       }
+      // Cache the middle frame as the clip's thumbnail (the picker URL
+      // dies ~60 min from now, so capture it while we can).
+      await VideoThumbStore.save(video.mediaId, frames[frames.length ~/ 2]);
       final raw = await llm.completeVision(
         model,
         buildRpePrompt(
@@ -473,6 +477,30 @@ class VideoRpeService extends ChangeNotifier {
       } catch (_) {/* best-effort */}
     }
     notifyListeners();
+  }
+
+  /// Caches a thumbnail without running the LLM estimate — used when the
+  /// AI estimate is unavailable but we still want an in-app preview.
+  /// Best-effort + quiet; the picker URL is live only right after a pick.
+  Future<void> captureThumbnail(VideoAttachResult video) async {
+    File? tmp;
+    try {
+      final bytes = await flow.gateway.download(videoDownloadUrl(video.baseUrl));
+      final dir = await getTemporaryDirectory();
+      tmp = File(
+          '${dir.path}/thumb_${video.mediaId.hashCode.toRadixString(16)}.mp4');
+      await tmp.writeAsBytes(bytes, flush: true);
+      final duration = await _extractor.durationMs(tmp.path);
+      final mid = frameTimestampsMs(duration, count: 1);
+      final frames = await _extractor.framesAt(tmp.path, mid);
+      if (frames.isNotEmpty) {
+        await VideoThumbStore.save(video.mediaId, frames.first);
+      }
+    } catch (_) {/* best-effort — no thumbnail is acceptable */} finally {
+      try {
+        await tmp?.delete();
+      } catch (_) {/* best-effort */}
+    }
   }
 
   Future<void> _persist(

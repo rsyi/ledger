@@ -77,7 +77,9 @@ List<PrescribedItem> parsePrescribedProse(String? morning, String? afternoon) {
     final prose = entry.$2;
     if (prose == null) continue;
     final tidy = tidyProgramProse(prose);
-    for (var seg in tidy.split(';')) {
+    // Split on ';' and on ". then"/", then" (exercises are chained both
+    // ways in the prose — "… hanging leg raise 3x8-15. Then dips 3x8-12").
+    for (var seg in tidy.split(RegExp(r';|(?:[.,]\s+)[Tt]hen\s+'))) {
       seg = seg.trim();
       if (seg.isEmpty) continue;
       final low = seg.toLowerCase();
@@ -85,8 +87,10 @@ List<PrescribedItem> parsePrescribedProse(String? morning, String? afternoon) {
       // Name = text before the first ':', '(' or digit.
       final m = RegExp(r'[:(\d]').firstMatch(seg);
       var name = (m == null ? seg : seg.substring(0, m.start)).trim();
-      name = name.replaceAll(RegExp(r'[,.]+$'), '').trim();
-      if (name.isEmpty || name.length < 2) continue;
+      name = name.replaceAll(RegExp(r'[^A-Za-z)]+$'), '').trim();
+      // Drop filler segments that name no actual movement (e.g. a bare
+      // "back-offs" left after a split) — nothing to match or check.
+      if (name.length < 2 || _tokens(name).isEmpty) continue;
       var scheme = (m == null ? '' : seg.substring(m.start)).trim();
       scheme = scheme.replaceFirst(RegExp(r'^:\s*'), '').trim();
       out.add(PrescribedItem(name: _cap(name), scheme: scheme, period: entry.$1));

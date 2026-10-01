@@ -17,6 +17,25 @@ void main() {
       expect(names.every((n) => n.isNotEmpty), isTrue);
     });
 
+    test('splits "then"-chained exercises (real v14 Thursday prose)', () {
+      const real =
+          'Muscle-ups FIRST (skill — quality sets, stop on quality loss). '
+          'Then handstand practice ~10 min (wall or free, quality holds); '
+          'front-lever up-downs 2x5 (straight-arm, short of failure); '
+          'hanging leg raise 3x8-15. Then dips 3x8-12; optional row; '
+          'EZ curls 3x8-12; optional triceps 2x10-15.';
+      final names =
+          parsePrescribedProse(real, null).map((e) => e.name.toLowerCase());
+      expect(names.any((n) => n.contains('muscle')), isTrue);
+      expect(names.any((n) => n.contains('handstand')), isTrue);
+      expect(names.any((n) => n.contains('front-lever')), isTrue);
+      expect(names.any((n) => n.contains('hanging leg raise')), isTrue);
+      expect(names.any((n) => n.contains('dips')), isTrue);
+      expect(names.any((n) => n.contains('ez curls')), isTrue);
+      // "optional row/triceps" are skipped.
+      expect(names.any((n) => n.contains('optional')), isFalse);
+    });
+
     test('skips non-exercise clauses', () {
       final items = parsePrescribedProse(
           'Bench top set, then back-offs 3x5-8; No squat or deadlift today; '

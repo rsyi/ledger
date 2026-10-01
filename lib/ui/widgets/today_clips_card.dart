@@ -125,7 +125,7 @@ class TodayClipsCardState extends State<TodayClipsCard> {
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.only(right: 16),
                     itemCount: clips.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 10),
+                    separatorBuilder: (_, _) => const SizedBox(width: 10),
                     itemBuilder: (_, i) => VideoThumb(
                       url: clips[i].url,
                       mediaId: clips[i].mediaId,

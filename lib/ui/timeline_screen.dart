@@ -1917,17 +1917,14 @@ class _RecordTile extends StatelessWidget {
     return null;
   }
 
-  /// A colored "watch" icon on any row with a video — visible in the
-  /// collapsed tile. Tap → a preview sheet (cached thumbnail) → tap the
-  /// thumbnail to play (Google Photos deep link via the system viewer).
+  /// An inline thumbnail of the row's clip — visible in the collapsed
+  /// tile. Tap plays it in-app (or Google Photos as fallback).
   Widget? _videoButton(BuildContext context) {
     final ref = _videoRef();
     if (ref == null) return null;
-    final scheme = Theme.of(context).colorScheme;
-    return IconButton(
-      icon: Icon(Icons.play_circle, size: 20, color: scheme.primary),
-      tooltip: 'Watch video',
-      onPressed: () => showVideoPreviewSheet(context, ref.url, ref.mediaId),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: VideoThumb(url: ref.url, mediaId: ref.mediaId, size: 46),
     );
   }
 

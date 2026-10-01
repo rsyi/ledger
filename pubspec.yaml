@@ -20,6 +20,10 @@ dependencies:
   path_provider: ^2.1.5
   connectivity_plus: ^6.1.0
   webview_flutter: ^4.9.0
+  # In-app playback of attached lift videos from the locally-cached file
+  # (the Google Photos deep link isn't a streamable media URL + the
+  # picker download URL expires ~60 min, so the clip is saved on attach).
+  video_player: ^2.9.2
   flutter_secure_storage: ^9.2.0
   jinja: ^0.6.6
   shared_preferences: ^2.5.5

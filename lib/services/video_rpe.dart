@@ -27,6 +27,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'integrations/photos_picker_gateway.dart' show videoDownloadUrl;
 import 'llm_client.dart';
 import 'video_attach.dart';
+import 'video_file_store.dart';
 import 'video_frames.dart';
 import 'video_thumb_store.dart';
 
@@ -444,6 +445,9 @@ class VideoRpeService extends ChangeNotifier {
       final bytes = await flow.gateway.download(
         videoDownloadUrl(video.baseUrl),
       );
+      // Persist the full clip for in-app playback (the picker URL dies
+      // ~60 min from now, so this is our only chance to keep it).
+      await VideoFileStore.save(video.mediaId, bytes);
       final dir = await getTemporaryDirectory();
       tmp = File(
           '${dir.path}/rpe_${video.mediaId.hashCode.toRadixString(16)}.mp4');
@@ -486,6 +490,7 @@ class VideoRpeService extends ChangeNotifier {
     File? tmp;
     try {
       final bytes = await flow.gateway.download(videoDownloadUrl(video.baseUrl));
+      await VideoFileStore.save(video.mediaId, bytes);
       final dir = await getTemporaryDirectory();
       tmp = File(
           '${dir.path}/thumb_${video.mediaId.hashCode.toRadixString(16)}.mp4');

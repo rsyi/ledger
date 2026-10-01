@@ -20,7 +20,21 @@ Future<void> playVideo(
     ));
     return;
   }
-  // Fallback: open in Google Photos.
+  // Fallback: prefer the Google Photos APP (not the browser) when it's
+  // installed and can handle the deep link; otherwise let the system pick
+  // the default handler.
+  const photosPkg = 'com.google.android.apps.photos';
+  try {
+    final inPhotos = AndroidIntent(
+      action: 'android.intent.action.VIEW',
+      data: url,
+      package: photosPkg,
+    );
+    if (await inPhotos.canResolveActivity() == true) {
+      await inPhotos.launch();
+      return;
+    }
+  } catch (_) {/* fall through to the default handler */}
   try {
     await AndroidIntent(action: 'android.intent.action.VIEW', data: url)
         .launch();

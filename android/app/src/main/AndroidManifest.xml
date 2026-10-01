@@ -82,5 +82,9 @@
              the user can trigger Export Logbook via Email; Android 11+
              package visibility requires declaring it. -->
         <package android:name="com.project9a.redpoint"/>
+        <!-- Google Photos: open an attached clip's deep link in the app
+             (not the browser) when the full file isn't cached locally.
+             Android 11+ package visibility requires declaring it. -->
+        <package android:name="com.google.android.apps.photos"/>
     </queries>
 </manifest>

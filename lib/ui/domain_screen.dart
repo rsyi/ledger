@@ -77,6 +77,12 @@ const _recordMetricIds = {
   'grade_pyramid',
   'session_frequency',
   'hr_4x4_series',
+  // Recovery domain (Whoop API → recovery tab): each is a per-day max
+  // over the raw view rows. Omitting these left `records` empty, so
+  // every recovery series computed MetricUnavailable despite live data.
+  'recovery_score',
+  'hrv_ms',
+  'sleep_hours',
 };
 
 class DomainScreen extends StatefulWidget {

@@ -464,6 +464,55 @@ void main() {
       expect(d.points.last.value, 191);
     });
 
+    test('recovery series (recovery_score/hrv_ms/sleep_hours) compute '
+        'non-empty MetricSeries from recovery-shaped rows', () {
+      final recoveryRows = [
+        {
+          'date': '2026-09-28',
+          'recovery_score': 72,
+          'hrv_ms': 88.5,
+          'sleep_hours': 7.4,
+        },
+        {
+          'date': '2026-09-29',
+          'recovery_score': 55,
+          'hrv_ms': 61.0,
+          'sleep_hours': 6.1,
+        },
+      ];
+      final ri = DomainMetricInputs(records: recoveryRows, today: today);
+
+      final score = computeMetric(
+        const MetricConfig(id: 'recovery_score'),
+        ri,
+      ) as MetricSeries;
+      expect(score.points, hasLength(2));
+      expect(score.points.last.value, 55);
+
+      final hrv = computeMetric(
+        const MetricConfig(id: 'hrv_ms', unit: 'ms'),
+        ri,
+      ) as MetricSeries;
+      expect(hrv.points, hasLength(2));
+      expect(hrv.points.first.value, 88.5);
+      expect(hrv.unit, 'ms');
+
+      final sleep = computeMetric(
+        const MetricConfig(id: 'sleep_hours', unit: 'h'),
+        ri,
+      ) as MetricSeries;
+      expect(sleep.points, hasLength(2));
+      expect(sleep.points.last.value, closeTo(6.1, 1e-9));
+    });
+
+    test('recovery series with no rows degrades to MetricUnavailable', () {
+      final d = computeMetric(
+        const MetricConfig(id: 'recovery_score'),
+        DomainMetricInputs(today: today),
+      );
+      expect(d, isA<MetricUnavailable>());
+    });
+
     test('wilks stat: SBD-only total at weekly bodyweight', () {
       final daily = [
         WeightRow(date: DateTime(2026, 9, 14), weightLbs: 165),

@@ -9,6 +9,7 @@ import '../services/bodyweight_cache.dart';
 import '../services/derive.dart';
 import '../services/sheets_repository.dart';
 import '../services/video_attach.dart';
+import '../services/video_draft_store.dart';
 import '../services/video_rpe.dart';
 import '../services/warehouse_connector.dart';
 import 'widgets/field_widgets.dart';
@@ -195,6 +196,32 @@ class _FormScreenState extends State<FormScreen> {
       _loadRecentRows();
       _loadAdHocCache(autocompleteDims);
     }
+    unawaited(_restoreVideoDraft());
+  }
+
+  /// Repopulates an auto-saved video (from a prior session that was never
+  /// saved) on a fresh form, so backing out didn't lose it.
+  Future<void> _restoreVideoDraft() async {
+    if (widget.isEdit || widget.planMode) return;
+    Dimension? videoDim;
+    for (final d in widget.view.editableDimensions) {
+      if (d.input?.widget == WidgetType.video) {
+        videoDim = d;
+        break;
+      }
+    }
+    if (videoDim == null) return;
+    if ((_shared[videoDim.name] ?? '').toString().isNotEmpty) return;
+    final draft = await VideoDraftStore.load(widget.view.name);
+    if (draft == null || !mounted) return;
+    setState(() {
+      _shared[videoDim!.name] = draft.url;
+      final idf = mediaIdFieldFor(videoDim.name);
+      if (draft.mediaId != null &&
+          widget.view.dimensionByName(idf) != null) {
+        _shared[idf] = draft.mediaId;
+      }
+    });
   }
 
   Future<void> _loadAdHocCache(List<Dimension> dims) async {
@@ -302,6 +329,10 @@ class _FormScreenState extends State<FormScreen> {
           _shared[idField] = res.mediaId;
         }
       });
+      // Auto-save the video immediately (it's expensive to re-attach) so
+      // backing out of the form before saving doesn't lose it — restored
+      // on the next open of this view's form.
+      unawaited(VideoDraftStore.save(widget.view.name, res.url, res.mediaId));
       // Kick the RPE estimate NOW — the picker's download URL dies
       // ~60 min after the pick. Fire-and-forget; the chip below the
       // field tracks pending/ready/failed via the service listener.
@@ -437,6 +468,7 @@ class _FormScreenState extends State<FormScreen> {
             if (dim.input?.widget == WidgetType.video && v == null) {
               _shared.remove(dim.name);
               _shared.remove(mediaIdFieldFor(dim.name));
+              unawaited(VideoDraftStore.clear(widget.view.name));
             }
           }),
           // For timer widgets: ladder taps write into other shared fields
@@ -676,6 +708,8 @@ class _FormScreenState extends State<FormScreen> {
         }
       }
       _recordVideoRpeOutcomes();
+      // The video is now persisted on the row — drop the auto-save draft.
+      unawaited(VideoDraftStore.clear(widget.view.name));
       await _persistAdHocValues();
       if (!mounted) return;
       Navigator.of(context).pop(true);

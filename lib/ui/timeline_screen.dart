@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -1892,12 +1893,51 @@ class _RecordTile extends StatelessWidget {
 
   Widget? _buildTrailing(BuildContext context) {
     if (selectionMode) return null;
+    final video = _videoButton(context);
     final badge = _qboBadge(context);
     final history = _historyButton(context);
-    if (badge == null && history == null) return null;
+    if (video == null && badge == null && history == null) return null;
     return Row(
       mainAxisSize: MainAxisSize.min,
-      children: [?badge, ?history],
+      children: [?video, ?badge, ?history],
+    );
+  }
+
+  /// The row's attached video deep link (first `widget: video` dim with a
+  /// value), or null.
+  String? _videoUrl() {
+    for (final d in view.dimensions) {
+      if (d.input?.widget != WidgetType.video) continue;
+      final s = item.values[d.name]?.toString().trim();
+      if (s != null && s.isNotEmpty) return s;
+    }
+    return null;
+  }
+
+  /// A colored "watch" icon on any row with a video — visible in the
+  /// collapsed tile. Tap opens the clip (Google Photos deep link) via the
+  /// system viewer.
+  Widget? _videoButton(BuildContext context) {
+    final url = _videoUrl();
+    if (url == null) return null;
+    final scheme = Theme.of(context).colorScheme;
+    return IconButton(
+      icon: Icon(Icons.play_circle, size: 20, color: scheme.primary),
+      tooltip: 'Watch video',
+      onPressed: () async {
+        try {
+          await AndroidIntent(
+            action: 'android.intent.action.VIEW',
+            data: url,
+          ).launch();
+        } catch (e) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not open video: $e')),
+            );
+          }
+        }
+      },
     );
   }
 

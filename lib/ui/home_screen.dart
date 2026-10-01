@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:uuid/uuid.dart';
 
 import '../models/github_config.dart';
 import '../models/model_config.dart';
@@ -47,10 +48,12 @@ import '../services/warehouse_connector.dart';
 import '../services/plan_store.dart';
 import '../services/program_provider.dart';
 import '../services/today_program_call.dart';
+import '../services/today_thread.dart';
 import '../services/week_planner.dart';
 import '../services/forecast_meta_store.dart';
 import '../services/wm_store.dart';
 import 'chat_screen.dart';
+import 'coach_chat_screen.dart';
 import 'domain_screen.dart';
 import 'program_screen.dart';
 import 'coach_threads_screen.dart';
@@ -933,6 +936,60 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }
 
+              // Today-synthesis → Coach: tap the card's AI read to
+              // continue the day's synthesis as a normal coach thread.
+              // Switches to the Coach tab, then (if a coach_chat view is
+              // synced) seeds today's `today-YYYY-MM-DD` thread with the
+              // synthesis text — idempotent (shouldSeedTodayThread skips
+              // when a coach opener already exists) — and pushes its
+              // chat. seedText null (disabled synthesis) → just opens the
+              // Coach tab. Best-effort: a seed-write failure still opens
+              // the thread.
+              Future<void> openTodayCoachThread({String? seedText}) async {
+                _selectTab(3);
+                final view = coachView;
+                if (view == null) return; // coach not synced → Coach tab only
+                final repo = data.registry.forView(view);
+                final day = DateTime.now();
+                final threadId = todaySynthesisThreadId(day);
+                final title = todaySynthesisThreadTitle(day);
+                if (seedText != null && seedText.trim().isNotEmpty) {
+                  try {
+                    final all = await repo.list(view);
+                    final existing = todayThreadRows(all, threadId);
+                    if (shouldSeedTodayThread(existing)) {
+                      final now = DateTime.now();
+                      await repo.create(view, <String, Object?>{
+                        'id': const Uuid().v4(),
+                        'date': DateTime(now.year, now.month, now.day),
+                        'ts': now.toIso8601String(),
+                        'role': 'coach',
+                        'kind': 'reply',
+                        'thread': threadId,
+                        'text': seedText.trim(),
+                      });
+                      unawaited(
+                        SyncScheduler.instance?.maybeSync(manual: true),
+                      );
+                    }
+                  } catch (_) {/* open the thread anyway */}
+                }
+                if (!context.mounted) return;
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => CoachChatScreen(
+                      view: view,
+                      repository: repo,
+                      threadId: threadId,
+                      title: title,
+                      ledger: coachLedger,
+                      brain: coachBrain,
+                      openTimeline: openCoachTimeline,
+                    ),
+                  ),
+                );
+              }
+
               // ---- PROGRESS: outputs only — PHASE hero (weight
               // trajectory + verdict) + STRENGTH card + Coach preview.
               // The THIS WEEK input strip is dropped here (progressOnly);
@@ -972,6 +1029,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         // (on a climb day) the Kaya guided sync.
                         registry: IntegrationRegistry.instance,
                         onOpen: () => _selectTab(2),
+                        onOpenCoachThread: openTodayCoachThread,
                       ),
                       HomeDashboard(
                         key: _dashboardKey,

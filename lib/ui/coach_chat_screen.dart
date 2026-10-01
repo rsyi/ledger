@@ -12,20 +12,19 @@ import '../models/planned_entry.dart';
 import '../models/view_schema.dart';
 import '../services/coach_brain.dart';
 import '../services/coach_proposal_store.dart';
+import '../services/coach_thread_const.dart';
 import '../services/plan_store.dart';
 import '../services/sheets_repository.dart' show Record;
 import '../services/sync_scheduler.dart';
 import '../services/warehouse_connector.dart';
 import 'widgets/coach_proposal_card.dart';
 
+export '../services/coach_thread_const.dart' show kCoachThreadGeneral;
+
 /// Legacy (pre-threads) meta key: `ts` of the newest coach message the
 /// user has seen. Still consulted as the fallback for the `general`
 /// thread so upgrades don't resurface old messages as unread.
 const kCoachChatLastReadTsKey = 'coach_chat_last_read_ts';
-
-/// Thread id rows with a blank `thread` dimension belong to (the
-/// pre-threads history).
-const kCoachThreadGeneral = 'general';
 
 /// Fixed thread id the nightly briefings post into.
 const kCoachThreadBriefings = 'briefings';

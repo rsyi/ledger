@@ -81,26 +81,30 @@ void main() {
     expect(find.byIcon(Icons.auto_awesome), findsNothing);
   });
 
-  testWidgets('enabled synthesis renders the LLM read', (tester) async {
-    final llm = LlmClient(
-      [
-        ModelConfig(
-          name: 'sonnet',
-          vendor: ModelVendor.anthropic,
-          modelRef: 'claude-x',
-          apiKey: 'k',
-          apiUrl: 'https://api.anthropic.com/v1',
-        ),
-      ],
-      httpClient: MockClient((_) async => http.Response(
-            jsonEncode({
-              'content': [
-                {'type': 'text', 'text': 'Grab carbs before climbing.'},
-              ],
-            }),
-            200,
-          )),
-    );
+  LlmClient _llmWith(String text) => LlmClient(
+        [
+          ModelConfig(
+            name: 'sonnet',
+            vendor: ModelVendor.anthropic,
+            modelRef: 'claude-x',
+            apiKey: 'k',
+            apiUrl: 'https://api.anthropic.com/v1',
+          ),
+        ],
+        httpClient: MockClient((_) async => http.Response(
+              jsonEncode({
+                'content': [
+                  {'type': 'text', 'text': text},
+                ],
+              }),
+              200,
+            )),
+      );
+
+  testWidgets('enabled synthesis renders the LLM read as markdown',
+      (tester) async {
+    // Bold markdown must render (not show literal **…**).
+    final llm = _llmWith('Grab **carbs** before climbing.');
     await tester.pumpWidget(_host(TodayStatusCard(
       mealsView: null,
       mealsRepo: null,
@@ -112,7 +116,56 @@ void main() {
     )));
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.auto_awesome), findsOneWidget);
-    expect(find.text('Grab carbs before climbing.'), findsOneWidget);
+    // MarkdownBody renders into a RichText — match its combined text, and
+    // confirm the raw ** markers are NOT present (they were stripped).
+    expect(
+      find.textContaining('Grab carbs before climbing.', findRichText: true),
+      findsOneWidget,
+    );
+    expect(find.textContaining('**', findRichText: true), findsNothing);
+  });
+
+  testWidgets('food + training lines are always visible (no expand needed)',
+      (tester) async {
+    await tester.pumpWidget(_host(TodayStatusCard(
+      mealsView: null,
+      mealsRepo: null,
+      strengthView: null,
+      strengthRepo: null,
+      provider: null,
+      synthesis: _svc(_llmWith('Read.')),
+      onOpen: () {},
+    )));
+    await tester.pumpAndSettle();
+    // The static training line shows without any tap to expand.
+    expect(find.textContaining('Training:'), findsOneWidget);
+  });
+
+  testWidgets('tapping the AI read opens the coach thread with the seed',
+      (tester) async {
+    String? seeded = 'UNSET';
+    await tester.pumpWidget(_host(TodayStatusCard(
+      mealsView: null,
+      mealsRepo: null,
+      strengthView: null,
+      strengthRepo: null,
+      provider: null,
+      synthesis: _svc(_llmWith('Push today, recovery is high.')),
+      onOpen: () {},
+      onOpenCoachThread: ({String? seedText}) => seeded = seedText,
+    )));
+    await tester.pumpAndSettle();
+    // The read renders …
+    expect(
+      find.textContaining('Push today', findRichText: true),
+      findsOneWidget,
+    );
+    // … and tapping the AI region (via its affordance) opens the thread
+    // with the synthesis as the seed.
+    expect(find.text('Ask the coach'), findsOneWidget);
+    await tester.tap(find.text('Ask the coach'));
+    await tester.pumpAndSettle();
+    expect(seeded, 'Push today, recovery is high.');
   });
 
   LlmClient _llm() => LlmClient(

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../../models/view_schema.dart';
 import '../../services/day_synthesis.dart' show DaySynthesisContext;
@@ -58,6 +59,13 @@ class TodayStatusCard extends StatefulWidget {
   /// Tap handler — the shell selects the Log tab.
   final VoidCallback onOpen;
 
+  /// Tap-the-AI-read handler — the shell switches to the Coach tab and
+  /// opens today's synthesis thread, seeded with [seedText] (the current
+  /// synthesis) so the user can keep talking from it. When the synthesis
+  /// is disabled/null, [seedText] is null → the shell just opens Coach
+  /// with no seed. Null → the AI region isn't tappable (no shell wiring).
+  final void Function({String? seedText})? onOpenCoachThread;
+
   const TodayStatusCard({
     super.key,
     required this.mealsView,
@@ -68,6 +76,7 @@ class TodayStatusCard extends StatefulWidget {
     this.synthesis,
     this.registry,
     required this.onOpen,
+    this.onOpenCoachThread,
   });
 
   @override
@@ -80,7 +89,6 @@ class TodayStatusCardState extends State<TodayStatusCard> {
   // --- AI synthesis (Feature 1) ---
   DaySynthesisResult? _synthesis;
   bool _synthesizing = false;
-  bool _expanded = false;
   StreamSubscription<LogEvent>? _logSub;
   Timer? _synthDebounce;
 
@@ -411,113 +419,217 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     );
   }
 
-  /// Feature 1: the AI day-synthesis card. Leads with the short synthesis;
-  /// tap toggles the detailed two-line summary. A refresh icon regenerates.
+  /// Feature 1 (reworked 2026-09-30): the AI day-synthesis card. Layout,
+  /// top → bottom:
+  ///   1. header row — "Today" + a refresh affordance (or a sync/synth
+  ///      spinner),
+  ///   2. the ALWAYS-ON food + training summary lines (met/behind color
+  ///      states; tap → Log),
+  ///   3. a divider,
+  ///   4. the AI read — rendered as markdown (bold/lists), TAPPABLE: tap
+  ///      opens today's coach thread seeded with the synthesis so the
+  ///      user keeps talking from it (onOpenCoachThread).
+  ///
+  /// The old tap-to-expand toggle is gone — the summary lines are always
+  /// shown and the tap gesture now opens the coach.
   Widget _buildSynthesis(BuildContext context, ColorScheme scheme) {
     final synth = _synthesis;
     final status = _status;
     return Material(
       color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-      child: InkWell(
-        onTap: () => setState(() => _expanded = !_expanded),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.auto_awesome, size: 16, color: scheme.tertiary),
-                  const SizedBox(width: 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // --- header (refresh affordance lives here) ---
+            Row(
+              children: [
+                Text(
+                  'Today',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                const Spacer(),
+                if (_syncStatus != null) ...[
                   Text(
-                    'Today',
+                    _syncStatus!,
                     style: TextStyle(
                       color: scheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
+                      fontSize: 12,
                     ),
                   ),
-                  const Spacer(),
-                  if (_syncStatus != null) ...[
-                    Text(
-                      _syncStatus!,
-                      style: TextStyle(
-                        color: scheme.onSurfaceVariant,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    const SizedBox(
+                  const SizedBox(width: 8),
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ] else if (_synthesizing)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 8),
+                    child: SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                  ] else if (_synthesizing)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 8),
-                      child: SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    )
-                  else
-                    IconButton(
-                      icon: const Icon(Icons.refresh, size: 18),
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      onPressed: () => unawaited(onRefreshPressed(context)),
-                      tooltip: 'Refresh',
-                    ),
-                  const SizedBox(width: 8),
-                ],
-              ),
-              const SizedBox(height: 6),
-              if (synth != null)
-                Text(
-                  synth.text,
-                  style: TextStyle(color: scheme.onSurface, fontSize: 14),
-                )
-              else if (_synthesizing)
-                // Consistent with the progress cards' skeletons: greyed,
-                // fixed-height, pulsing text-shaped bars instead of a
-                // bare "Reading your day…" that then reflows into the read.
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 2),
-                  child: CardSkeleton(bars: [
-                    (width: double.infinity, height: 12),
-                    (width: 220, height: 12),
-                  ]),
-                )
-              else
-                Text(
-                  'Not enough logged yet — log a meal or a set.',
-                  style: TextStyle(
-                    color: scheme.onSurfaceVariant,
-                    fontSize: 14,
-                    fontStyle: FontStyle.italic,
+                  )
+                else
+                  IconButton(
+                    icon: const Icon(Icons.refresh, size: 18),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => unawaited(onRefreshPressed(context)),
+                    tooltip: 'Refresh',
                   ),
-                ),
-              if (_expanded && status != null) ...[
-                const SizedBox(height: 12),
-                Divider(height: 1, color: scheme.outlineVariant),
-                const SizedBox(height: 12),
-                _line(context, status.foodText, status.foodState),
-                const SizedBox(height: 4),
-                _line(context, status.exerciseText, status.exerciseState),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: widget.onOpen,
-                    child: const Text('Open Log'),
-                  ),
-                ),
+                const SizedBox(width: 8),
               ],
-            ],
-          ),
+            ),
+            const SizedBox(height: 8),
+            // --- always-on food + training summary (tap → Log) ---
+            InkWell(
+              onTap: widget.onOpen,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: status == null
+                    ? const CardSkeleton(bars: [
+                        (width: double.infinity, height: 12),
+                        (width: 180, height: 12),
+                      ])
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _line(context, status.foodText, status.foodState),
+                          const SizedBox(height: 4),
+                          _line(context, status.exerciseText,
+                              status.exerciseState),
+                        ],
+                      ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Divider(height: 1, color: scheme.outlineVariant),
+            const SizedBox(height: 12),
+            // --- AI read: markdown, tap → continue in Coach ---
+            _buildAiRead(context, scheme, synth),
+          ],
         ),
+      ),
+    );
+  }
+
+  /// The AI synthesis block: an ✨ "Today" header + the markdown read,
+  /// wrapped in an InkWell that opens today's coach thread seeded with
+  /// the synthesis. Tapping while the read is still generating (or with
+  /// synthesis disabled) opens Coach without a seed.
+  Widget _buildAiRead(
+    BuildContext context,
+    ColorScheme scheme,
+    DaySynthesisResult? synth,
+  ) {
+    final open = widget.onOpenCoachThread;
+    Widget body;
+    if (synth != null) {
+      body = MarkdownBody(
+        data: synth.text,
+        // The card tap (not text selection) drives the gesture — keep the
+        // markdown non-selectable so the whole block routes to the InkWell.
+        selectable: false,
+        styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+          p: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(color: scheme.onSurface, fontSize: 14),
+          strong: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: scheme.onSurface,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+          em: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: scheme.onSurface,
+                fontSize: 14,
+                fontStyle: FontStyle.italic,
+              ),
+          listBullet: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(color: scheme.onSurface, fontSize: 14),
+        ),
+      );
+    } else if (_synthesizing) {
+      // Consistent with the progress cards' skeletons: greyed,
+      // fixed-height, pulsing text-shaped bars.
+      body = const CardSkeleton(bars: [
+        (width: double.infinity, height: 12),
+        (width: 220, height: 12),
+      ]);
+    } else {
+      body = Text(
+        'Not enough logged yet — log a meal or a set.',
+        style: TextStyle(
+          color: scheme.onSurfaceVariant,
+          fontSize: 14,
+          fontStyle: FontStyle.italic,
+        ),
+      );
+    }
+
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.auto_awesome, size: 16, color: scheme.tertiary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Today',
+                style: TextStyle(
+                  color: scheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            if (open != null && synth != null)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Ask the coach',
+                      style: TextStyle(
+                        color: scheme.tertiary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(Icons.chevron_right, size: 16, color: scheme.tertiary),
+                  ],
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        body,
+      ],
+    );
+
+    if (open == null) return content;
+    return InkWell(
+      // Disabled/null synthesis → open Coach with no seed. With a read →
+      // seed today's thread with its text.
+      onTap: () => open(seedText: synth?.text),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: content,
       ),
     );
   }

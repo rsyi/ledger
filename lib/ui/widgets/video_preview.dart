@@ -20,21 +20,19 @@ Future<void> playVideo(
     ));
     return;
   }
-  // Fallback: prefer the Google Photos APP (not the browser) when it's
-  // installed and can handle the deep link; otherwise let the system pick
-  // the default handler.
+  // Fallback: prefer the Google Photos APP (not the browser). Try
+  // launching straight into the package — canResolveActivity() is
+  // unreliable here (package-visibility false-negatives sent it to the
+  // browser), so we just attempt it and fall back only if it throws.
   const photosPkg = 'com.google.android.apps.photos';
   try {
-    final inPhotos = AndroidIntent(
+    await AndroidIntent(
       action: 'android.intent.action.VIEW',
       data: url,
       package: photosPkg,
-    );
-    if (await inPhotos.canResolveActivity() == true) {
-      await inPhotos.launch();
-      return;
-    }
-  } catch (_) {/* fall through to the default handler */}
+    ).launch();
+    return;
+  } catch (_) {/* Photos not installed / can't handle it → default below */}
   try {
     await AndroidIntent(action: 'android.intent.action.VIEW', data: url)
         .launch();

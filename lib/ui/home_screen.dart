@@ -494,7 +494,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return FutureBuilder<_Bootstrap>(
       future: _bootstrap,
       builder: (context, snap) {
-        final appName = snap.data?.appName ?? 'Airledger';
+        final appName = snap.data?.appName ?? 'Ledger';
         final boot = snap.data;
         final github = boot?.github;
         final chatModel = boot == null ? null : _chatModel(boot.models);
@@ -732,6 +732,14 @@ class _HomeScreenState extends State<HomeScreen> {
                   readOnlyRepo: data.readOnlyRepo,
                   forView: data.registry.forView,
                 ),
+                // Recovery/sleep (Whoop → recovery tab): feeds readiness
+                // into the synthesis ("recovery 80 — good to push").
+                recoveryView: dashRecoveryView,
+                recoveryRepo: dashboardRepoFor(
+                  dashRecoveryView,
+                  readOnlyRepo: data.readOnlyRepo,
+                  forView: data.registry.forView,
+                ),
                 // Bodyweight prices the cut's per-lb protein band into an
                 // absolute g/day target (7d avg, same as the GOALS tab).
                 weightView: weightView,
@@ -959,6 +967,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             : data.registry.forView(dashStrengthView),
                         provider: programProvider,
                         synthesis: synthesisService,
+                        // Gated refresh → sync-first: the registry runs
+                        // the quiet Withings/Macrofactor/Whoop pulls and
+                        // (on a climb day) the Kaya guided sync.
+                        registry: IntegrationRegistry.instance,
                         onOpen: () => _selectTab(2),
                       ),
                       HomeDashboard(

@@ -650,6 +650,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       repository: data.repository,
                       views: {for (final v in data.views) v.name: v},
                       fetchDoc: CoachBrain.githubFetcher(github),
+                      // Direct-sheet path for read-only dump views
+                      // (climbing/kaya_ascents) the local engine never
+                      // owns.
+                      readOnlyRepo: data.readOnlyRepo,
                       // Video-RPE calibration section (AI estimate vs
                       // the rpe the user actually logged).
                       metaGet: coachLedger?.metaGet,

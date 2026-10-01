@@ -14,7 +14,12 @@ import 'package:intl/intl.dart';
 ///
 ///   dart run tool/coach_dump.dart [--days N] [--views a,b,c]
 ///
-/// Defaults: --days 28, --views strength,cardio,weight,daily_notes,coach_log.
+/// Defaults: --days 28, --views strength,cardio,weight,daily_notes,
+/// recovery,meals,climbing,coach_log.
+///
+/// Per-view rows are capped to [maxRowsPerView] (most recent kept) so a
+/// dense integration tab (climbing ≈50 ascents/week) can't blow the
+/// briefing's token budget.
 ///
 /// For each view it parses the live schema from the fitness repo
 /// (`~/repos/airledger-fitness/views/&lt;view&gt;.view.yml` + .input.yml), reads the
@@ -25,9 +30,22 @@ final home = Platform.environment['HOME']!;
 final viewsDir = '$home/repos/airledger-fitness/views';
 final configPath = '$home/.config/airledger/config.yaml';
 
+/// Per-view row cap (most recent kept) — matches CoachBrain's in-app
+/// dump so the nightly briefing sees the same shape.
+const maxRowsPerView = 200;
+
 Future<void> main(List<String> args) async {
   var days = 28;
-  var views = ['strength', 'cardio', 'weight', 'daily_notes', 'coach_log'];
+  var views = [
+    'strength',
+    'cardio',
+    'weight',
+    'daily_notes',
+    'recovery',
+    'meals',
+    'climbing',
+    'coach_log',
+  ];
   for (var i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--days':
@@ -110,14 +128,22 @@ Future<void> main(List<String> args) async {
     }
     selected.sort((a, b) => a.$1.compareTo(b.$1));
 
-    print('\n## $viewName (last $days days, ${selected.length} rows)');
+    final total = selected.length;
+    var capped = selected;
+    if (capped.length > maxRowsPerView) {
+      capped = capped.sublist(capped.length - maxRowsPerView); // most recent
+    }
+    final capNote = total > maxRowsPerView
+        ? ', showing latest $maxRowsPerView'
+        : '';
+    print('\n## $viewName (last $days days, $total rows$capNote)');
     if (selected.isEmpty) {
       print('no data yet');
       continue;
     }
     print('| ${dims.map((d) => d.name).join(' | ')} |');
     print('|${List.filled(dims.length, ' --- ').join('|')}|');
-    for (final (_, row) in selected) {
+    for (final (_, row) in capped) {
       final cells = [
         for (final i in colIdx) i < 0 ? '' : mdCell(cellAt(row, i)),
       ];

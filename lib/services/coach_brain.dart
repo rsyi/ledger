@@ -47,8 +47,23 @@ class CoachBrain {
     'coach/strategy.yaml', // may 404 — null is fine
   ];
 
-  /// Ledger views dumped into the prompt (those that exist).
-  static const dumpViews = ['strength', 'cardio', 'weight', 'daily_notes'];
+  /// Ledger views dumped into the prompt (those that exist). Covers the
+  /// data domains the coach reasons over: the lifting/cardio/weight/
+  /// journal ledgers PLUS the integration surfaces — recovery (Whoop
+  /// sleep/HRV/recovery), meals (Macrofactor macros), and climbing (Kaya
+  /// ascents). Integration/read-only views (climbing) list through the
+  /// direct-sheet [readOnlyRepo]; the rest ride the local-first
+  /// [repository]. All are windowed + row-capped by [renderTable], so
+  /// even climbing's ~1.4k rows shrink to ≤200 of the last 28 days.
+  static const dumpViews = [
+    'strength',
+    'cardio',
+    'weight',
+    'daily_notes',
+    'recovery',
+    'meals',
+    'climbing',
+  ];
 
   /// Rows older than this are dropped from the dump (future rows —
   /// planned entries — are always kept).
@@ -76,8 +91,14 @@ class CoachBrain {
   /// anthropic vendor — home_screen's _chatModel already selects one).
   final ModelConfig model;
 
-  /// Local-first ledger connector — [dumpViews] are listed through it.
+  /// Local-first ledger connector — writable [dumpViews] list through it.
   final WarehouseConnector repository;
+
+  /// Direct-sheet connector for read-only views (climbing/kaya_ascents):
+  /// the local engine never owns those tabs, so listing them through
+  /// [repository] returns nothing. Null → read-only dump views are
+  /// silently skipped (same fallback as a missing view).
+  final WarehouseConnector? readOnlyRepo;
 
   /// All loaded views by name; [dumpViews] absent from this map are
   /// silently skipped.
@@ -97,6 +118,7 @@ class CoachBrain {
     required this.repository,
     required this.views,
     required this.fetchDoc,
+    this.readOnlyRepo,
     this.metaGet,
     this.now = DateTime.now,
   });
@@ -341,9 +363,14 @@ in a desktop Claude session — you cannot edit files from here.''';
     for (final name in dumpViews) {
       final view = views[name];
       if (view == null) continue;
+      // Read-only views (climbing/kaya_ascents) live only in the sheet,
+      // never the local engine — list them through the direct-sheet
+      // repo, matching the dashboard's readOnlyRepo path.
+      final repo = view.readOnly ? readOnlyRepo : repository;
+      if (repo == null) continue; // read-only view, no direct-sheet repo
       List<Record> rows;
       try {
-        rows = await repository.list(view);
+        rows = await repo.list(view);
       } catch (_) {
         continue; // view exists but isn't listable here — skip
       }

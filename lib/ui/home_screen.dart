@@ -257,10 +257,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ViewSchema? weightView;
       ViewSchema? mealsView;
       ViewSchema? recoveryView;
+      ViewSchema? whoopWorkoutsView;
       for (final v in views) {
         if (v.name == 'weight') weightView = v;
         if (v.name == 'meals') mealsView = v;
         if (v.name == 'recovery') recoveryView = v;
+        if (v.name == 'whoop_workouts') whoopWorkoutsView = v;
       }
       // _initialize() re-runs on schema reload; tear down the previous
       // service's BLE connection + retry timer before replacing it.
@@ -309,6 +311,15 @@ class _HomeScreenState extends State<HomeScreen> {
               config: assetConfig.whoopApi,
               repo: repo.repo,
               recoveryViewJson: viewSchemaToEngineJson(recoveryView),
+              // Whoop workouts (strain) → the own whoop_workouts tab,
+              // row-grained by workout_id. Pulled on the same window as
+              // sleep/recovery so the coach sees the day's workout(s)
+              // alongside its recovery; the LLM joins a workout to a
+              // logged session by date/time overlap. Null view (older
+              // schema set) → the workouts pull is simply skipped.
+              workoutsViewJson: whoopWorkoutsView == null
+                  ? null
+                  : viewSchemaToEngineJson(whoopWorkoutsView),
             ),
           // Macrofactor exports nutrition to Health Connect; the
           // integration reads HC nutrition records and ingests them as
@@ -678,6 +689,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ViewSchema? dashCalisthenicsView;
               ViewSchema? dashNotesView;
               ViewSchema? dashRecoveryView;
+              ViewSchema? dashWorkoutsView;
               for (final v in data.views) {
                 if (v.name == 'weight') weightView = v;
                 if (v.name == 'program_status') statusView = v;
@@ -695,6 +707,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 // 2026-09-30): preferred over daily_notes subjectives for
                 // the review's Recovery section.
                 if (v.name == 'recovery') dashRecoveryView = v;
+                // Whoop workouts (strain) → the recomp review's per-session
+                // Whoop-workload readout.
+                if (v.name == 'whoop_workouts') dashWorkoutsView = v;
               }
               final programProvider = github == null
                   ? null
@@ -1084,6 +1099,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         recoveryView: dashRecoveryView,
                         recoveryRepo: dashboardRepoFor(
                           dashRecoveryView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
+                        workoutsView: dashWorkoutsView,
+                        workoutsRepo: dashboardRepoFor(
+                          dashWorkoutsView,
                           readOnlyRepo: data.readOnlyRepo,
                           forView: data.registry.forView,
                         ),

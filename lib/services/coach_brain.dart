@@ -50,17 +50,21 @@ class CoachBrain {
   /// Ledger views dumped into the prompt (those that exist). Covers the
   /// data domains the coach reasons over: the lifting/cardio/weight/
   /// journal ledgers PLUS the integration surfaces — recovery (Whoop
-  /// sleep/HRV/recovery), meals (Macrofactor macros), and climbing (Kaya
-  /// ascents). Integration/read-only views (climbing) list through the
-  /// direct-sheet [readOnlyRepo]; the rest ride the local-first
-  /// [repository]. All are windowed + row-capped by [renderTable], so
-  /// even climbing's ~1.4k rows shrink to ≤200 of the last 28 days.
+  /// sleep/HRV/recovery), whoop_workouts (Whoop per-workout strain),
+  /// meals (Macrofactor macros), and climbing (Kaya ascents).
+  /// Integration/read-only views (climbing) list through the direct-sheet
+  /// [readOnlyRepo]; the rest ride the local-first [repository]. All are
+  /// windowed + row-capped by [renderTable], so even climbing's ~1.4k
+  /// rows shrink to ≤200 of the last 28 days. whoop_workouts lands in the
+  /// SAME window as strength/cardio so the coach can line a day's workout
+  /// strain up against that day's logged training session (temporal join).
   static const dumpViews = [
     'strength',
     'cardio',
     'weight',
     'daily_notes',
     'recovery',
+    'whoop_workouts',
     'meals',
     'climbing',
   ];

@@ -101,6 +101,10 @@ Future<void> main(List<String> args) async {
   // "no data" honestly.
   final mealsTab = await tab('meals');
   final calisthenicsTab = await tab('calisthenics');
+  // Whoop workouts (strain) — SESSION-level; may be missing/empty until
+  // the user connects Whoop + syncs. tab() returns [] → the review's
+  // Whoop-workload readout says "no data" honestly.
+  final workoutsTab = await tab('whoop_workouts');
 
   // -------------------------------------------------------------------------
   // Map sheet rows → metrics inputs
@@ -393,6 +397,23 @@ Future<void> main(List<String> args) async {
     ));
   }
 
+  final workoutRows = <WhoopWorkoutRow>[];
+  if (workoutsTab.isNotEmpty) {
+    final woHead = headerIndex(workoutsTab);
+    for (final r in workoutsTab.skip(1)) {
+      final date = parseSheetDate(cell(r, woHead['date']));
+      if (date == null) continue;
+      final sport = cell(r, woHead['sport']);
+      workoutRows.add(WhoopWorkoutRow(
+        date: date,
+        sport: sport.isEmpty ? null : sport,
+        strain: double.tryParse(cell(r, woHead['strain'])),
+        maxHr: double.tryParse(cell(r, woHead['max_hr'])),
+        durationMin: double.tryParse(cell(r, woHead['duration_min'])),
+      ));
+    }
+  }
+
   final pyForReview = programYaml;
   WeeklyReview reviewFor(DateTime monday, List<ReadingRow> readingRows) {
     final version = pyForReview == null ? null : currentVersion(pyForReview);
@@ -425,6 +446,7 @@ Future<void> main(List<String> args) async {
         calisthenics: caliRows,
         cardio: review4x4s,
         recovery: recoveryRows,
+        workouts: workoutRows,
         body: bodyRows,
       ),
       targets: targets,

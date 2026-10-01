@@ -15,7 +15,7 @@ import 'package:intl/intl.dart';
 ///   dart run tool/coach_dump.dart [--days N] [--views a,b,c]
 ///
 /// Defaults: --days 28, --views strength,cardio,weight,daily_notes,
-/// recovery,meals,climbing,coach_log.
+/// recovery,whoop_workouts,meals,climbing,coach_log.
 ///
 /// Per-view rows are capped to [maxRowsPerView] (most recent kept) so a
 /// dense integration tab (climbing ≈50 ascents/week) can't blow the
@@ -42,6 +42,7 @@ Future<void> main(List<String> args) async {
     'weight',
     'daily_notes',
     'recovery',
+    'whoop_workouts',
     'meals',
     'climbing',
     'coach_log',

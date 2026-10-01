@@ -209,6 +209,12 @@ class HomeDashboard extends StatefulWidget {
   final ViewSchema? recoveryView;
   final WarehouseConnector? recoveryRepo;
 
+  /// whoop_workouts view + ledger connector (Whoop API → whoop_workouts
+  /// tab, 2026-09-30) — SESSION-level strain the recomp review groups
+  /// per day; null → the review's Whoop-workload readout says "no data".
+  final ViewSchema? workoutsView;
+  final WarehouseConnector? workoutsRepo;
+
   /// dashboards.yaml provider (shared 1 h cache) — feeds the hero's
   /// `phases:` eigenvector config. Null → no hero, legacy grid.
   final DomainConfigProvider? dashboards;
@@ -255,6 +261,8 @@ class HomeDashboard extends StatefulWidget {
     this.notesRepo,
     this.recoveryView,
     this.recoveryRepo,
+    this.workoutsView,
+    this.workoutsRepo,
     this.dashboards,
     this.onOpenProgram,
     this.onOpenWeekPlan,
@@ -911,6 +919,20 @@ class HomeDashboardState extends State<HomeDashboard> {
       manual: manualRecovery,
     );
 
+    // Whoop workouts (strain) — SESSION-level; the review groups them per
+    // day so the coach reads a day's strain against its logged training.
+    final workouts = [
+      for (final r in await rows(widget.workoutsRepo, widget.workoutsView))
+        if (_recDate(r['date']) case final d?)
+          WhoopWorkoutRow(
+            date: d,
+            sport: _recText(r['sport']),
+            strain: asNum(r['strain'])?.toDouble(),
+            maxHr: asNum(r['max_hr'])?.toDouble(),
+            durationMin: asNum(r['duration_min'])?.toDouble(),
+          ),
+    ];
+
     final body = <BodyRow>[];
     double? latestBf;
     DateTime? latestBfDate;
@@ -943,6 +965,7 @@ class HomeDashboardState extends State<HomeDashboard> {
         calisthenics: cali,
         cardio: cardio,
         recovery: recovery,
+        workouts: workouts,
         body: body,
       ),
       targets: recompTargetsFromProgram(

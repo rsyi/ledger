@@ -413,6 +413,37 @@ void main() {
           contains('no main-lift back-off sequences'));
     });
 
+    test('Whoop workouts: per-session strain aggregated + rendered', () {
+      final r = buildWeeklyReview(
+        weekStart: wk,
+        inputs: RecompInputs(
+          workouts: [
+            WhoopWorkoutRow(date: d(0), sport: 'weightlifting',
+                strain: 14.2, maxHr: 171, durationMin: 60),
+            WhoopWorkoutRow(date: d(0), sport: 'running',
+                strain: 8.0, maxHr: 158, durationMin: 25),
+            WhoopWorkoutRow(date: d(3), sport: 'rock climbing',
+                strain: 11.5, maxHr: 149, durationMin: 90),
+          ],
+        ),
+        targets: targets(),
+      );
+      expect(r.workouts.sessions, hasLength(3));
+      expect(r.workouts.totalStrain, closeTo(33.7, 0.001));
+      expect(r.workouts.peakStrain, 14.2);
+      final md = renderWeeklyReviewMarkdown(r);
+      expect(md, contains('## Whoop workouts (strain)'));
+      expect(md, contains('weightlifting · strain 14.2'));
+      expect(md, contains('Week total strain: 33.7'));
+    });
+
+    test('Whoop workouts: honest no-data line when absent', () {
+      final empty = buildWeeklyReview(
+          weekStart: wk, inputs: const RecompInputs(), targets: targets());
+      expect(renderWeeklyReviewMarkdown(empty),
+          contains('No Whoop workouts this week'));
+    });
+
     test('pain outranks: decision Q8 leads with pain when flagged', () {
       final r = buildWeeklyReview(
         weekStart: wk,

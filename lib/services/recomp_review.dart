@@ -139,6 +139,26 @@ class Cardio4x4Row {
   });
 }
 
+/// One Whoop workout (strain) — SESSION-level cardiovascular load from
+/// the `whoop_workouts` view. Associated to a logged training session by
+/// date (the review groups strain under the week; the coach reads a
+/// day's strain alongside that day's strength/climbing rows).
+class WhoopWorkoutRow {
+  final DateTime date;
+  final String? sport;
+  final double? strain;
+  final double? maxHr;
+  final double? durationMin;
+
+  const WhoopWorkoutRow({
+    required this.date,
+    this.sport,
+    this.strain,
+    this.maxHr,
+    this.durationMin,
+  });
+}
+
 /// One day's recovery signals — MANUAL subjectives (daily_notes) plus the
 /// OBJECTIVE Whoop fields (the `recovery` view, 2026-09-30). The loader
 /// merges both sources per date, preferring the objective recovery sheet
@@ -227,6 +247,11 @@ class RecompInputs {
   final List<CalisthenicsRow> calisthenics;
   final List<Cardio4x4Row> cardio;
   final List<RecoveryRow> recovery;
+
+  /// Whoop workouts (strain) — SESSION-level cardiovascular load the
+  /// review groups under the week; absent → the Whoop-workload readout
+  /// says "no data" honestly.
+  final List<WhoopWorkoutRow> workouts;
   final List<BodyRow> body;
 
   const RecompInputs({
@@ -237,6 +262,7 @@ class RecompInputs {
     this.calisthenics = const [],
     this.cardio = const [],
     this.recovery = const [],
+    this.workouts = const [],
     this.body = const [],
   });
 }
@@ -705,6 +731,71 @@ CardioWeek cardioWeekOf({
   );
 }
 
+/// One Whoop workout rendered for the weekly review (date-keyed so the
+/// coach can line it up against the day's logged session).
+class WorkoutStrain {
+  final DateTime date;
+  final String? sport;
+  final double? strain;
+  final double? maxHr;
+  final double? durationMin;
+
+  const WorkoutStrain({
+    required this.date,
+    this.sport,
+    this.strain,
+    this.maxHr,
+    this.durationMin,
+  });
+}
+
+/// Whoop workouts in the review week — per-session strain (the coach
+/// associates each to that day's logged training by date), plus the
+/// week's total + peak strain. Sorted by date/time ascending.
+class WorkoutsWeek {
+  final List<WorkoutStrain> sessions;
+
+  /// Sum of strain across the week's workouts (null when none carry it).
+  final double? totalStrain;
+
+  /// Hardest workout's strain this week.
+  final double? peakStrain;
+
+  const WorkoutsWeek({
+    this.sessions = const [],
+    this.totalStrain,
+    this.peakStrain,
+  });
+}
+
+WorkoutsWeek workoutsWeekOf({
+  required List<WhoopWorkoutRow> rows,
+  required DateTime weekStart,
+}) {
+  final week = [for (final r in rows) if (_inWeek(r.date, weekStart)) r]
+    ..sort((a, b) => a.date.compareTo(b.date));
+  double? total, peak;
+  for (final r in week) {
+    if (r.strain == null) continue;
+    total = (total ?? 0) + r.strain!;
+    if (peak == null || r.strain! > peak) peak = r.strain;
+  }
+  return WorkoutsWeek(
+    sessions: [
+      for (final r in week)
+        WorkoutStrain(
+          date: r.date,
+          sport: r.sport,
+          strain: r.strain,
+          maxHr: r.maxHr,
+          durationMin: r.durationMin,
+        ),
+    ],
+    totalStrain: total,
+    peakStrain: peak,
+  );
+}
+
 class PainDay {
   final DateTime date;
   final String text;
@@ -923,6 +1014,9 @@ class WeeklyReview {
   final ClimbingWeek climbing;
   final CalisthenicsWeek calisthenics;
   final CardioWeek cardio;
+
+  /// Whoop workouts (strain) this week — per-session, date-keyed.
+  final WorkoutsWeek workouts;
   final RecoveryWeek recovery;
   final BodyWeek body;
   final List<CoachAnswer> decision;
@@ -939,6 +1033,7 @@ class WeeklyReview {
     required this.climbing,
     required this.calisthenics,
     required this.cardio,
+    required this.workouts,
     required this.recovery,
     required this.body,
     required this.decision,
@@ -1018,6 +1113,7 @@ WeeklyReview buildWeeklyReview({
   final cal =
       calisthenicsWeekOf(rows: inputs.calisthenics, weekStart: ws);
   final cardio = cardioWeekOf(rows: inputs.cardio, weekStart: ws);
+  final workouts = workoutsWeekOf(rows: inputs.workouts, weekStart: ws);
   final recovery = recoveryWeekOf(rows: inputs.recovery, weekStart: ws);
   final body = bodyWeekOf(rows: inputs.body, weekStart: ws);
 
@@ -1046,6 +1142,7 @@ WeeklyReview buildWeeklyReview({
     climbing: climbing,
     calisthenics: cal,
     cardio: cardio,
+    workouts: workouts,
     recovery: recovery,
     body: body,
     decision: decision,
@@ -1478,6 +1575,33 @@ String renderWeeklyReviewMarkdown(WeeklyReview r) {
         : '- Workload vs last comparable-HR session: '
             '${r.cardio.workloadTrendPct! >= 0 ? '+' : ''}'
             '${_f1(r.cardio.workloadTrendPct!)}%');
+  }
+  b.writeln();
+
+  // Whoop workouts (strain) — per-SESSION cardiovascular load, date-keyed
+  // so the coach can read a day's strain against that day's logged
+  // training session (Monday's lifting ↔ Monday's Whoop strain).
+  b.writeln('## Whoop workouts (strain)');
+  if (r.workouts.sessions.isEmpty) {
+    b.writeln('No Whoop workouts this week '
+        '(connect Whoop on Integrations + tap Sync to backfill).');
+  } else {
+    final w = r.workouts;
+    b.writeln('Per-session strain (associate each to that day\'s logged '
+        'training session by date):');
+    for (final s in w.sessions) {
+      final bits = <String>[
+        if (s.sport != null && s.sport!.isNotEmpty) s.sport!,
+        if (s.strain != null) 'strain ${_f1(s.strain!)}',
+        if (s.maxHr != null) 'max HR ${_f0(s.maxHr!)}',
+        if (s.durationMin != null) '${_f0(s.durationMin!)} min',
+      ];
+      b.writeln('- ${_ymd(s.date)}: ${bits.join(' · ')}');
+    }
+    if (w.totalStrain != null) {
+      b.writeln('- Week total strain: ${_f1(w.totalStrain!)}'
+          '${w.peakStrain != null ? ' · peak ${_f1(w.peakStrain!)}' : ''}');
+    }
   }
   b.writeln();
 

@@ -37,6 +37,7 @@ const _kAuthorizeUrl = 'https://api.prod.whoop.com/oauth/oauth2/auth';
 const _kTokenUrl = 'https://api.prod.whoop.com/oauth/oauth2/token';
 const _kSleepUrl = 'https://api.prod.whoop.com/developer/v2/activity/sleep';
 const _kRecoveryUrl = 'https://api.prod.whoop.com/developer/v2/recovery';
+const _kWorkoutUrl = 'https://api.prod.whoop.com/developer/v2/activity/workout';
 const _kRedirectUri = 'ledger://oauth/whoop';
 // offline → refresh token; read scopes for the three record types.
 const _kScope = 'read:sleep read:recovery read:cycles offline';
@@ -160,6 +161,133 @@ List<Map<String, dynamic>> whoopMergeRecovery({
   return [for (final d in days) byDay[d]!];
 }
 
+/// Whoop sport_id → sport name. Best-judgment map of the common ids from
+/// Whoop's documented sport list (the enum is large and occasionally
+/// renumbered; unknowns fall back to the raw id string in
+/// [whoopWorkoutsToRows]). -1 is Whoop's generic "activity" sentinel.
+const _kWhoopSports = <int, String>{
+  -1: 'activity',
+  0: 'running',
+  1: 'cycling',
+  16: 'baseball',
+  18: 'basketball',
+  22: 'golf',
+  24: 'ice hockey',
+  33: 'rowing',
+  34: 'rugby',
+  39: 'skiing',
+  42: 'soccer',
+  43: 'softball',
+  44: 'squash',
+  45: 'weightlifting',
+  48: 'swimming',
+  52: 'hiking',
+  // 'functional fitness' / HIIT — common Whoop label for circuit work.
+  56: 'spin',
+  63: 'walking',
+  66: 'yoga',
+  70: 'meditation',
+  71: 'martial arts',
+  82: 'hiit',
+  83: 'elliptical',
+  84: 'stairmaster',
+  96: 'hiit',
+  97: 'spin',
+  101: 'rock climbing',
+  // Common gym-strength label in recent app versions.
+  123: 'strength trainer',
+};
+
+/// Transform Whoop v2 workout records into row-grained `whoop_workouts`
+/// ingest records — ONE row per workout, keyed on the Whoop workout `id`
+/// (the match_field). SESSION-level: a day can carry multiple workouts
+/// (each a row); they are NEVER merged into per-set strength rows.
+/// Score-less (in-progress / pending) workouts are skipped; a workout
+/// missing id/start/end is skipped. Duplicate ids keep the first
+/// (ingest is keyed by workout_id, so later duplicates would be no-op
+/// updates anyway). Output sorted by start instant ascending.
+///
+/// Record shape (v2 /activity/workout): {id, start, end, sport_id,
+/// sport_name?, score: {strain, average_heart_rate, max_heart_rate,
+/// kilojoule}}. kcal = kilojoule / 4.184 (1dp); duration_min =
+/// (end − start) minutes (1dp); strain 1dp. The workout DATE is the
+/// start timestamp's own date portion (trust the wire instant as the
+/// activity wall-clock, Kaya convention — converting to the device zone
+/// would shove an evening session back a day). start_time/end_time are
+/// carried as second-precision datetime strings for the date/time
+/// overlap join the coach uses to line a workout up with the day's
+/// logged training session.
+List<Map<String, dynamic>> whoopWorkoutsToRows(List<dynamic> records) {
+  final byId = <String, Map<String, dynamic>>{};
+  final startByIdMs = <String, int>{};
+  for (final w in records) {
+    if (w is! Map) continue;
+    final id = w['id']?.toString();
+    if (id == null || id.isEmpty) continue;
+    if (byId.containsKey(id)) continue; // first wins (idempotent)
+    final score = w['score'];
+    if (score is! Map) continue; // no score → in-progress / pending
+    final startStr = w['start'] as String?;
+    final endStr = w['end'] as String?;
+    if (startStr == null || endStr == null) continue;
+    final start = DateTime.tryParse(startStr);
+    final end = DateTime.tryParse(endStr);
+    if (start == null || end == null) continue;
+
+    final day = _isoDate(start.toUtc());
+    final durationMin =
+        _round1(end.difference(start).inMilliseconds / 60000.0);
+
+    final rec = <String, dynamic>{
+      'workout_id': {'kind': 'string', 'value': id},
+      'date': {'kind': 'date', 'value': day},
+      // Engine serde tag is `date_time` (NOT `datetime` — the Macrofactor
+      // trap pinned by integration_kind_tags_test).
+      'start_time': {'kind': 'date_time', 'value': _isoDateTime(start)},
+      'end_time': {'kind': 'date_time', 'value': _isoDateTime(end)},
+      'sport': {'kind': 'string', 'value': _sportName(w)},
+      ..._numRound1(score, 'strain', 'strain'),
+      ..._num(score, 'average_heart_rate', 'avg_hr'),
+      ..._num(score, 'max_heart_rate', 'max_hr'),
+      ..._kcal(score),
+      if (durationMin >= 0) 'duration_min': _float(durationMin),
+    };
+    byId[id] = rec;
+    startByIdMs[id] = start.millisecondsSinceEpoch;
+  }
+  final ids = byId.keys.toList()
+    ..sort((a, b) => startByIdMs[a]!.compareTo(startByIdMs[b]!));
+  return [for (final id in ids) byId[id]!];
+}
+
+/// Resolve a workout's sport label: prefer the explicit `sport_name`
+/// (v2 provides it), else map `sport_id` through [_kWhoopSports], else
+/// the raw sport_id as a string, else 'activity'.
+String _sportName(Map w) {
+  final name = w['sport_name'];
+  if (name is String && name.trim().isNotEmpty) return name.trim();
+  final sid = w['sport_id'];
+  if (sid is num) {
+    final mapped = _kWhoopSports[sid.toInt()];
+    return mapped ?? sid.toInt().toString();
+  }
+  return 'activity';
+}
+
+/// strain is reported to 4dp; store 1dp.
+Map<String, dynamic> _numRound1(Map score, String srcKey, String dstKey) {
+  final v = score[srcKey];
+  if (v is num) return {dstKey: _float(_round1(v.toDouble()))};
+  return const {};
+}
+
+/// kcal = kilojoule / 4.184 (1dp). Absent kilojoule → omit (don't clear).
+Map<String, dynamic> _kcal(Map score) {
+  final kj = score['kilojoule'];
+  if (kj is num) return {'kcal': _float(_round1(kj.toDouble() / 4.184))};
+  return const {};
+}
+
 /// Read a numeric field off a Whoop `score` map under [srcKey] and emit
 /// it (as an engine float cell) under [dstKey]. Absent/non-numeric →
 /// nothing (omit-don't-clear).
@@ -177,6 +305,15 @@ String _isoDate(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
     '${d.month.toString().padLeft(2, '0')}-'
     '${d.day.toString().padLeft(2, '0')}';
 
+/// Second-precision ISO datetime from the wire instant's UTC date/time
+/// portion (same wall-clock convention as [_isoDate] — no zone shift).
+String _isoDateTime(DateTime d) {
+  final u = d.toUtc();
+  return '${_isoDate(u)}T${u.hour.toString().padLeft(2, '0')}:'
+      '${u.minute.toString().padLeft(2, '0')}:'
+      '${u.second.toString().padLeft(2, '0')}';
+}
+
 // ---------------------------------------------------------------------------
 // Integration.
 // ---------------------------------------------------------------------------
@@ -186,6 +323,7 @@ class WhoopApiIntegration implements Integration {
     required this.config,
     required this.repo,
     required this.recoveryViewJson,
+    this.workoutsViewJson,
   });
 
   final WhoopApiConfig? config;
@@ -193,6 +331,12 @@ class WhoopApiIntegration implements Integration {
 
   /// Engine JSON of the `recovery` view (with date_field applied).
   final Map<String, dynamic> recoveryViewJson;
+
+  /// Engine JSON of the `whoop_workouts` view. Null (older schema set
+  /// without the view) → the workouts pull is skipped; sleep/recovery
+  /// still run. Workouts ingest ROW-GRAINED by workout_id (match_field),
+  /// so a day can carry several strain scores without collision.
+  final Map<String, dynamic>? workoutsViewJson;
 
   static const _storage = FlutterSecureStorage();
   static const _kAccess = 'whoop_api_access';
@@ -204,6 +348,24 @@ class WhoopApiIntegration implements Integration {
   static const _kStatus = 'integration_whoop_api_status';
   static const _kError = 'integration_whoop_api_error';
   static const _kDays = 'integration_whoop_api_days';
+  // Known-workout-id baseline (row-grained ingest provenance) + the
+  // id→day map that scopes the deletion diff to the pulled window.
+  static const _kWorkoutIds = 'integration_whoop_api_workout_ids';
+  static const _kWorkoutDayMap = 'integration_whoop_api_workout_days';
+
+  // Objective workout fields owned by the integration; notes
+  // (fill-if-blank) stays user-owned.
+  static const _ownedWorkoutFields = [
+    'date',
+    'start_time',
+    'end_time',
+    'sport',
+    'strain',
+    'avg_hr',
+    'max_hr',
+    'kcal',
+    'duration_min',
+  ];
 
   // All objective device fields are owned; the free-text note stays
   // user-owned (fill-if-blank).
@@ -223,7 +385,7 @@ class WhoopApiIntegration implements Integration {
   @override
   String get displayName => 'Whoop (sleep + recovery)';
   @override
-  String get targetDescription => '→ recovery';
+  String get targetDescription => '→ recovery + workouts';
   @override
   bool get isConfigured => config?.isConfigured ?? false;
 
@@ -361,6 +523,64 @@ class WhoopApiIntegration implements Integration {
         await repo.metaSet(_kDays, jsonEncode(known.toList()..sort()));
       }
 
+      // Workouts (strain) — ROW-GRAINED by workout_id. Pulled over the
+      // SAME window so the coach's dump lands sleep/recovery AND the
+      // day's workouts together (the temporal association the LLM joins
+      // on). Deletion diff: known ids whose workout HC no longer returns
+      // inside the window → deleted_ids (same raw-id, mass-delete-guard
+      // shape as Kaya/Macrofactor). Skipped when the view is absent.
+      final workoutsView = workoutsViewJson;
+      if (workoutsView != null) {
+        final workoutRecs = await _getAll(_kWorkoutUrl, token, start, end);
+        final rows = whoopWorkoutsToRows(workoutRecs);
+        final fetchedIds = <String>{
+          for (final r in rows) ((r['workout_id'] as Map)['value']) as String,
+        };
+        final knownIds = _decodeDays(await repo.metaGet(_kWorkoutIds));
+        final workoutDayById = _decodeDayMap(await repo.metaGet(_kWorkoutDayMap));
+        // Deletions: a previously-seen id that falls in the pulled window
+        // (its date >= start) but was NOT returned this pull. Guard: a
+        // non-empty baseline vanishing entirely is treated as an API
+        // glitch, not a wipe — refuse to diff (fullReconcile overrides).
+        final windowStartDay = _isoDate(now.subtract(window).toUtc());
+        final deleted = <String>[];
+        final inWindowKnown = knownIds.where((id) {
+          final day = workoutDayById[id];
+          return day != null && day.compareTo(windowStartDay) >= 0;
+        }).toList();
+        final suspectWipe = fetchedIds.isEmpty &&
+            inWindowKnown.isNotEmpty &&
+            !fullReconcile;
+        if (!suspectWipe) {
+          for (final id in inWindowKnown) {
+            if (!fetchedIds.contains(id)) deleted.add(id);
+          }
+        }
+
+        if (rows.isNotEmpty || deleted.isNotEmpty) {
+          await repo.ingest(workoutsView, {
+            'source': 'whoop_api',
+            'match_field': 'workout_id',
+            'owned_fields': _ownedWorkoutFields,
+            'fill_if_blank_fields': const ['notes'],
+            'records': rows,
+            if (deleted.isNotEmpty) 'deleted_ids': deleted,
+          });
+          // Update the id baseline + the id→day map (window-scoped).
+          for (final r in rows) {
+            final id = ((r['workout_id'] as Map)['value']) as String;
+            knownIds.add(id);
+            workoutDayById[id] = ((r['date'] as Map)['value']) as String;
+          }
+          for (final id in deleted) {
+            knownIds.remove(id);
+            workoutDayById.remove(id);
+          }
+          await repo.metaSet(_kWorkoutIds, jsonEncode(knownIds.toList()..sort()));
+          await repo.metaSet(_kWorkoutDayMap, jsonEncode(workoutDayById));
+        }
+      }
+
       await repo.metaSet(_kLastPull, DateTime.now().toIso8601String());
       await repo.metaSet(_kStatus, 'ok');
       await repo.metaSet(_kError, '');
@@ -376,6 +596,15 @@ class WhoopApiIntegration implements Integration {
     if (json == null || json.isEmpty) return <String>{};
     final decoded = jsonDecode(json);
     return decoded is List ? decoded.cast<String>().toSet() : <String>{};
+  }
+
+  /// Decode the workout id→day map (meta `_kWorkoutDayMap`).
+  Map<String, String> _decodeDayMap(String? json) {
+    if (json == null || json.isEmpty) return <String, String>{};
+    final decoded = jsonDecode(json);
+    return decoded is Map
+        ? decoded.map((k, v) => MapEntry(k as String, v as String))
+        : <String, String>{};
   }
 
   /// Whoop v2 collections paginate via `next_token`; walk to exhaustion

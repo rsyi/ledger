@@ -668,6 +668,16 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       }
       return MetricSeries(points: points, goal: m.goal, unit: m.unit);
 
+    // Whoop workouts (Whoop API → whoop_workouts tab): a day can carry
+    // MULTIPLE workouts, so the series plots the day's HARDEST workout
+    // (max strain) — the top cardiovascular load that day.
+    case 'strain_series':
+      final points = maxPerDaySeries(inputs.records, valueKey: 'strain');
+      if (points.isEmpty) {
+        return const MetricUnavailable('no workouts yet');
+      }
+      return MetricSeries(points: points, goal: m.goal, unit: m.unit);
+
     default:
       return MetricUnavailable('unknown metric "${m.id}"');
   }
@@ -697,6 +707,7 @@ const _headlineLabels = {
   'recovery_score': 'recovery',
   'hrv_ms': 'HRV',
   'sleep_hours': 'sleep',
+  'strain_series': 'strain',
 };
 
 /// Which metrics feed the headline strip. Declared `headline:` ids win

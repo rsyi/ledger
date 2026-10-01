@@ -25,6 +25,27 @@ class IntegrationRegistry {
       await i.pull();
     }
   }
+
+  /// The configured integration with [id], or null.
+  Integration? byId(String id) {
+    for (final i in integrations) {
+      if (i.id == id) return i;
+    }
+    return null;
+  }
+
+  /// Force-pull the quiet background sources ([ids]) that need no user
+  /// interaction — Withings / Macrofactor / Whoop-API. Runs them
+  /// concurrently; each `pull()` already contains its own failures (they
+  /// never throw), so a single source's error neither blocks the others
+  /// nor surfaces anything fatal. Unknown/unconfigured ids are skipped.
+  /// This is the path the Today card's "Sync & update" calls.
+  Future<void> pullNow(List<String> ids) async {
+    await Future.wait([
+      for (final id in ids)
+        if (byId(id)?.isConfigured ?? false) byId(id)!.pull(force: true),
+    ]);
+  }
 }
 
 /// Placeholder card for sources we plan but haven't built — shows the

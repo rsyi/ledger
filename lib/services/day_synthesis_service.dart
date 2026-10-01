@@ -79,6 +79,13 @@ class DaySynthesisService {
   final ViewSchema? climbingView;
   final WarehouseConnector? climbingRepo;
 
+  /// Objective recovery (Whoop → `recovery` view): last night's sleep +
+  /// recovery score + HRV, fed into the synthesis so advice can factor
+  /// readiness. Read the same way the dashboard reads it (a writable
+  /// gsheets view via the connector). Null → the recovery line is omitted.
+  final ViewSchema? recoveryView;
+  final WarehouseConnector? recoveryRepo;
+
   /// Weight view/repo (+ optional analytics) feed the 7-day-average
   /// bodyweight that prices the cut's per-lb protein band into an
   /// absolute g/day target — same machinery the GOALS surface uses.
@@ -100,6 +107,8 @@ class DaySynthesisService {
     required this.cardioRepo,
     required this.climbingView,
     required this.climbingRepo,
+    this.recoveryView,
+    this.recoveryRepo,
     this.weightView,
     this.weightRepo,
     this.analytics,
@@ -116,8 +125,10 @@ class DaySynthesisService {
   /// make an already-stored synthesis wrong. On read, a stored synthesis
   /// tagged with an older version is ignored → regenerated. v2 (bump
   /// 2026-09-30): busts caches written before the cut macro-target fix
-  /// (commit 7573f0c) that still say "no macro targets set today".
-  static const _cacheVersion = 2;
+  /// (commit 7573f0c) that still say "no macro targets set today". v3
+  /// (bump 2026-09-30): the prompt now carries a recovery/sleep line, so
+  /// caches written without it are regenerated to factor readiness.
+  static const _cacheVersion = 3;
 
   static String _dayKey(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
@@ -216,6 +227,19 @@ class DaySynthesisService {
       } catch (_) {/* honest empty */}
     }
 
+    // Objective recovery (Whoop): last night's row (the most recent
+    // recovery date at/ before today) + a 7-day-average recovery score
+    // trend anchor. Read like the dashboard reads it.
+    var recovery = const SynthRecovery();
+    if (recoveryView != null && recoveryRepo != null) {
+      try {
+        recovery = buildSynthRecovery(
+          await recoveryRepo!.list(recoveryView!),
+          clock,
+        );
+      } catch (_) {/* honest empty — recovery line omitted */}
+    }
+
     // Current 7-day-average bodyweight (lb) — prices the cut's per-lb
     // protein band. Same resolution the GOALS surface uses: 7d avg, then
     // the contemporaneous weigh-in as a fallback. Null when no weigh-ins.
@@ -296,6 +320,7 @@ class DaySynthesisService {
         climbCount: climbCount,
       ),
       targets: targets,
+      recovery: recovery,
     );
   }
 
@@ -348,6 +373,54 @@ class DaySynthesisService {
     }
     return null;
   }
+}
+
+/// Pure: pick last night's recovery (the most recent row dated at/before
+/// [clock]) from the recovery view's rows and compute a 7-day-average
+/// recovery score anchor. Rows dated in the future are ignored. Returns
+/// an empty [SynthRecovery] when there's no usable row. Exposed for a
+/// direct context-assembly test.
+SynthRecovery buildSynthRecovery(
+  List<Map<String, Object?>> rows,
+  DateTime clock,
+) {
+  final today = DateTime(clock.year, clock.month, clock.day);
+  // (day, row) pairs with a parseable date not in the future.
+  final dated = <({DateTime day, Map<String, Object?> row})>[];
+  for (final r in rows) {
+    final d = DaySynthesisService._date(r['date']);
+    if (d == null) continue;
+    final day = DateTime(d.year, d.month, d.day);
+    if (day.isAfter(today)) continue;
+    dated.add((day: day, row: r));
+  }
+  if (dated.isEmpty) return const SynthRecovery();
+  dated.sort((a, b) => b.day.compareTo(a.day)); // newest first
+  final latest = dated.first;
+
+  // 7-day-average recovery score over the window ending at the latest
+  // row's day (inclusive). A short window / sparse data still averages
+  // whatever scores are present.
+  final windowStart = latest.day.subtract(const Duration(days: 6));
+  final scores = <double>[];
+  for (final e in dated) {
+    if (e.day.isBefore(windowStart)) break; // sorted desc
+    final s = DaySynthesisService._num(e.row['recovery_score']);
+    if (s != null) scores.add(s);
+  }
+  final avg = scores.isEmpty
+      ? null
+      : scores.reduce((a, b) => a + b) / scores.length;
+
+  String two(int n) => n.toString().padLeft(2, '0');
+  return SynthRecovery(
+    day: '${latest.day.year.toString().padLeft(4, '0')}-'
+        '${two(latest.day.month)}-${two(latest.day.day)}',
+    sleepHours: DaySynthesisService._num(latest.row['sleep_hours']),
+    recoveryScore: DaySynthesisService._num(latest.row['recovery_score']),
+    hrvMs: DaySynthesisService._num(latest.row['hrv_ms']),
+    recoveryScore7dAvg: avg,
+  );
 }
 
 /// Convenience: which chat/vision Anthropic model to synthesize with.

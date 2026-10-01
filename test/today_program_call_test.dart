@@ -90,4 +90,60 @@ void main() {
       expect(c, isEmpty);
     });
   });
+
+  group('shouldPromptKayaSync (gated refresh → Kaya prompt)', () {
+    test('true when program expects a climb and none logged', () {
+      expect(
+        shouldPromptKayaSync(
+          programCall: const {'climbing': 'hard session'},
+          loggedClimbCount: 0,
+        ),
+        isTrue,
+      );
+    });
+
+    test('false once a climb is already logged today', () {
+      expect(
+        shouldPromptKayaSync(
+          programCall: const {'climbing': 'hard session'},
+          loggedClimbCount: 3,
+        ),
+        isFalse,
+      );
+    });
+
+    test('false on a non-climb day even with nothing logged', () {
+      expect(
+        shouldPromptKayaSync(
+          programCall: const {'strength': 'squat heavy', 'cardio': '4x4'},
+          loggedClimbCount: 0,
+        ),
+        isFalse,
+      );
+    });
+
+    test('false on a rest day (empty program call)', () {
+      expect(
+        shouldPromptKayaSync(programCall: const {}, loggedClimbCount: 0),
+        isFalse,
+      );
+    });
+
+    test('live program: a Tuesday climb day with no climb logged prompts',
+        () {
+      // Tue (offset 1) is the cut week's PM HARD climb day.
+      final c = call(day(1));
+      expect(c.containsKey('climbing'), isTrue,
+          reason: 'Tuesday should expect a climb in the cut week');
+      expect(
+        shouldPromptKayaSync(programCall: c, loggedClimbCount: 0),
+        isTrue,
+      );
+      // ...but not once it's logged.
+      expect(
+        shouldPromptKayaSync(programCall: c, loggedClimbCount: 1),
+        isFalse,
+      );
+    });
+  });
 }

@@ -3,14 +3,26 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../models/view_schema.dart';
+import '../../services/day_synthesis.dart' show DaySynthesisContext;
 import '../../services/day_synthesis_service.dart';
+import '../../services/integrations/integration.dart';
+import '../../services/integrations/registry.dart';
 import '../../services/log_event_bus.dart';
 import '../../services/plan_store.dart';
 import '../../services/program_current.dart';
 import '../../services/program_provider.dart';
+import '../../services/today_program_call.dart' show shouldPromptKayaSync;
 import '../../services/today_status.dart';
 import '../../services/warehouse_connector.dart';
 import 'skeleton.dart';
+
+/// IDs of the quiet background integrations the gated refresh force-pulls
+/// on "Sync & update" — all three are OAuth/Health-Connect pulls that
+/// need no user interaction (unlike Kaya, which opens its app).
+const _kQuietSyncIds = ['withings', 'macrofactor', 'whoop_api'];
+
+/// Dialog-1 outcome for the gated refresh.
+enum _RefreshChoice { syncAndUpdate, justUpdate }
 
 /// Progress-tab header card: a plain-language read on how today is going
 /// against the plan — FOOD (Macrofactor meals vs macro targets) + TRAINING
@@ -37,6 +49,12 @@ class TodayStatusCard extends StatefulWidget {
   /// falls back to the two static lines. Never blocks the tab.
   final DaySynthesisService? synthesis;
 
+  /// Integration registry — the gated refresh force-pulls the quiet
+  /// background sources (Withings/Macrofactor/Whoop) and, on a climb day,
+  /// runs the Kaya guided sync through it. Null → refresh just
+  /// regenerates (no sync offer), preserving the old behavior.
+  final IntegrationRegistry? registry;
+
   /// Tap handler — the shell selects the Log tab.
   final VoidCallback onOpen;
 
@@ -48,6 +66,7 @@ class TodayStatusCard extends StatefulWidget {
     required this.strengthRepo,
     required this.provider,
     this.synthesis,
+    this.registry,
     required this.onOpen,
   });
 
@@ -64,6 +83,11 @@ class TodayStatusCardState extends State<TodayStatusCard> {
   bool _expanded = false;
   StreamSubscription<LogEvent>? _logSub;
   Timer? _synthDebounce;
+
+  // --- gated sync (Feature: refresh → sync-first) ---
+  // Non-null while a refresh-triggered integration sync runs; shown on
+  // the card in place of the refresh affordance ("Syncing…").
+  String? _syncStatus;
 
   bool get _synthEnabled => widget.synthesis?.enabled == true;
 
@@ -125,6 +149,127 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     });
     // Keep the summary lines in step.
     unawaited(refresh());
+  }
+
+  /// The refresh-button handler: offer to sync the latest integration
+  /// data FIRST, then regenerate the synthesis from the now-fresh rows.
+  ///
+  /// Flow (USER-APPROVED):
+  ///   Dialog 1 "Sync latest first?" → [Sync & update] / [Just update].
+  ///     "Just update"  → regenerate only (old behavior).
+  ///     "Sync & update" → force-pull Withings/Macrofactor/Whoop (quiet,
+  ///       no user interaction; tolerant — a failed pull surfaces nothing
+  ///       fatal), THEN Dialog 2 (only on a climb day with no climb yet).
+  ///   Dialog 2 "Climbed today? Sync Kaya too?" → [Sync Kaya] / [Skip].
+  ///     "Sync Kaya" → the KayaGmailIntegration guided flow (opens Kaya,
+  ///       polls Gmail). This is the intrusive one, so it's separately
+  ///       gated + program-conditional.
+  ///   After syncs settle → regenerate.
+  ///
+  /// With no registry (or disabled synthesis) it degrades to a plain
+  /// regenerate — no sync offer.
+  Future<void> onRefreshPressed(BuildContext context) async {
+    if (_syncStatus != null) return; // already syncing
+    final registry = widget.registry;
+    if (registry == null) {
+      await regenerateSynthesis();
+      return;
+    }
+
+    final choice = await showDialog<_RefreshChoice>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sync latest first?'),
+        content: const Text(
+          'Pull the latest weight (Withings), meals (Macrofactor) and '
+          'recovery (Whoop) before updating today\'s read?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, _RefreshChoice.justUpdate),
+            child: const Text('Just update'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, _RefreshChoice.syncAndUpdate),
+            child: const Text('Sync & update'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null) return; // dismissed — no-op
+    if (choice == _RefreshChoice.justUpdate) {
+      await regenerateSynthesis();
+      return;
+    }
+
+    // --- Sync & update ---
+    if (mounted) setState(() => _syncStatus = 'Syncing…');
+    try {
+      await registry.pullNow(_kQuietSyncIds);
+    } catch (_) {/* pulls never throw; belt-and-suspenders */}
+
+    // Dialog 2: Kaya — only on a climb day with no climb logged yet.
+    if (context.mounted) {
+      await _maybePromptKaya(context, registry);
+    }
+
+    if (mounted) setState(() => _syncStatus = null);
+    await regenerateSynthesis();
+  }
+
+  /// Program-conditional Kaya prompt. Uses the synthesis context's climb
+  /// info (today's program call + logged climb count) via the pure
+  /// [shouldPromptKayaSync]. Skips silently when the climb state can't be
+  /// determined (no synthesis service) or Kaya isn't a guided integration.
+  Future<void> _maybePromptKaya(
+    BuildContext context,
+    IntegrationRegistry registry,
+  ) async {
+    final kaya = registry.byId('kaya_gmail');
+    if (kaya is! GuidedSyncIntegration || !kaya.isConfigured) return;
+    if (!await kaya.isConnected) return;
+
+    DaySynthesisContext? sctx;
+    try {
+      sctx = await widget.synthesis?.buildContext();
+    } catch (_) {
+      sctx = null;
+    }
+    if (sctx == null) return; // can't tell if a climb is expected
+    final prompt = shouldPromptKayaSync(
+      programCall: {
+        if (sctx.program.climbCall != null) 'climbing': sctx.program.climbCall!,
+      },
+      loggedClimbCount: sctx.logged.climbCount,
+    );
+    if (!prompt) return;
+
+    if (!context.mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Climbed today?'),
+        content: const Text(
+          'Today\'s plan has a climbing session. Sync Kaya too? '
+          '(opens Kaya to export your logbook)',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Skip'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sync Kaya'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !context.mounted) return;
+    if (mounted) setState(() => _syncStatus = 'Syncing Kaya…');
+    try {
+      await kaya.guidedSync(context);
+    } catch (_) {/* guided sync surfaces its own snackbars */}
   }
 
   /// Recomputes the two lines from live rows + the day's targets.
@@ -293,7 +438,21 @@ class TodayStatusCardState extends State<TodayStatusCard> {
                     ),
                   ),
                   const Spacer(),
-                  if (_synthesizing)
+                  if (_syncStatus != null) ...[
+                    Text(
+                      _syncStatus!,
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ] else if (_synthesizing)
                     const Padding(
                       padding: EdgeInsets.only(right: 8),
                       child: SizedBox(
@@ -308,7 +467,7 @@ class TodayStatusCardState extends State<TodayStatusCard> {
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
-                      onPressed: () => unawaited(regenerateSynthesis()),
+                      onPressed: () => unawaited(onRefreshPressed(context)),
                       tooltip: 'Refresh',
                     ),
                   const SizedBox(width: 8),

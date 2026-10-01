@@ -8,6 +8,7 @@ void main() {
     SynthProgramDay? program,
     SynthLogged? logged,
     SynthTargets? targets,
+    SynthRecovery? recovery,
   }) =>
       DaySynthesisContext(
         hour: hour,
@@ -15,6 +16,7 @@ void main() {
         program: program ?? const SynthProgramDay(),
         logged: logged ?? const SynthLogged(),
         targets: targets ?? const SynthTargets(),
+        recovery: recovery ?? const SynthRecovery(),
       );
 
   group('derived tallies', () {
@@ -221,6 +223,54 @@ void main() {
       const t = SynthTargets(proteinGPerLb: [0.8, 1.0], bodyweightLb: 162);
       final goalsFloor = (0.8 * 162).round(); // 130
       expect(t.resolvedProteinBand![0].round(), goalsFloor);
+    });
+  });
+
+  group('recovery/sleep in the prompt', () {
+    test('a good night renders sleep + recovery (green) + HRV + 7d avg', () {
+      final p = buildDaySynthesisPrompt(ctx(
+        recovery: const SynthRecovery(
+          day: '2026-09-30',
+          sleepHours: 7.4,
+          recoveryScore: 80,
+          hrvMs: 65,
+          recoveryScore7dAvg: 74,
+        ),
+      ));
+      expect(p, contains('RECOVERY (last night, from Whoop)'));
+      expect(p, contains('slept 7.4h'));
+      expect(p, contains('recovery 80 (green)'));
+      expect(p, contains('HRV 65ms'));
+      expect(p, contains('7d avg recovery 74'));
+      // Advice framing is present so the model factors readiness.
+      expect(p, contains('Factor readiness'));
+    });
+
+    test('low recovery is banded red/yellow', () {
+      expect(
+        buildDaySynthesisPrompt(
+            ctx(recovery: const SynthRecovery(recoveryScore: 28))),
+        contains('recovery 28 (red)'),
+      );
+      expect(
+        buildDaySynthesisPrompt(
+            ctx(recovery: const SynthRecovery(recoveryScore: 50))),
+        contains('recovery 50 (yellow)'),
+      );
+    });
+
+    test('no recovery data → the line is omitted entirely', () {
+      final p = buildDaySynthesisPrompt(ctx());
+      expect(p, isNot(contains('RECOVERY')));
+      expect(p, isNot(contains('recovery ')));
+    });
+
+    test('partial recovery (sleep only) still renders what it has', () {
+      final p = buildDaySynthesisPrompt(
+          ctx(recovery: const SynthRecovery(sleepHours: 6)));
+      expect(p, contains('RECOVERY'));
+      expect(p, contains('slept 6h'));
+      expect(p, isNot(contains('(green)')));
     });
   });
 }

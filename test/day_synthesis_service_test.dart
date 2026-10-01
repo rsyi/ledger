@@ -132,4 +132,71 @@ void main() {
     final svc = _svc(failing);
     expect(await svc.generate(), isNull);
   });
+
+  group('buildSynthRecovery (recovery/sleep context assembly)', () {
+    final clock = DateTime(2026, 9, 30, 15);
+
+    test('picks last night (most recent row at/before today) + 7d avg', () {
+      final r = buildSynthRecovery([
+        {
+          'date': '2026-09-28',
+          'sleep_hours': 6.0,
+          'recovery_score': 60,
+          'hrv_ms': 55,
+        },
+        {
+          'date': '2026-09-30',
+          'sleep_hours': 7.4,
+          'recovery_score': 80,
+          'hrv_ms': 65,
+        },
+        {
+          'date': '2026-09-29',
+          'sleep_hours': 7.0,
+          'recovery_score': 82,
+          'hrv_ms': 70,
+        },
+      ], clock);
+      // Latest row wins the "last night" fields.
+      expect(r.day, '2026-09-30');
+      expect(r.sleepHours, 7.4);
+      expect(r.recoveryScore, 80);
+      expect(r.hrvMs, 65);
+      // 7d avg over the three in-window scores (60+80+82)/3 = 74.
+      expect(r.recoveryScore7dAvg, closeTo(74, 0.01));
+      expect(r.hasData, isTrue);
+    });
+
+    test('ignores future-dated rows', () {
+      final r = buildSynthRecovery([
+        {'date': '2026-10-05', 'recovery_score': 99}, // future — skipped
+        {'date': '2026-09-29', 'recovery_score': 70},
+      ], clock);
+      expect(r.day, '2026-09-29');
+      expect(r.recoveryScore, 70);
+    });
+
+    test('empty rows → empty recovery (no line)', () {
+      final r = buildSynthRecovery(const [], clock);
+      expect(r.hasData, isFalse);
+      expect(r.day, isNull);
+    });
+
+    test('string-typed numbers parse (sheets round-trip)', () {
+      final r = buildSynthRecovery([
+        {'date': '2026-09-30', 'sleep_hours': '7.5', 'recovery_score': '66'},
+      ], clock);
+      expect(r.sleepHours, 7.5);
+      expect(r.recoveryScore, 66);
+    });
+
+    test('a 7d-window drop excludes an older score from the average', () {
+      final r = buildSynthRecovery([
+        {'date': '2026-09-30', 'recovery_score': 80},
+        {'date': '2026-09-20', 'recovery_score': 10}, // >6d before latest
+      ], clock);
+      // Only the latest score is inside the 7-day window.
+      expect(r.recoveryScore7dAvg, 80);
+    });
+  });
 }

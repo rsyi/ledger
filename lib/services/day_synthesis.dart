@@ -154,6 +154,37 @@ class SynthLogged {
   });
 }
 
+/// Last night's objective recovery (Whoop → `recovery` view), so the
+/// synthesis can factor readiness into its training advice ("slept 7.4h,
+/// recovery 80 — good to push" / "recovery low, keep it easy"). All
+/// fields nullable — a missing night or a partial pull leaves them null,
+/// and the prompt simply omits the recovery line.
+class SynthRecovery {
+  /// The recovery row's day (`yyyy-mm-dd`), for the "last night" framing.
+  final String? day;
+  final double? sleepHours;
+
+  /// Whoop recovery score (0–100; green ≥67 / yellow 34–66 / red <34).
+  final double? recoveryScore;
+  final double? hrvMs;
+
+  /// 7-day average recovery score across the recent window — a trend
+  /// anchor so "recovery 80" reads against the user's own baseline.
+  final double? recoveryScore7dAvg;
+
+  const SynthRecovery({
+    this.day,
+    this.sleepHours,
+    this.recoveryScore,
+    this.hrvMs,
+    this.recoveryScore7dAvg,
+  });
+
+  /// True when there's at least one numeric signal worth stating.
+  bool get hasData =>
+      sleepHours != null || recoveryScore != null || hrvMs != null;
+}
+
 /// The assembled, phase- and time-aware picture the prompt renders from,
 /// and the notification tally reads.
 class DaySynthesisContext {
@@ -163,12 +194,17 @@ class DaySynthesisContext {
   final SynthLogged logged;
   final SynthTargets targets;
 
+  /// Last night's recovery/sleep (Whoop). Empty [SynthRecovery] when no
+  /// recovery data is available — the prompt then omits the line.
+  final SynthRecovery recovery;
+
   const DaySynthesisContext({
     required this.hour,
     required this.phase,
     required this.program,
     required this.logged,
     required this.targets,
+    this.recovery = const SynthRecovery(),
   });
 
   double get proteinSoFar => _sum(logged.meals, (m) => m.proteinG);
@@ -236,6 +272,16 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
   b.writeln('Local time: ${_fmtHour(c.hour)}.');
   if (c.phase.isNotEmpty) b.writeln('Phase: ${c.phase}.');
   b.writeln();
+
+  final recoveryLine = _recoveryLine(c.recovery);
+  if (recoveryLine != null) {
+    b.writeln('RECOVERY (last night, from Whoop):');
+    b.writeln('- $recoveryLine');
+    b.writeln('  Factor readiness into today\'s training advice — if '
+        'recovery/sleep is low, bias toward keeping it easy; if it\'s '
+        'strong, it\'s fine to push the hard work.');
+    b.writeln();
+  }
 
   b.writeln('TODAY\'S PROGRAM:');
   final callParts = <String>[];
@@ -325,6 +371,32 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
   }
 
   return b.toString().trimRight();
+}
+
+/// Compact recovery read ("slept 7.4h · recovery 80 (green) · HRV 65ms,
+/// 7d avg 74"), or null when no numeric signal is present (the line is
+/// then omitted — never a bare "recovery: no data").
+String? _recoveryLine(SynthRecovery r) {
+  if (!r.hasData) return null;
+  final parts = <String>[];
+  if (r.sleepHours != null) {
+    parts.add('slept ${_num1(r.sleepHours!)}h');
+  }
+  if (r.recoveryScore != null) {
+    final s = r.recoveryScore!;
+    final band = s >= 67 ? 'green' : (s >= 34 ? 'yellow' : 'red');
+    parts.add('recovery ${s.round()} ($band)');
+  }
+  if (r.hrvMs != null) parts.add('HRV ${r.hrvMs!.round()}ms');
+  if (r.recoveryScore7dAvg != null) {
+    parts.add('7d avg recovery ${r.recoveryScore7dAvg!.round()}');
+  }
+  return parts.join(' · ');
+}
+
+String _num1(double v) {
+  final r = (v * 10).roundToDouble() / 10;
+  return r == r.roundToDouble() ? r.round().toString() : r.toStringAsFixed(1);
 }
 
 String _fmtHour(int h) {

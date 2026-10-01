@@ -122,6 +122,24 @@ String? _climbCall(String prose) {
   return 'climb';
 }
 
+/// Whether the refresh-triggered gated sync should prompt the intrusive
+/// Kaya sync (which opens the Kaya app for its email export).
+///
+/// PURE decision — the UI reads it with today's [programCall] (from
+/// [todayProgramCallByView]) and [loggedClimbCount] (climbing rows logged
+/// today, from the kaya snapshot). True ONLY when today's program expects
+/// a climb AND none is logged yet: an already-logged climb needs no
+/// re-export, and a non-climb day never bothers the user with the Kaya
+/// launch. The non-intrusive weight/meals/recovery sync is never gated
+/// on this — only the Kaya prompt is program-conditional.
+bool shouldPromptKayaSync({
+  required Map<String, String> programCall,
+  required int loggedClimbCount,
+}) {
+  final expectsClimb = programCall.containsKey('climbing');
+  return expectsClimb && loggedClimbCount <= 0;
+}
+
 /// True when the day's prose is a calisthenics/skill day (muscle-ups,
 /// handstands) AND it isn't already a barbell strength day.
 bool _calisthenicsToday(String prose, String? strengthCall) {

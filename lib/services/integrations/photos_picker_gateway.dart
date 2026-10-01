@@ -233,7 +233,12 @@ class GoogleSignInPhotosPickerGateway implements PhotosPickerGateway {
   /// handoff) a few times with short backoff. HTTP 4xx/5xx are NOT
   /// transient and surface immediately. A persistent network failure is
   /// rewrapped with a plain-language message.
-  Future<T> _retry<T>(Future<T> Function() op, {int tries = 3}) async {
+  // 6 tries with growing backoff ≈ 10.5 s total. Generous on purpose:
+  // the picker backgrounds the app while the user browses Photos, and on
+  // return Android often drops DNS/socket state — the first call(s) fail
+  // to resolve until the network warms back up (the "worked when I was
+  // faster" symptom). We wait it out rather than give up.
+  Future<T> _retry<T>(Future<T> Function() op, {int tries = 6}) async {
     var attempt = 0;
     while (true) {
       try {
@@ -253,7 +258,7 @@ class GoogleSignInPhotosPickerGateway implements PhotosPickerGateway {
             "didn't resolve). Check your connection and tap Attach to retry.",
           );
         }
-        await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+        await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
       }
     }
   }

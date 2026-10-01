@@ -118,6 +118,7 @@ import '../services/domain_config.dart'
     show DomainConfigProvider, parseLastBulkWindow;
 import '../services/domain_metrics.dart'
     show allTimeBestWeights, bestWeightsInWindow;
+import '../services/bodyweight_cache.dart';
 import '../services/home_synthesis.dart';
 import '../services/phase_eigenvectors.dart';
 import '../services/program_current.dart';
@@ -534,6 +535,7 @@ class HomeDashboardState extends State<HomeDashboard> {
         todayWeight = r.weightLbs;
       }
     }
+    BodyweightCache.update(stats.bw7dAvg ?? todayWeight);
     return _BodyData(
       stats: stats,
       targetRate: targetRate,

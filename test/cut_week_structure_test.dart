@@ -112,7 +112,8 @@ void main() {
   test('Thu: muscle-ups main + skill (handstand/front-lever) + HLR + '
       'dips + EZ-bar preacher curls', () {
     expect(dayRows(3), [
-      ('Muscle Up', 3, 1),
+      ('Muscle Up', 6, 1), // 6 unassisted singles/doubles (progression)
+      ('Muscle Up Green Band', 2, 3), // + banded volume
       ('Handstand Hold', 3, 1), // v14 skill work
       ('Front Lever', 2, 5), // v14 up-downs
       ('Hanging Leg Raise', 3, 8), // v14 restored core work

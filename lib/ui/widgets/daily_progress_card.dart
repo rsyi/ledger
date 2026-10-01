@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/view_schema.dart';
 import '../../services/analytics_engine.dart';
+import '../../services/bodyweight_cache.dart';
 import '../../services/daily_macros.dart';
 import '../../services/domain_config.dart' show DomainConfigProvider;
 import '../../services/goals_service.dart' show GoalConfig, parseGoals;
@@ -192,6 +193,7 @@ class DailyProgressCardState extends State<DailyProgressCard> {
     final daily = weights?.daily ?? const <WeightRow>[];
     final bw = observedWeightStats(daily, dayStart).bw7dAvg ??
         contemporaneousBodyweightLbs(daily, dayStart);
+    BodyweightCache.update(bw); // feeds the strength form's auto-fill
     final forecast = buildNutritionForecast(
       meals: mealRowsFromRecords(mealRecords),
       weighIns: daily,

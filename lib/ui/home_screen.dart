@@ -1537,6 +1537,12 @@ class _HomeScreenState extends State<HomeScreen> {
               // NavigationBar: Today · Week · Progress · Log · Plan.
               return IndexedStack(
                 index: _tab,
+                // Fill the body between app bar and nav bar. Without this
+                // the stack sizes to the loosest child and can keep a
+                // stale (half-height) constraint after a keyboard/tab
+                // change — the "cut off halfway, only a restart fixes it"
+                // bug (2026-10-01).
+                sizing: StackFit.expand,
                 children: [todayTab, goalsTab, progressTab, logTab, planTab],
               );
             },

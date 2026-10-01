@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 
 import '../models/view_schema.dart';
 import '../services/autocomplete_cache.dart';
+import '../services/bodyweight_cache.dart';
 import '../services/derive.dart';
 import '../services/sheets_repository.dart';
 import '../services/video_attach.dart';
@@ -266,6 +267,21 @@ class _FormScreenState extends State<FormScreen> {
       }
       // Cross-scope autofill (shared → repeat or vice versa) intentionally
       // skipped — too easy to clobber the user's other blocks.
+    }
+
+    // Bodyweight movements (pull-ups, muscle-ups, dips, front lever,
+    // hanging leg raise …): prefill the LOAD with the user's current
+    // bodyweight, overriding the carried-over (stale) value. Best-effort —
+    // only when a bodyweight is known this session.
+    if (trigger.name == 'exercise' &&
+        isBodyweightExercise(newValue.toString()) &&
+        BodyweightCache.currentLbs != null) {
+      final bw = BodyweightCache.currentLbs!;
+      if (_repeatFields.contains('weight')) {
+        if (blockIdx != null) _repeats[blockIdx]['weight'] = bw;
+      } else {
+        _shared['weight'] = bw;
+      }
     }
   }
 

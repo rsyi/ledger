@@ -14,22 +14,49 @@ library;
 
 import 'day_prescription.dart' show tidyProgramProse;
 
-/// One prescribed exercise (+ whether it's been logged today).
+/// One prescribed exercise with its SET target (first-class) and how many
+/// matching sets have been logged.
 class PrescribedItem {
   final String name; // display name ("Squat", "Front lever up-downs")
   final String scheme; // rep/scheme remainder ("3x8-15", "top set …")
   final String period; // 'AM' | 'PM'
-  final bool done;
+
+  /// Prescribed number of sets (parsed from the scheme — "2x5" → 2,
+  /// "6 sets" → 6; defaults to 1 when the prose gives no count).
+  final int targetSets;
+
+  /// Matching sets logged so far.
+  final int loggedSets;
 
   const PrescribedItem({
     required this.name,
     required this.scheme,
     required this.period,
-    this.done = false,
+    this.targetSets = 1,
+    this.loggedSets = 0,
   });
 
-  PrescribedItem markDone(bool d) =>
-      PrescribedItem(name: name, scheme: scheme, period: period, done: d);
+  /// Complete only when every prescribed set is logged.
+  bool get done => loggedSets >= targetSets;
+
+  PrescribedItem withLogged(int n) => PrescribedItem(
+        name: name,
+        scheme: scheme,
+        period: period,
+        targetSets: targetSets,
+        loggedSets: n,
+      );
+}
+
+/// Parses the prescribed set count from a segment ("2x5" → 2,
+/// "3-5x1-2" → 3, "6 sets" → 6, "3-4 quality sets" → 3). Defaults to 1.
+int parseTargetSets(String text) {
+  final x = RegExp(r'(\d+)(?:-\d+)?\s*x', caseSensitive: false).firstMatch(text);
+  if (x != null) return int.parse(x.group(1)!);
+  final sets =
+      RegExp(r'(\d+)(?:-\d+)?\s*sets?', caseSensitive: false).firstMatch(text);
+  if (sets != null) return int.parse(sets.group(1)!);
+  return 1;
 }
 
 // Clauses that aren't exercises — skipped wholesale.
@@ -93,7 +120,12 @@ List<PrescribedItem> parsePrescribedProse(String? morning, String? afternoon) {
       if (name.length < 2 || _tokens(name).isEmpty) continue;
       var scheme = (m == null ? '' : seg.substring(m.start)).trim();
       scheme = scheme.replaceFirst(RegExp(r'^:\s*'), '').trim();
-      out.add(PrescribedItem(name: _cap(name), scheme: scheme, period: entry.$1));
+      out.add(PrescribedItem(
+        name: _cap(name),
+        scheme: scheme,
+        period: entry.$1,
+        targetSets: parseTargetSets(seg),
+      ));
     }
   }
   return out;
@@ -113,17 +145,28 @@ Set<String> _tokens(String s) {
   return out;
 }
 
-/// Marks each prescribed item done when any [loggedNames] exercise shares a
-/// significant token with it.
+/// True when a logged exercise name matches a prescribed name (shared
+/// significant token). Public so the UI can pull a prescribed item's
+/// history.
+bool loggedMatchesPrescribed(String loggedName, String prescribedName) {
+  final a = _tokens(loggedName);
+  final b = _tokens(prescribedName);
+  return a.isNotEmpty && b.isNotEmpty && a.intersection(b).isNotEmpty;
+}
+
+/// Counts, per prescribed item, how many logged sets match it (token
+/// overlap). [loggedNames] is ONE entry per logged set, so the count is
+/// the set count — an item completes only once its full set target lands.
 List<PrescribedItem> markPrescribedDone(
     List<PrescribedItem> items, Iterable<String> loggedNames) {
-  final loggedTokens = loggedNames.map(_tokens).where((t) => t.isNotEmpty).toList();
+  final loggedTokens =
+      loggedNames.map(_tokens).where((t) => t.isNotEmpty).toList();
   return [
     for (final it in items)
-      it.markDone(() {
+      it.withLogged(() {
         final k = _tokens(it.name);
-        if (k.isEmpty) return false;
-        return loggedTokens.any((l) => l.intersection(k).isNotEmpty);
+        if (k.isEmpty) return 0;
+        return loggedTokens.where((l) => l.intersection(k).isNotEmpty).length;
       }()),
   ];
 }

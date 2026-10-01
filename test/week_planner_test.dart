@@ -109,9 +109,14 @@ void main() {
       ]);
       final thu = onDay(entries, w1Monday.add(const Duration(days: 3)));
       expect(rows(thu), [
-        'Muscle Up -x1', // skill FIRST — planner keeps template order
+        'Muscle Up -x1', // 6 unassisted (progression) — order preserved
         'Muscle Up -x1',
         'Muscle Up -x1',
+        'Muscle Up -x1',
+        'Muscle Up -x1',
+        'Muscle Up -x1',
+        'Muscle Up Green Band -x3', // + 2 banded for volume
+        'Muscle Up Green Band -x3',
         'Handstand Hold -x1', // v14: skill holds after muscle-ups
         'Handstand Hold -x1',
         'Handstand Hold -x1',
@@ -828,11 +833,11 @@ void main() {
       );
 
       // Today-forward only: Sat/Sun/Mon/Tue are past — the logged
-      // Monday squat is NOT re-created. Wed 13 + Thu 17 + Fri 8 rows
-      // (skeleton — references only, %TM rows never price off e1rm;
-      // v14 Thursday gained handstand 3 + front-lever 2 + HLR 3 skill
-      // rows, +8 over v13's Thu 9).
-      expect(added, hasLength(38));
+      // Monday squat is NOT re-created. Wed 13 + Thu 22 + Fri 8 rows
+      // (skeleton — references only, %TM rows never price off e1rm).
+      // Thu = 6 muscle-up + 2 banded + 3 handstand + 2 front-lever +
+      // 3 HLR + 3 dip + 3 EZ-curl (muscle-up progression, 2026-10-01).
+      expect(added, hasLength(43));
       final wed = added
           .where((e) => e.date == DateTime(2026, 9, 30))
           .toList();

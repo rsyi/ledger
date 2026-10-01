@@ -54,18 +54,38 @@ void main() {
     });
   });
 
-  group('markPrescribedDone', () {
-    test('matches logged sets to prescribed items (with aliases)', () {
-      final done = markPrescribedDone(
-        parsePrescribedProse(thu, null),
-        ['Muscle-up', 'Front Lever', 'Hanging Leg Raise'],
-      );
-      PrescribedItem byName(String frag) =>
-          done.firstWhere((e) => e.name.toLowerCase().contains(frag));
-      expect(byName('muscle').done, isTrue); // MU alias → muscle
-      expect(byName('front lever').done, isTrue);
-      expect(byName('hanging leg raise').done, isTrue);
-      expect(byName('dips').done, isFalse); // not logged
+  group('set count is first-class', () {
+    test('parseTargetSets reads the set count', () {
+      expect(parseTargetSets('2x5 (straight-arm)'), 2);
+      expect(parseTargetSets('3-5x1-2 (quality)'), 3);
+      expect(parseTargetSets('6 sets unassisted'), 6);
+      expect(parseTargetSets('top set at RPE 8'), 1); // no count → 1
+    });
+
+    test('completes only when the full set target is logged', () {
+      final items = parsePrescribedProse(
+          'Front lever up-downs 2x5; Hanging leg raise 3x8-15', null);
+      final fl = items.firstWhere((e) => e.name.contains('Front'));
+      expect(fl.targetSets, 2);
+
+      // One logged set → partial, NOT done.
+      var marked = markPrescribedDone(items, ['Front Lever']);
+      var flMarked = marked.firstWhere((e) => e.name.contains('Front'));
+      expect(flMarked.loggedSets, 1);
+      expect(flMarked.done, isFalse);
+
+      // Both sets logged → done.
+      marked = markPrescribedDone(items, ['Front Lever', 'Front Lever']);
+      flMarked = marked.firstWhere((e) => e.name.contains('Front'));
+      expect(flMarked.loggedSets, 2);
+      expect(flMarked.done, isTrue);
+    });
+
+    test('matches with aliases (MU → muscle)', () {
+      final items =
+          parsePrescribedProse('Muscle-ups 1x1 (skill)', null);
+      final marked = markPrescribedDone(items, ['Muscle-up']);
+      expect(marked.single.done, isTrue);
     });
   });
 }

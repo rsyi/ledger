@@ -8,6 +8,7 @@ import '../../services/log_event_bus.dart';
 import '../../services/prescribed_exercises.dart';
 import '../../services/program_current.dart' show programCurrent;
 import '../../services/program_provider.dart' show IntentDocs, ProgramProvider;
+import '../../services/set_recommendation.dart';
 import '../../services/warehouse_connector.dart';
 
 /// The program view for a day: the prescribed session as a CHECKLIST
@@ -218,57 +219,188 @@ class ProgramDayCardState extends State<ProgramDayCard> {
               style: theme.textTheme.labelSmall
                   ?.copyWith(letterSpacing: 0.8, color: muted)),
         ),
-      for (final it in group) _ExerciseRow(item: it, showCheck: showChecks),
+      for (final it in group)
+        _ExerciseRow(
+          item: it,
+          showCheck: showChecks,
+          onTap: widget.strengthView == null
+              ? null
+              : () => _showExerciseInfo(context, it),
+        ),
     ];
+  }
+
+  /// Tap a prescribed movement → how last week's comparable session went
+  /// (sets, reps, load, RPE, notes) + a recommendation for today.
+  Future<void> _showExerciseInfo(
+      BuildContext context, PrescribedItem item) async {
+    final sv = widget.strengthView;
+    final sr = widget.strengthRepo;
+    if (sv == null || sr == null) return;
+    final today =
+        DateTime(widget.date.year, widget.date.month, widget.date.day);
+
+    // Latest comparable session strictly before the shown day.
+    final byDay = <DateTime, List<PriorSet>>{};
+    String? note;
+    try {
+      for (final r in await sr.list(sv)) {
+        final ex = r['exercise']?.toString();
+        if (ex == null || !loggedMatchesPrescribed(ex, item.name)) continue;
+        final d = _date(r['date']);
+        if (d == null) continue;
+        final day = DateTime(d.year, d.month, d.day);
+        if (!day.isBefore(today)) continue;
+        (byDay[day] ??= []).add(PriorSet(
+          reps: _int(r['reps']),
+          weight: _numOf(r['weight']),
+          rpe: _numOf(r['rpe']),
+        ));
+        final n = r['notes']?.toString().trim();
+        if (n != null && n.isNotEmpty) note = n;
+      }
+    } catch (_) {/* honest empty */}
+
+    DateTime? lastDay;
+    for (final d in byDay.keys) {
+      if (lastDay == null || d.isAfter(lastDay)) lastDay = d;
+    }
+    final rec = recommendSet(lastDay == null ? const [] : byDay[lastDay]!);
+
+    if (!context.mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final muted = theme.colorScheme.onSurfaceVariant;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item.name, style: theme.textTheme.titleMedium),
+                if (item.scheme.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text('Prescribed: ${item.scheme}',
+                      style: theme.textTheme.bodySmall?.copyWith(color: muted)),
+                ],
+                const SizedBox(height: 14),
+                if (rec.lastSessionSummary != null) ...[
+                  Text('LAST SESSION',
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(letterSpacing: 0.8, color: muted)),
+                  const SizedBox(height: 3),
+                  Text(rec.lastSessionSummary!,
+                      style: theme.textTheme.bodyMedium),
+                  if (note != null) ...[
+                    const SizedBox(height: 4),
+                    Text('Note: $note',
+                        style:
+                            theme.textTheme.bodySmall?.copyWith(color: muted)),
+                  ],
+                  const SizedBox(height: 14),
+                ],
+                Text('RECOMMENDATION',
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(letterSpacing: 0.8, color: muted)),
+                const SizedBox(height: 3),
+                Text(rec.advice, style: theme.textTheme.bodyMedium),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  static int? _int(Object? v) {
+    if (v is int) return v;
+    if (v is num) return v.round();
+    if (v is String) return int.tryParse(v) ?? double.tryParse(v)?.round();
+    return null;
+  }
+
+  static double? _numOf(Object? v) {
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v);
+    return null;
   }
 }
 
 class _ExerciseRow extends StatelessWidget {
   final PrescribedItem item;
   final bool showCheck;
-  const _ExerciseRow({required this.item, required this.showCheck});
+  final VoidCallback? onTap;
+  const _ExerciseRow({required this.item, required this.showCheck, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurfaceVariant;
+    final scheme = theme.colorScheme;
+    final muted = scheme.onSurfaceVariant;
     final done = item.done;
-    final markColor = done ? theme.colorScheme.primary : muted;
-    return Padding(
-      padding: const EdgeInsets.only(top: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 1, right: 8),
-            child: Icon(
-              showCheck
-                  ? (done ? Icons.check_circle : Icons.circle_outlined)
-                  : Icons.fitness_center,
-              size: 16,
-              color: showCheck ? markColor : muted,
+    final partial = !done && item.loggedSets > 0;
+    final (icon, markColor) = !showCheck
+        ? (Icons.fitness_center, muted)
+        : done
+            ? (Icons.check_circle, scheme.primary)
+            : partial
+                ? (Icons.pie_chart_outline, scheme.tertiary)
+                : (Icons.circle_outlined, muted);
+    // "k/N" when logged against a multi-set target.
+    final counter = showCheck && (item.loggedSets > 0 || item.targetSets > 1)
+        ? '${item.loggedSets}/${item.targetSets}'
+        : null;
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1, right: 8),
+              child: Icon(icon, size: 16, color: markColor),
             ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.name,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: done ? muted : theme.colorScheme.onSurface,
-                    decoration: done ? TextDecoration.lineThrough : null,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.name,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: done ? muted : scheme.onSurface,
+                      decoration: done ? TextDecoration.lineThrough : null,
+                    ),
                   ),
-                ),
-                if (item.scheme.isNotEmpty)
-                  Text(item.scheme,
-                      style:
-                          theme.textTheme.bodySmall?.copyWith(color: muted)),
-              ],
+                  if (item.scheme.isNotEmpty)
+                    Text(item.scheme,
+                        style:
+                            theme.textTheme.bodySmall?.copyWith(color: muted)),
+                ],
+              ),
             ),
-          ),
-        ],
+            if (counter != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Text(counter,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: done ? scheme.primary : muted,
+                      fontWeight: FontWeight.w600,
+                    )),
+              ),
+            if (onTap != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 4, top: 1),
+                child: Icon(Icons.info_outline, size: 14, color: muted),
+              ),
+          ],
+        ),
       ),
     );
   }

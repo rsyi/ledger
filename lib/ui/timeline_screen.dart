@@ -260,6 +260,17 @@ class _TimelineScreenState extends State<TimelineScreen> {
     }
   }
 
+  /// Flash the just-logged row(s) with the fade highlight instead of a
+  /// snackbar (2026-10-01): instant confirmation that stays put and needs
+  /// no dismissal. Restarts the one-shot fade.
+  void _flash(Iterable<String> keys) {
+    _highlightTimer?.cancel();
+    setState(() => _highlightKeys.addAll(keys));
+    _highlightTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(_highlightKeys.clear);
+    });
+  }
+
   /// Refreshes [_qboStatus] for the logged rows currently in [_items].
   /// No-op when the view isn't QBO-mapped. Best-effort + silent.
   Future<void> _loadQboStatuses() async {
@@ -1081,24 +1092,13 @@ class _TimelineScreenState extends State<TimelineScreen> {
             it.isPlanned && it.planned!.templateName == templateName)
         .toList();
     if (group.isEmpty) return;
-    var logged = 0;
     for (final item in group) {
-      // Skip rows already mid-flight from a per-row tap. notify: false —
-      // one summary snackbar below instead of one per row (the undo
-      // mappings are still persisted, so per-row revert works from the
-      // expanded panel).
+      // Skip rows already mid-flight from a per-row tap. notify: true so
+      // each logged row flashes (the fade highlight accumulates across the
+      // batch) — no snackbar.
       if (_logNowInFlight.contains(item.planned!.localId)) continue;
-      await _logNow(item, notify: false);
-      logged++;
+      await _logNow(item, notify: true);
     }
-    if (!mounted || logged == 0) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content:
-            Text('Logged $logged ${logged == 1 ? 'entry' : 'entries'}'),
-        duration: const Duration(milliseconds: 1500),
-      ),
-    );
   }
 
   /// Promotes a planned entry into a sheet row. The entry's start_time is
@@ -1166,10 +1166,14 @@ class _TimelineScreenState extends State<TimelineScreen> {
         current.where((it) => it.isLogged).map((it) => it.logged!),
         by: 1,
       );
+      final loggedItem = _Item.logged(values);
       final updated = List<_Item>.from(current);
       updated.removeAt(idx);
-      updated.add(_Item.logged(values));
+      updated.add(loggedItem);
       setState(() => _items = Future.value(updated));
+      // Instant confirmation: flash the row (replaces the "Logged X"
+      // snackbar — no dismissal, no network wait).
+      if (notify) _flash([loggedItem.keyString]);
     }
 
     final rowId = values['id']?.toString();
@@ -1178,28 +1182,12 @@ class _TimelineScreenState extends State<TimelineScreen> {
         await widget.repository.create(widget.view, values);
         await PlanStore.remove(widget.view, planned.localId);
         // Undo-logging: remember which planned entry this row came from
-        // so the snackbar's UNDO / the expanded panel's "Revert to plan"
-        // can delete the row and restore the entry. Needs a row id (all
-        // ledger views have one; views without simply can't revert).
+        // so the expanded panel's "Revert to plan" can delete the row and
+        // restore the entry. Needs a row id (all ledger views have one;
+        // views without simply can't revert).
         if (rowId != null) {
           await PlanStore.putUndo(widget.view, rowId, planned);
           _undoMappings[rowId] = planned;
-        }
-        if (notify && mounted) {
-          final label =
-              values['exercise']?.toString() ?? _titleFor(widget.view, values);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Logged $label'),
-              duration: const Duration(seconds: 4),
-              action: rowId == null
-                  ? null
-                  : SnackBarAction(
-                      label: 'UNDO',
-                      onPressed: () => _revertToPlan(values),
-                    ),
-            ),
-          );
         }
         // UI shows the optimistic row; re-sync the cache (new row + shifted
         // __row indices) from truth in the background, no spinner.

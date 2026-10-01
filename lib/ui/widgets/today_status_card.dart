@@ -9,6 +9,7 @@ import '../../services/day_synthesis_service.dart';
 import '../../services/integrations/integration.dart';
 import '../../services/integrations/registry.dart';
 import '../../services/log_event_bus.dart';
+import '../../services/today_training.dart';
 import '../../services/plan_store.dart';
 import '../../services/program_current.dart';
 import '../../services/program_provider.dart';
@@ -85,6 +86,10 @@ class TodayStatusCard extends StatefulWidget {
 
 class TodayStatusCardState extends State<TodayStatusCard> {
   TodayStatus? _status;
+
+  /// Today's logged strength, grouped per exercise — the "what I've done
+  /// so far" overview that replaced the bare set-count session line.
+  TrainingToday? _training;
 
   // --- AI synthesis (Feature 1) ---
   DaySynthesisResult? _synthesis;
@@ -280,15 +285,18 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     } catch (_) {/* guided sync surfaces its own snackbars */}
   }
 
-  /// Recomputes the two lines from live rows + the day's targets.
-  /// Public-within-library: the shell calls it on pull-to-refresh.
+  /// Recomputes the status + training overview from live rows + the day's
+  /// targets. Public-within-library: the shell calls it on pull-to-refresh.
   Future<void> refresh() async {
-    final status = await _compute();
+    final (status, training) = await _compute();
     if (!mounted) return;
-    setState(() => _status = status);
+    setState(() {
+      _status = status;
+      _training = training;
+    });
   }
 
-  Future<TodayStatus> _compute() async {
+  Future<(TodayStatus, TrainingToday)> _compute() async {
     final today = DateTime.now();
     final dayStart = DateTime(today.year, today.month, today.day);
     final dayEnd = dayStart.add(const Duration(days: 1));
@@ -313,8 +321,10 @@ class TodayStatusCardState extends State<TodayStatusCard> {
       } catch (_) {/* honest empty */}
     }
 
-    // --- strength logged today ---
+    // --- strength logged today (names for the status line + reps/weight
+    //     for the per-exercise overview) ---
     final logged = <TodaySet>[];
+    final trainingSets = <TrainingSet>[];
     final sv = widget.strengthView;
     final sr = widget.strengthRepo;
     if (sv != null && sr != null) {
@@ -330,6 +340,11 @@ class TodayStatusCardState extends State<TodayStatusCard> {
           final ex = r['exercise']?.toString().trim();
           if (ex == null || ex.isEmpty) continue;
           logged.add(TodaySet(exercise: ex));
+          trainingSets.add(TrainingSet(
+            exercise: ex,
+            reps: _num(r['reps'])?.round(),
+            weight: _num(r['weight']),
+          ));
         }
       } catch (_) {/* honest empty */}
     }
@@ -365,13 +380,14 @@ class TodayStatusCardState extends State<TodayStatusCard> {
       } catch (_) {/* no target → still shows what was eaten */}
     }
 
-    return buildTodayStatus(
+    final status = buildTodayStatus(
       meals: meals,
       loggedSets: logged,
       plannedSets: planned,
       targets: targets,
       today: dayStart,
     );
+    return (status, summarizeTraining(trainingSets));
   }
 
   @override
@@ -398,11 +414,7 @@ class TodayStatusCardState extends State<TodayStatusCard> {
                           fontWeight: FontWeight.w600,
                         ),
                       )
-                    : _line(
-                        context,
-                        status.exerciseText,
-                        status.exerciseState,
-                      ),
+                    : _trainingOverview(context),
               ),
               Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
             ],
@@ -483,8 +495,9 @@ class TodayStatusCardState extends State<TodayStatusCard> {
               ],
             ),
             const SizedBox(height: 8),
-            // --- today's session line (tap → Log). Food/macros moved to
-            // the DailyProgressCard bars above this card (2026-09-30). ---
+            // --- today's training overview (tap → Log). Food/macros moved
+            // to the DailyProgressCard bars above this card (2026-09-30);
+            // this is "what I've done so far", not a bare set count. ---
             InkWell(
               onTap: widget.onOpen,
               child: Padding(
@@ -493,8 +506,7 @@ class TodayStatusCardState extends State<TodayStatusCard> {
                     ? const CardSkeleton(bars: [
                         (width: 180, height: 12),
                       ])
-                    : _line(context, status.exerciseText,
-                        status.exerciseState),
+                    : _trainingOverview(context),
               ),
             ),
             const SizedBox(height: 12),
@@ -617,6 +629,46 @@ class TodayStatusCardState extends State<TodayStatusCard> {
         padding: const EdgeInsets.symmetric(vertical: 2),
         child: content,
       ),
+    );
+  }
+
+  /// "What I've done so far" — per-exercise rollup of today's logged sets.
+  /// Falls back to the status line (planned / rest / nothing) when empty.
+  Widget _trainingOverview(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final t = _training;
+    if (t == null || t.isEmpty) {
+      final status = _status;
+      return _line(
+        context,
+        status?.exerciseText ?? 'No training logged yet',
+        status?.exerciseState ?? TodayState.none,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final e in t.exercises)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 3),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 2, right: 8),
+                  child: Icon(Icons.check_circle,
+                      size: 15, color: scheme.primary),
+                ),
+                Expanded(
+                  child: Text(
+                    trainingLineFor(e),
+                    style: TextStyle(color: scheme.onSurface, fontSize: 14),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 

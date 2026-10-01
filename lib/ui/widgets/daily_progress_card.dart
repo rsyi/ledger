@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/view_schema.dart';
 import '../../services/analytics_engine.dart';
@@ -51,8 +52,19 @@ class DailyProgressCard extends StatefulWidget {
   DailyProgressCardState createState() => DailyProgressCardState();
 }
 
+/// Prefs key for a user-set maintenance override. Macrofactor has no API
+/// and exports only intake (not expenditure) to Health Connect, so the
+/// app can't read MF's maintenance — the model estimates it from intake
+/// vs weight trend. This lets the user pin the number when they know it.
+const String kMaintenanceOverrideKey = 'daily_maintenance_override_kcal';
+
 class DailyProgressCardState extends State<DailyProgressCard> {
   late Future<List<MacroBar>?> _future;
+
+  /// The maintenance value actually used for the calorie bar (override if
+  /// set, else the model estimate) — surfaced in the edit dialog.
+  double? _maintenanceUsed;
+  bool _maintenanceIsOverride = false;
 
   @override
   void initState() {
@@ -62,6 +74,60 @@ class DailyProgressCardState extends State<DailyProgressCard> {
 
   /// Re-reads meals/weight/targets (pull-to-refresh, log events).
   void reload() => setState(() => _future = _compute());
+
+  Future<void> _editMaintenance() async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = prefs.getDouble(kMaintenanceOverrideKey);
+    final controller = TextEditingController(
+      text: (current ?? _maintenanceUsed)?.round().toString() ?? '',
+    );
+    if (!mounted) return;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Maintenance calories'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Set your maintenance (TDEE) in kcal. The cut goal is to eat '
+              'below this — the bar is green while under. Leave blank to use '
+              'the app\'s estimate from your intake and weight trend.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              decoration: const InputDecoration(
+                suffixText: 'kcal',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'clear'),
+            child: const Text('Use estimate'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result == null) return;
+    if (result == 'clear' || result.isEmpty) {
+      await prefs.remove(kMaintenanceOverrideKey);
+    } else {
+      final v = double.tryParse(result);
+      if (v != null && v > 0) await prefs.setDouble(kMaintenanceOverrideKey, v);
+    }
+    reload();
+  }
 
   Future<List<Map<String, Object?>>> _rows(
       WarehouseConnector? repo, ViewSchema? view) async {
@@ -120,7 +186,11 @@ class DailyProgressCardState extends State<DailyProgressCard> {
       weighIns: daily,
       today: dayStart,
     );
-    final maintenance = forecast.maintenance?.kcal;
+    final prefs = await SharedPreferences.getInstance();
+    final override = prefs.getDouble(kMaintenanceOverrideKey);
+    final maintenance = override ?? forecast.maintenance?.kcal;
+    _maintenanceUsed = maintenance;
+    _maintenanceIsOverride = override != null;
 
     // --- phase targets: protein band + carbs floor + calorie mode from
     // the goal config; fat floor / recomp carb band from the slice ---
@@ -140,12 +210,15 @@ class DailyProgressCardState extends State<DailyProgressCard> {
       );
       for (final g in byPhase[phaseKey] ?? const <GoalConfig>[]) {
         if (g.id == 'macros') {
+          // Aim for the TOP of the protein band (the user targets a full
+          // 1 g/lb, not the 0.8 floor); resolve the cut's per-lb band
+          // against 7-day bodyweight.
           final abs = g.proteinGDay;
           final perLb = g.proteinGPerLb;
           if (abs != null && abs.isNotEmpty) {
-            proteinFloor = abs.first;
+            proteinFloor = abs.last;
           } else if (perLb != null && perLb.isNotEmpty && bw != null && bw > 0) {
-            proteinFloor = perLb.first * bw;
+            proteinFloor = perLb.last * bw;
           }
           carbsFloor = g.carbsFloorGDay;
         } else if (g.id == 'calorie_band') {
@@ -200,7 +273,13 @@ class DailyProgressCardState extends State<DailyProgressCard> {
           body = Column(
             children: [
               for (final b in bars) ...[
-                _MacroBarRow(bar: b),
+                _MacroBarRow(
+                  bar: b,
+                  // The calorie reference (maintenance) is tappable to
+                  // override — the only editable target.
+                  onEdit: b.label == 'Calories' ? _editMaintenance : null,
+                  isOverride: b.label == 'Calories' && _maintenanceIsOverride,
+                ),
                 if (b != bars.last) const SizedBox(height: 10),
               ],
             ],
@@ -220,7 +299,9 @@ class DailyProgressCardState extends State<DailyProgressCard> {
 
 class _MacroBarRow extends StatelessWidget {
   final MacroBar bar;
-  const _MacroBarRow({required this.bar});
+  final VoidCallback? onEdit;
+  final bool isOverride;
+  const _MacroBarRow({required this.bar, this.onEdit, this.isOverride = false});
 
   String _fmt(double v) {
     final n = v.round();
@@ -243,12 +324,16 @@ class _MacroBarRow extends StatelessWidget {
       MacroState.low => (scheme.tertiary, scheme.onSurface),
       MacroState.none => (scheme.outline, scheme.onSurfaceVariant),
     };
+    // 'under maint' reads as the cut goal (eat below maintenance); the
+    // ~ marks it as an estimate unless the user pinned it (• set).
+    final maintTag = isOverride ? ' set' : '';
     final trailing = bar.target == null
         ? '${_fmt(bar.current)} ${bar.unit}'
         : bar.unit == 'kcal'
-            ? '${_fmt(bar.current)} / ~${_fmt(bar.target!)}'
+            ? '${_fmt(bar.current)} / ${isOverride ? '' : '~'}'
+                '${_fmt(bar.target!)}$maintTag'
             : '${_fmt(bar.current)} / ${_fmt(bar.target!)} ${bar.unit}';
-    return Row(
+    final row = Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         SizedBox(
@@ -274,17 +359,32 @@ class _MacroBarRow extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         SizedBox(
-          width: 104,
-          child: Text(
-            trailing,
-            textAlign: TextAlign.right,
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: textColor),
+          width: 112,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Flexible(
+                child: Text(
+                  trailing,
+                  textAlign: TextAlign.right,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: textColor),
+                ),
+              ),
+              if (onEdit != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 2),
+                  child: Icon(Icons.edit_outlined,
+                      size: 13, color: scheme.onSurfaceVariant),
+                ),
+            ],
           ),
         ),
       ],
     );
+    if (onEdit == null) return row;
+    return InkWell(onTap: onEdit, child: row);
   }
 }

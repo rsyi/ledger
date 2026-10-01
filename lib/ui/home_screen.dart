@@ -58,6 +58,7 @@ import 'domain_screen.dart';
 import 'program_screen.dart';
 import 'coach_threads_screen.dart';
 import 'widgets/daily_progress_card.dart';
+import 'widgets/program_day_card.dart';
 import 'home_dashboard.dart';
 import 'goals_screen.dart';
 import 'app_text.dart';
@@ -183,6 +184,12 @@ class _HomeScreenState extends State<HomeScreen> {
   /// so pull-to-refresh re-reads meals/weight/targets alongside the status
   /// card.
   final _dailyProgressKey = GlobalKey<DailyProgressCardState>();
+
+  /// Today tab's Tomorrow prescription card + the Log tab's today-program
+  /// reference card — reloaded on their tabs' pull-to-refresh (both also
+  /// self-refresh on log events).
+  final _tomorrowKey = GlobalKey<ProgramDayCardState>();
+  final _logProgramKey = GlobalKey<ProgramDayCardState>();
 
   @override
   void initState() {
@@ -1065,6 +1072,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   onRefresh: () async {
                     _todayStatusKey.currentState?.refresh();
                     _dailyProgressKey.currentState?.reload();
+                    _tomorrowKey.currentState?.reload();
                   },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -1110,6 +1118,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         registry: IntegrationRegistry.instance,
                         onOpen: () => _selectTab(3),
                         onOpenCoachThread: openTodayCoachThread,
+                      ),
+                      // TOMORROW: what the program prescribes tomorrow
+                      // (full routine prose — front-lever work, HLR,
+                      // muscle-ups and all), below the AI read.
+                      ProgramDayCard(
+                        key: _tomorrowKey,
+                        provider: programProvider,
+                        label: 'Tomorrow',
+                        dayOffset: 1,
                       ),
                     ],
                   ),
@@ -1306,10 +1323,28 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
                 body: RefreshIndicator(
-                  onRefresh: () async => _domainsKey.currentState?.reload(),
+                  onRefresh: () async {
+                    _logProgramKey.currentState?.reload();
+                    await _domainsKey.currentState?.reload();
+                  },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
+                      // TODAY'S PROGRAM as a live reference: the prescribed
+                      // session + what's been logged so far (ticks off as
+                      // you log from the domains below). The program stays
+                      // coupled to logging without any template apparatus.
+                      if (programProvider != null)
+                        ProgramDayCard(
+                          key: _logProgramKey,
+                          provider: programProvider,
+                          label: 'Today',
+                          dayOffset: 0,
+                          strengthView: dashStrengthView,
+                          strengthRepo: dashStrengthView == null
+                              ? null
+                              : data.registry.forView(dashStrengthView),
+                        ),
                       _DomainSections(
                         key: _domainsKey,
                         provider: domainProvider,

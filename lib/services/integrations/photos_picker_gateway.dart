@@ -26,6 +26,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io' show SocketException;
 import 'dart:typed_data';
 
 import 'package:google_sign_in/google_sign_in.dart';
@@ -227,6 +228,36 @@ class GoogleSignInPhotosPickerGateway implements PhotosPickerGateway {
     return headers;
   }
 
+  /// Retries transient network failures (DNS "Failed host lookup",
+  /// dropped connections, timeouts — common on mobile during a wifi/LTE
+  /// handoff) a few times with short backoff. HTTP 4xx/5xx are NOT
+  /// transient and surface immediately. A persistent network failure is
+  /// rewrapped with a plain-language message.
+  Future<T> _retry<T>(Future<T> Function() op, {int tries = 3}) async {
+    var attempt = 0;
+    while (true) {
+      try {
+        return await op();
+      } catch (e) {
+        attempt++;
+        final s = e.toString();
+        final transient = e is SocketException ||
+            e is http.ClientException ||
+            s.contains('Failed host lookup') ||
+            s.contains('Connection') ||
+            s.contains('timed out');
+        if (!transient) rethrow;
+        if (attempt >= tries) {
+          throw StateError(
+            "Couldn't reach Google Photos (network hiccup — the server "
+            "didn't resolve). Check your connection and tap Attach to retry.",
+          );
+        }
+        await Future<void>.delayed(Duration(milliseconds: 400 * attempt));
+      }
+    }
+  }
+
   Map<String, dynamic> _json(http.Response resp) {
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       throw StateError('Photos Picker API ${resp.statusCode}: ${resp.body}');
@@ -238,18 +269,18 @@ class GoogleSignInPhotosPickerGateway implements PhotosPickerGateway {
   @override
   Future<Map<String, dynamic>> createSession() async {
     final headers = await _authHeaders();
-    return _json(await _http.post(
-      Uri.parse('$_base/sessions'),
-      headers: {...headers, 'Content-Type': 'application/json'},
-      body: '{}',
-    ));
+    return _json(await _retry(() => _http.post(
+          Uri.parse('$_base/sessions'),
+          headers: {...headers, 'Content-Type': 'application/json'},
+          body: '{}',
+        )));
   }
 
   @override
   Future<Map<String, dynamic>> getSession(String sessionId) async {
     final headers = await _authHeaders();
-    return _json(
-        await _http.get(Uri.parse('$_base/sessions/$sessionId'), headers: headers));
+    return _json(await _retry(() =>
+        _http.get(Uri.parse('$_base/sessions/$sessionId'), headers: headers)));
   }
 
   @override
@@ -258,14 +289,14 @@ class GoogleSignInPhotosPickerGateway implements PhotosPickerGateway {
     final out = <dynamic>[];
     String? pageToken;
     do {
-      final body = _json(await _http.get(
-        Uri.parse('$_base/mediaItems').replace(queryParameters: {
-          'sessionId': sessionId,
-          'pageSize': '100',
-          'pageToken': ?pageToken,
-        }),
-        headers: headers,
-      ));
+      final body = _json(await _retry(() => _http.get(
+            Uri.parse('$_base/mediaItems').replace(queryParameters: {
+              'sessionId': sessionId,
+              'pageSize': '100',
+              'pageToken': ?pageToken,
+            }),
+            headers: headers,
+          )));
       out.addAll((body['mediaItems'] as List?) ?? const []);
       pageToken = body['nextPageToken'] as String?;
     } while (pageToken != null && pageToken.isNotEmpty);
@@ -282,7 +313,7 @@ class GoogleSignInPhotosPickerGateway implements PhotosPickerGateway {
   @override
   Future<Uint8List> download(String url) async {
     final headers = await _authHeaders();
-    final resp = await _http.get(Uri.parse(url), headers: headers);
+    final resp = await _retry(() => _http.get(Uri.parse(url), headers: headers));
     if (resp.statusCode != 200) {
       throw StateError(
           'Video download failed (${resp.statusCode}) — the picker link '

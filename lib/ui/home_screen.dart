@@ -57,6 +57,7 @@ import 'coach_chat_screen.dart';
 import 'domain_screen.dart';
 import 'program_screen.dart';
 import 'coach_threads_screen.dart';
+import 'widgets/day_inputs_card.dart';
 import 'home_dashboard.dart';
 import 'goals_screen.dart';
 import 'app_text.dart';
@@ -132,7 +133,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _polling = false;
 
   /// Selected bottom-nav tab (Progress/Goals split 2026-09-29):
-  /// 0 progress · 1 goals · 2 log · 3 coach · 4 plan. Plain state field
+  /// 0 today · 1 week · 2 progress · 3 log · 4 plan. Plain state field
   /// so it survives the poller's setState rebuilds.
   int _tab = 0;
 
@@ -170,10 +171,14 @@ class _HomeScreenState extends State<HomeScreen> {
   /// app/dashboards.yaml (1 h cache otherwise).
   final _domainsKey = GlobalKey<_DomainSectionsState>();
 
-  /// Handle on the Progress tab's today-vs-plan status card: switching
-  /// back to Progress after logging refreshes its food/training lines
+  /// Handle on the Today tab's today-vs-plan status card: switching
+  /// back to Today after logging refreshes its food/training lines
   /// immediately (pull-to-refresh recomputes it too).
   final _todayStatusKey = GlobalKey<TodayStatusCardState>();
+
+  /// Handle on the Today tab's Day/Tomorrow planned-inputs card, so
+  /// pull-to-refresh re-reads the program docs alongside the status card.
+  final _dayInputsKey = GlobalKey<DayInputsCardState>();
 
   @override
   void initState() {
@@ -953,17 +958,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
               // Today-synthesis → Coach: tap the card's AI read to
               // continue the day's synthesis as a normal coach thread.
-              // Switches to the Coach tab, then (if a coach_chat view is
-              // synced) seeds today's `today-YYYY-MM-DD` thread with the
+              // Coach is no longer a bottom-nav tab (2026-09-30) — the
+              // chat PUSHES over the Today tab. If a coach_chat view is
+              // synced, seeds today's `today-YYYY-MM-DD` thread with the
               // synthesis text — idempotent (shouldSeedTodayThread skips
               // when a coach opener already exists) — and pushes its
-              // chat. seedText null (disabled synthesis) → just opens the
-              // Coach tab. Best-effort: a seed-write failure still opens
-              // the thread.
+              // chat. seedText null (disabled synthesis) → nothing to do
+              // when coach isn't synced. Best-effort: a seed-write
+              // failure still opens the thread.
               Future<void> openTodayCoachThread({String? seedText}) async {
-                _selectTab(3);
                 final view = coachView;
-                if (view == null) return; // coach not synced → Coach tab only
+                if (view == null) return; // coach not synced → no-op
                 final repo = data.registry.forView(view);
                 final day = DateTime.now();
                 final threadId = todaySynthesisThreadId(day);
@@ -1005,26 +1010,61 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }
 
-              // ---- PROGRESS: outputs only — PHASE hero (weight
-              // trajectory + verdict) + STRENGTH card + Coach preview.
-              // The THIS WEEK input strip is dropped here (progressOnly);
-              // it moved to the GOALS tab.
-              final progressTab = Scaffold(
-                appBar: AppBar(title: Text(appName), actions: homeActions),
+              // Coach threads list — the former Coach tab, now PUSHED
+              // from the Today tab's app-bar icon (2026-09-30: coach left
+              // the bottom nav; its entrypoint stays at the top of Today).
+              void openCoachThreads() {
+                final view = coachView;
+                if (view == null) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(title: const Text('Coach')),
+                      body: CoachThreadsScreen(
+                        view: view,
+                        repository: data.registry.forView(view),
+                        ledger: coachLedger,
+                        brain: coachBrain,
+                        openTimeline: openCoachTimeline,
+                      ),
+                    ),
+                  ),
+                );
+              }
+
+              // ---- TODAY (home, idx 0): the day-scale surface. The AI
+              // synthesis (how the day is going vs plan — food + training)
+              // leads, then today/tomorrow's planned INPUTS. Input metrics
+              // are only legible on a day-to-week scale, so they lead the
+              // app; Week holds the week-scale inputs and Progress the
+              // outputs. Coach left the bottom nav 2026-09-30 — its
+              // entrypoint is the app-bar icon here + tapping the card.
+              final todayTab = Scaffold(
+                appBar: AppBar(
+                  title: Text(appName),
+                  actions: [
+                    if (coachView != null)
+                      IconButton(
+                        icon: const Icon(Icons.smart_toy_outlined),
+                        tooltip: 'Coach',
+                        onPressed: openCoachThreads,
+                      ),
+                    ...homeActions,
+                  ],
+                ),
                 body: RefreshIndicator(
-                  // Busts the dashboard's caches (wm_store snapshot,
-                  // program docs, weight mirror, best-e1RM) and refires
-                  // its card futures + the today-vs-plan status card.
+                  // Gated sync + recompute of the status card, then a
+                  // re-read of the program docs behind the day-inputs card.
                   onRefresh: () async {
                     _todayStatusKey.currentState?.refresh();
-                    await _dashboardKey.currentState?.reload();
+                    _dayInputsKey.currentState?.reload();
                   },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
                       // Today-vs-plan: how the day is going against the
-                      // plan (food + training). Replaced the Coach preview
-                      // row; the coach stays its own tab. Tap → Log.
+                      // plan (food + training). Tap the AI read → coach
+                      // thread; the food/training lines → Log.
                       TodayStatusCard(
                         key: _todayStatusKey,
                         mealsView: dashMealsView,
@@ -1043,9 +1083,40 @@ class _HomeScreenState extends State<HomeScreen> {
                         // the quiet Withings/Macrofactor/Whoop pulls and
                         // (on a climb day) the Kaya guided sync.
                         registry: IntegrationRegistry.instance,
-                        onOpen: () => _selectTab(2),
+                        onOpen: () => _selectTab(3),
                         onOpenCoachThread: openTodayCoachThread,
                       ),
+                      // Day/Tomorrow planned inputs — the program's
+                      // prescribed session for each day.
+                      DayInputsCard(
+                        key: _dayInputsKey,
+                        provider: programProvider,
+                      ),
+                    ],
+                  ),
+                ),
+              );
+
+              // ---- PROGRESS (idx 2): outputs only — PHASE hero (weight
+              // trajectory + verdict) + STRENGTH card + output trends.
+              // The today-vs-plan card moved to the Today tab; the THIS
+              // WEEK input strip is dropped here (progressOnly) — it lives
+              // on the Week tab.
+              final progressTab = Scaffold(
+                appBar: AppBar(
+                  title: const Text('Progress'),
+                  actions: [SyncStatusButton()],
+                ),
+                body: RefreshIndicator(
+                  // Busts the dashboard's caches (wm_store snapshot,
+                  // program docs, weight mirror, best-e1RM) and refires
+                  // its card futures.
+                  onRefresh: () async {
+                    await _dashboardKey.currentState?.reload();
+                  },
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
                       HomeDashboard(
                         key: _dashboardKey,
                         progressOnly: true,
@@ -1135,7 +1206,9 @@ class _HomeScreenState extends State<HomeScreen> {
               // app/dashboards.yaml `goals:`, phase-selected.
               final goalsTab = Scaffold(
                 appBar: AppBar(
-                  title: const Text('Goals'),
+                  // Labelled "Week" (idx 1): the week-scale input
+                  // eigenvectors, one zoom level out from Today.
+                  title: const Text('Week'),
                   actions: [SyncStatusButton()],
                 ),
                 body: RefreshIndicator(
@@ -1232,30 +1305,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               );
 
-              // ---- COACH: threads screen as the tab root. Opening a
-              // thread pushes the chat exactly as before; proposal
-              // cards keep their timeline opener.
-              final coachTab = coachView == null
-                  ? Scaffold(
-                      appBar: AppBar(title: const Text('Coach')),
-                      body: const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(24),
-                          child: Text(
-                            'Coach chat isn\'t available yet.\n'
-                            'It appears after the next schema sync.',
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      ),
-                    )
-                  : CoachThreadsScreen(
-                      view: coachView,
-                      repository: data.registry.forView(coachView),
-                      ledger: coachLedger,
-                      brain: coachBrain,
-                      openTimeline: openCoachTimeline,
-                    );
+              // (Coach left the bottom nav 2026-09-30 — reached via the
+              // Today tab's app-bar icon → openCoachThreads.)
 
               // ---- PLAN: phases + progress (tab split 2026-09-28 —
               // replaces the old everything-Program tab); the ROUTINE
@@ -1305,39 +1356,41 @@ class _HomeScreenState extends State<HomeScreen> {
                     );
 
               // IndexedStack keeps every tab's state (scroll positions,
-              // in-flight futures, the threads screen's poll) alive
-              // across switches; the bootstrap swap above recreates all
-              // five together. Order matches the NavigationBar:
-              // Progress · Goals · Log · Coach · Plan.
+              // in-flight futures) alive across switches; the bootstrap
+              // swap above recreates all five together. Order matches the
+              // NavigationBar: Today · Week · Progress · Log · Plan.
               return IndexedStack(
                 index: _tab,
-                children: [progressTab, goalsTab, logTab, coachTab, planTab],
+                children: [todayTab, goalsTab, progressTab, logTab, planTab],
               );
             },
           ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _tab,
             onDestinationSelected: _selectTab,
+            // Timescale-ordered, zooming out: Today (day inputs + AI
+            // synthesis) · Week (week inputs) · Progress (outputs) · Log ·
+            // Plan. Coach left the bar 2026-09-30 (top of Today instead).
             destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.today_outlined),
+                selectedIcon: Icon(Icons.today),
+                label: 'Today',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.calendar_view_week_outlined),
+                selectedIcon: Icon(Icons.calendar_view_week),
+                label: 'Week',
+              ),
               NavigationDestination(
                 icon: Icon(Icons.insights_outlined),
                 selectedIcon: Icon(Icons.insights),
                 label: 'Progress',
               ),
               NavigationDestination(
-                icon: Icon(Icons.flag_outlined),
-                selectedIcon: Icon(Icons.flag),
-                label: 'Goals',
-              ),
-              NavigationDestination(
                 icon: Icon(Icons.edit_note_outlined),
                 selectedIcon: Icon(Icons.edit_note),
                 label: 'Log',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.smart_toy_outlined),
-                selectedIcon: Icon(Icons.smart_toy),
-                label: 'Coach',
               ),
               NavigationDestination(
                 icon: Icon(Icons.track_changes_outlined),

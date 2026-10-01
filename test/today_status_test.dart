@@ -17,6 +17,8 @@ void main() {
           carbsGDay: [225, 300],
           fatGDayMin: 55,
         ),
+        now: DateTime(2026, 9, 29, 12, 0), // midday — day not over
+        today: DateTime(2026, 9, 29),
       );
       expect(s.foodText, 'Food: 95g protein of 160 · 1,240 kcal so far');
       // 95 of 160, day not over → on track (not behind on a partial day).

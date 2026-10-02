@@ -26,4 +26,8 @@ void main() {
     ]);
     expect(out.single.done, isTrue);
   });
+
+  test('handstand logged Fri covers Thu "Handstand practice" (cross-day)', () {
+    expect(loggedCoversPrescribed('handstand', 'Handstand practice'), isTrue);
+  });
 }

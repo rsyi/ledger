@@ -101,6 +101,7 @@ const _stop = {
   'volume', 'skill', 'single', 'work', 'then', 'the', 'a', 'of', 'per',
   'quality', 'second', 'exposure', 'banded', 'strict', 'up', 'down',
   'downs', 'plus', 'and', 'or', 'first', 'easy', 'supplemental',
+  'practice',
 };
 
 const _alias = {

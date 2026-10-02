@@ -187,6 +187,9 @@ String missedLine(MissedItem m) => '${m.item.name} — ${_wd(m.day)}, '
 
 class ProgramDayCardState extends State<ProgramDayCard> {
   late Future<_DayData?> _future;
+
+  /// One delayed retry when the training-max read came back empty.
+  bool _wmRetried = false;
   StreamSubscription<LogEvent>? _logSub;
 
   /// Strength rows from the last [_load] — reused by the info sheet so a
@@ -306,6 +309,15 @@ class ProgramDayCardState extends State<ProgramDayCard> {
 
     // Plan-tab pricing (training max / wave / %TM / double progression).
     final wm = await wmFuture;
+    // The TM tabs are a direct Sheets read: on a cold start it can fail
+    // (network not up yet) and the card then only reloads on a log event —
+    // loads stayed blank. Retry once shortly after (not cached on failure).
+    if (wm == null && widget.wmSnapshot != null && !_wmRetried) {
+      _wmRetried = true;
+      Future.delayed(const Duration(seconds: 6), () {
+        if (mounted) reload();
+      });
+    }
     var priced = PricedWeek.empty;
     var lines = const <String, List<SessionLine>>{};
     var history = const <StrengthRow>[];

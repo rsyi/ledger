@@ -467,6 +467,57 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     Tests: forecast_section_test REWRITTEN (11 — asserts the lever UI
     is GONE), nutrition_model_test 15, forecast_calibration_test 14;
     ledger-mcp +2 (132 total).
+- **Frozen phase projections (2026-10-02, spec docs/superpowers/specs/
+  2026-10-02-phase-projections-design.md; user-approved, LIVE — app
+  built, MCP deployed)**: the forecast tab recalibrates nightly, so each
+  program BLOCK now gets a projection FROZEN at its start to track
+  against. APPEND-ONLY `projection_snapshots` tab (block, metric,
+  week_start, projected, band_lo, band_hi, made_at, program_version,
+  inputs_json on the set's first row) — NEVER rewrite rows; the nightly
+  (program_status_update.dart) appends the current block's snapshot once
+  (idempotent: skip when the block has one on the current
+  `projectionActualsVersion`), REFUSES to append when row 1 isn't the
+  header (readers repair-read a headerless tab); `--only-projection-
+  snapshots` writes just that append. Pure code: projection_snapshot.dart
+  (builder from a sim2Run anchored at the block-start Monday; codec;
+  selection = newest actuals_version, then earliest made_at;
+  snapshotForDay), projection_replay.dart (anchors + nutrition from data
+  dated ≤ block start ONLY; a replay >1 day late ignores tonight's
+  recal scales/offset), projection_tracking.dart (actuals: 7-day per-day-
+  mean bw; scale BF withings→omron→caliper week mean else latest ≤27 d;
+  e1RM = best RPE-adjusted over the ROLLING 7 days, carry-back — v2, the
+  calendar-week v1 read mid-week volume sets; total = S+B+D; 4-wk p75
+  grade; VO2 none) + interpolated status on_track/ahead/behind/no_data
+  (bw down-good in a cut, up when the block projects ≥ +2 lb, else hold;
+  BF down; strength/VO2/climbing up) + the plain line + blockResultLine.
+  Metrics: bodyweight, body_fat, strength_total, e1rm_<lift>×4, vo2max,
+  climbing_grade. ANCHORING: every metric starts at the observed value on
+  the start day (BF/climbing by additive offset; strength on the INDEX
+  basis = sIdx, per lift × sIdx/sTrue, scaled to the observed e1RM).
+  BAND (judgment call): envelope of MC p10–p90 (200 paths — only strength
+  /climbing are noisy), r ± 0.25 lb/wk deterministic bracket runs, and a
+  measurement floor (bw ±1.25, BF ±1 pt, e1RM ±3%, VO2 ±1, grade ±0.5).
+  Block 0 backfilled 2026-10-02 (two sets: an initial v1 set + the v2
+  re-freeze that selection uses): nutrition-at-Sep-21 r −1.24 lb/wk (6
+  logged days, maintenance 2120 ± 673) → bw 162.2 → 147.4 [144.4–150.4]
+  by Dec 14, strength total 905.5 → 871.7. APP: ProjectionSnapshotStore
+  (30-min cache, `.memory()` for tests) → PlanSources.projectionStore →
+  PlanData.projections / ForecastInputs.projections (PhaseProjections =
+  first snapshots + actual sources). Weight page = frozen bodyweight +
+  body-fat cards (widgets/projection_card.dart: band + dashed projected +
+  actual line, StatusChip, one line) + nutrition; Strength page = frozen
+  strength-total card, climbing/VO2 folds hold frozen cards; Lift page =
+  frozen e1RM card. The rolling end-of-horizon outlook (summary, live
+  charts + capacity toggle, P(V8), "Squat N by Dec '28") moved into
+  Model details (ForecastFocus.all layout unchanged). No snapshot → live
+  model line labelled "No frozen projection yet". Progress PHASE
+  timeline: current block row shows "Bodyweight: <line>", past blocks
+  their result line; rows with a snapshot open phase_projection_screen.
+  MCP: get_coach_context `phase_tracking` (src/phase_tracking.ts twin;
+  shared cases ledger-mcp/test/fixtures/phase_tracking_cases.json,
+  regenerate with `dart run tool/gen_phase_tracking_fixture.dart` —
+  test/phase_tracking_twin_test.dart pins the Dart side). sheets.ts now
+  shares one in-flight token exchange (cold-start fan-out dropped reads).
 - **Recomp TRACKING layer (2026-09-28, coach/recomp-tracking-spec.md —
   canonical, user-authored)**: adherence INPUTS vs generated OUTCOMES.
   SCHEMAS (existing keys only — NO Rust/dylib change; engine's

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -30,6 +31,7 @@ import '../services/integrations/registry.dart';
 import '../services/integrations/whoop.dart';
 import '../services/integrations/whoop_api.dart';
 import '../services/integrations/withings.dart';
+import '../services/carryover_check.dart';
 import '../services/coach_brain.dart';
 import '../services/day_synthesis_service.dart';
 import '../services/domain_config.dart';
@@ -119,8 +121,19 @@ class HomeScreen extends StatefulWidget {
 
 DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   late Future<_Bootstrap> _bootstrap;
+
+  /// Daily missed-work carryover check (in-app fallback for the nightly
+  /// briefing). Set by build once the coach is available; run after the
+  /// first bootstrap and on every app resume (the check itself gates to
+  /// once a day). Fire-and-forget — never blocks the UI.
+  Future<void> Function()? _carryoverCheck;
+  bool _carryoverKicked = false;
+
+  /// Resume throttle: until the day's check fires, each run re-reads the
+  /// week's logs — at most one attempt per 10 minutes.
+  DateTime? _carryoverLastRun;
 
   /// Background GitHub poller. The app runs in always-open kiosk mode, so
   /// schema changes can't ride in on a launch — this timer pulls them in
@@ -240,13 +253,32 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _bootstrap = _initialize();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _syncTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _runCarryoverCheck();
+  }
+
+  void _runCarryoverCheck() {
+    final run = _carryoverCheck;
+    if (run == null) return;
+    final now = DateTime.now();
+    final last = _carryoverLastRun;
+    if (last != null && now.difference(last) < const Duration(minutes: 10)) {
+      return;
+    }
+    _carryoverLastRun = now;
+    unawaited(run().catchError((Object _) {}));
   }
 
   Future<_Bootstrap> _initialize() async {
@@ -863,6 +895,58 @@ class _HomeScreenState extends State<HomeScreen> {
                 PostLogNotifier.instance = notifier;
                 // Ask for the Android 13+ POST_NOTIFICATIONS grant once.
                 unawaited(NotificationService.instance?.requestPermission());
+              }
+              // Daily missed-work carryover (in-app fallback for the
+              // nightly briefing): needs the in-app coach, the coach_chat
+              // view and ledger meta (the once-a-day guard). Skipped
+              // under flutter test. Kicked once after bootstrap, then on
+              // every resume.
+              final carryoverView = coachView;
+              final carryoverBrain = coachBrain;
+              final carryoverLedger = coachLedger;
+              _carryoverCheck = carryoverView == null ||
+                      carryoverBrain == null ||
+                      carryoverLedger == null ||
+                      Platform.environment.containsKey('FLUTTER_TEST')
+                  ? null
+                  : () async {
+                      final chatRepo = data.registry.forView(carryoverView);
+                      final now = DateTime.now();
+                      await CarryoverCheck.maybeRun(
+                        now: now,
+                        metaGet: carryoverLedger.metaGet,
+                        metaSet: carryoverLedger.metaSet,
+                        hasMovesProposalToday: () async => hasMovesProposalOn(
+                            await chatRepo.list(carryoverView), now),
+                        missed: () async => (await carryoverBrain
+                                .weekStateLoader()
+                                .load(now, withMissed: true))
+                            ?.missed,
+                        ask: (_) async {
+                          await postCarryoverTurn(
+                            view: carryoverView,
+                            repository: chatRepo,
+                            ask: (prompt, onProposal, onMoves) =>
+                                carryoverBrain.ask(
+                              prompt,
+                              onProposal: onProposal,
+                              onMovesProposal: onMoves,
+                            ),
+                            notify: (title, body) async {
+                              await NotificationService.instance
+                                  ?.showCoachUpdate(title, body);
+                            },
+                          );
+                          unawaited(
+                            SyncScheduler.instance?.maybeSync(manual: true),
+                          );
+                        },
+                      );
+                    };
+              if (!_carryoverKicked && _carryoverCheck != null) {
+                _carryoverKicked = true;
+                WidgetsBinding.instance
+                    .addPostFrameCallback((_) => _runCarryoverCheck());
               }
               // Plan is a tab — hero taps / sheet actions select it
               // instead of pushing a duplicate screen (index 4 in the

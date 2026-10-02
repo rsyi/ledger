@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'services/engine.dart';
 import 'services/notification_service.dart';
+import 'ui/design/tokens.dart' show StatusColors;
 import 'ui/home_screen.dart';
 import 'ui/widgets/keyboard_inset_guard.dart';
 
@@ -300,6 +301,9 @@ class LedgerApp extends StatelessWidget {
       hoverColor: scheme.surfaceContainerHigh,
       highlightColor: Colors.transparent,
       typography: typography,
+      // Redesign status colours (done / partial / problem / muted) —
+      // read via StatusColors.of(context) (lib/ui/design/tokens.dart).
+      extensions: [isDark ? StatusColors.dark : StatusColors.light],
       textTheme: tt.copyWith(
         titleLarge: tt.titleLarge?.copyWith(
           fontSize: 20,

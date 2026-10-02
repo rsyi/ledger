@@ -640,6 +640,36 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     coach/{goals,routine,metrics,PROMPT}.md` — goals: CUT active;
     routine.md is a DEPRECATED readable fallback (program.yaml `routine:`
     is authoritative; templates retired 2026-09-30).
+- **Whoop activity layer (2026-10-01, Part 1; spec/plan in
+  docs/superpowers/{specs,plans}/2026-10-01-whoop-activity-layer*)**:
+  Whoop is the source of truth that a session HAPPENED (+ strain); Kaya
+  enriches climbing with grades when an export lands (~weekly, rate-
+  limited); manual logs carry set detail.
+  - LOCAL TIME FIX: whoop_api.dart transforms use each record's
+    `timezone_offset` (`whoopOffset`/`_wall`) — the raw UTC date put
+    evening PT sessions on the next day. Recovery keys on its sleep_id's
+    local wake day. Recovery pull now unwinds stale days via
+    `deleted_dates` (`whoopStaleDays`, +2-day window margin, pending/
+    re-scoring sleeps excluded, empty-fetch guard); workout deletion diff
+    got the same +2-day margin (`whoopStaleWorkoutIds`).
+  - `lib/services/whoop_activity.dart` = THE classifier (kind climb/run/
+    lift/walk/other; stair/machine never climb), `isZone2Run`,
+    `isUnlogged` (cardio rows count), `climbDaysUnion` (Kaya day K folds
+    into a Whoop climb on K-1 — Kaya export date may be UTC),
+    `creditClimbItems`. MIRRORED by ledger-mcp `kindOf` — edit BOTH.
+  - Consumers: goals climbing = Whoop ∪ Kaya distinct days; new optional
+    `zone2_run` goal (dashboards.yaml, Whoop run ≥20 min, avg HR ≤75% of
+    meta user_max_hr) + generic `optional:` → `GoalStatus.optional`
+    ("Nice to have", never red); Today program card ticks the climb item
+    from Whoop ("strain N.N"); day synthesis ACTIVITY line (cache v4);
+    CoachBrain "Activity (Whoop, last 14 days)" section with [unlogged]
+    flags; MCP workouts_recent entries carry kind + avg_hr (deployed).
+  - program.yaml v15: cut Sunday morning = optional easy zone-2 run prose
+    (never planned; Program screen still shows Sunday "Rest" — daySummary
+    keys on keywords). daily_notes form hides sleep_hours/sleep_quality/
+    readiness (`editable: false`; Whoop owns them; data intact).
+  - USER ONE-TIME: Integrations → Whoop (sleep + recovery) ⋮ → Full
+    reconcile to re-date existing rows.
 - **Template retire — FULL (2026-09-30, Phase C; user-approved)**: the
   workout-template concept is gone everywhere. WHY: program.yaml v12+
   `routine:` (base week + phase_overrides) is the single source of the
@@ -775,6 +805,9 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
+- Whoop activity Part 2 (NOT designed yet): missed-exercise detection +
+  carryover/rescheduling into the following days; strain-based load
+  modulation. Separate spec.
 - Video-attach + AI RPE (2026-09-28): USER one-time GCP setup before
   the attach button goes live — console (ryi-data-entry): enable the
   "Google Photos Picker API"; add scope

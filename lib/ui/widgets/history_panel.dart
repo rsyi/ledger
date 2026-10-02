@@ -164,7 +164,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                       );
                     }
                     final scores = [
-                      for (final r in rows) _scoreRow(widget.view, r),
+                      for (final r in rows) scoreTopMetric(widget.view, r),
                     ];
                     final dayMaxes = _computeDayMaxScores(
                       rows: rows,
@@ -321,7 +321,7 @@ final _safeIdent = RegExp(r'^[A-Za-z_][A-Za-z_0-9]*$');
 ///   - the named measure doesn't exist or has no expr,
 ///   - evaluation throws (e.g. null operand),
 ///   - the rendered result isn't a number.
-double? _scoreRow(ViewSchema view, Record r) {
+double? scoreTopMetric(ViewSchema view, Record r) {
   final metricName = view.topMetric;
   if (metricName == null) return null;
   Measure? m;

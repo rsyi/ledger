@@ -12,6 +12,7 @@ import '../models/planned_entry.dart';
 import '../models/quickbooks_config.dart';
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
+import '../services/day_best.dart';
 import '../services/derive.dart';
 import '../services/qbo_push_store.dart';
 import '../services/qbo_service.dart';
@@ -2178,9 +2179,36 @@ class _CompletedSection extends StatelessWidget {
     this.readOnly = false,
   });
 
+  /// Keys of each exercise's best set in this day's logged rows — the
+  /// history panel's "day top" (top_metric score, e.g. e1rm), grouped by
+  /// the view's history dimension. Empty when the view declares neither.
+  Set<String> _bestKeys() {
+    if (view.topMetric == null) return const {};
+    String? groupField;
+    for (final d in view.dimensions) {
+      if (d.input?.history ?? false) {
+        groupField = d.name;
+        break;
+      }
+    }
+    if (groupField == null) return const {};
+    final groups = <String?>[];
+    final scores = <double?>[];
+    for (final it in items) {
+      final row = it.isBatch ? null : it.logged;
+      final g = row?[groupField]?.toString().trim().toLowerCase();
+      groups.add(g == null || g.isEmpty ? null : g);
+      scores.add(row == null ? null : scoreTopMetric(view, row));
+    }
+    return {
+      for (final i in bestIndicesPerGroup(groups, scores)) items[i].keyString,
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final best = _bestKeys();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2207,6 +2235,7 @@ class _CompletedSection extends StatelessWidget {
             item: item,
             selected: selectedKeys.contains(item.keyString),
             expanded: expandedKeys.contains(item.keyString),
+            isBest: best.contains(item.keyString),
             readOnly: readOnly,
             onTap: () => onTap(item),
             onEdit: () => onEdit(item),
@@ -2238,6 +2267,10 @@ class _CompactLoggedTile extends StatelessWidget {
   final bool selected;
   final bool expanded;
 
+  /// The day's best set for its exercise — tinted + bold like the
+  /// history panel's day-top row.
+  final bool isBest;
+
   /// When true, swipe-to-delete is hidden and the Edit/Move panel is
   /// suppressed. Long-press still does nothing because onLongPress is a
   /// no-op at that point.
@@ -2258,6 +2291,7 @@ class _CompactLoggedTile extends StatelessWidget {
     required this.item,
     required this.selected,
     required this.expanded,
+    this.isBest = false,
     required this.onTap,
     required this.onEdit,
     required this.onMove,
@@ -2303,7 +2337,7 @@ class _CompactLoggedTile extends StatelessWidget {
             ? scheme.primaryContainer.withValues(alpha: 0.4)
             : (expanded
                 ? scheme.surfaceContainerHighest
-                : null),
+                : (isBest ? scheme.primaryContainer : null)),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         child: Row(
           children: [
@@ -2323,11 +2357,22 @@ class _CompactLoggedTile extends StatelessWidget {
                 text: TextSpan(
                   style: DefaultTextStyle.of(context).style,
                   children: [
+                    if (isBest)
+                      WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 3),
+                          child: Icon(Icons.bolt,
+                              size: 14, color: scheme.primary),
+                        ),
+                      ),
                     TextSpan(
                       text: title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
-                        fontWeight: FontWeight.w500,
+                        fontWeight:
+                            isBest ? FontWeight.w700 : FontWeight.w500,
+                        color: isBest ? scheme.onPrimaryContainer : null,
                       ),
                     ),
                     if (subtitle != null)
@@ -2335,7 +2380,9 @@ class _CompactLoggedTile extends StatelessWidget {
                         text: '  $subtitle',
                         style: TextStyle(
                           fontSize: 13,
-                          color: scheme.onSurfaceVariant,
+                          color: isBest
+                              ? scheme.onPrimaryContainer
+                              : scheme.onSurfaceVariant,
                         ),
                       ),
                   ],

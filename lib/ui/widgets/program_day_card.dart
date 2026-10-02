@@ -227,9 +227,12 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       widget.programMovesView != null && widget.programMovesRepo != null;
 
   /// Bottom sheet of the week's days (Mon–Sun of [anyDay]); the
-  /// [current] day is disabled. Returns the picked day or null.
+  /// [current] day and days before today are disabled (a missed item
+  /// moved into the past is immediately missed again) — except [home],
+  /// which stays pickable when the item lives elsewhere (= back home).
+  /// Returns the picked day or null.
   Future<DateTime?> _pickDay(BuildContext context, String itemName,
-      DateTime anyDay, DateTime current, _DayData data) {
+      DateTime anyDay, DateTime current, DateTime home, _DayData data) {
     final mon = mondayOf(anyDay);
     final today = dayOnly(widget.now());
     return showModalBottomSheet<DateTime>(
@@ -255,9 +258,12 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                       .where((e) => !e.isGhost)
                       .length;
                   final isCurrent = d == current;
+                  final backHome = d == home && !isCurrent;
+                  final past = d.isBefore(today) && !backHome;
+                  final enabled = !isCurrent && !past;
                   return ListTile(
                     dense: true,
-                    enabled: !isCurrent,
+                    enabled: enabled,
                     title: Text(
                         '${_dayLabel(d)}${d == today ? ' · today' : ''}',
                         style: d == today
@@ -266,12 +272,16 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                     subtitle: Text(
                       isCurrent
                           ? 'current day'
-                          : live == 0
+                          : backHome
+                              ? 'back home (program day)'
+                              : past
+                                  ? 'past'
+                                  : live == 0
                               ? 'rest'
                               : '$live item${live == 1 ? '' : 's'}',
                       style: TextStyle(color: muted),
                     ),
-                    onTap: isCurrent ? null : () => Navigator.pop(ctx, d),
+                    onTap: enabled ? () => Navigator.pop(ctx, d) : null,
                   );
                 }(),
             ],
@@ -290,7 +300,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     final view = widget.programMovesView;
     final repo = widget.programMovesRepo;
     if (view == null || repo == null) return;
-    final to = await _pickDay(context, item.name, home, current, data);
+    final to = await _pickDay(context, item.name, home, current, home, data);
     if (to == null) return;
     final move = ProgramMove(
       id: const Uuid().v4(),
@@ -304,11 +314,24 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     await _write(() => repo.create(view, move.toRecord()));
   }
 
+  /// Sends the item home: writes a `to == from` "back home" row (latest
+  /// per key wins → no active move). Deleting only the latest row would
+  /// re-activate an OLDER move of the same item instead.
   Future<void> _undoMove(ProgramMove move) async {
     final view = widget.programMovesView;
     final repo = widget.programMovesRepo;
     if (view == null || repo == null) return;
-    await _write(() => repo.delete(view, <String, Object?>{'id': move.id}));
+    final back = ProgramMove(
+      id: const Uuid().v4(),
+      to: move.from,
+      from: move.from,
+      item: move.item,
+      period: move.period,
+      source: 'manual',
+      createdAt: DateTime.now(),
+      note: 'back home',
+    );
+    await _write(() => repo.create(view, back.toRecord()));
   }
 
   Future<void> _write(Future<Object?> Function() op) async {
@@ -427,17 +450,23 @@ class ProgramDayCardState extends State<ProgramDayCard> {
           onTap: widget.strengthView == null
               ? null
               : () => _showExerciseInfo(context, e.item),
-          menu: e.isGhost || !_canMove
+          menu: !_canMove
               ? null
-              : _RowMenu(
-                  onMove: () => _moveItem(context, data,
-                      item: e.item,
-                      home: e.home,
-                      current: dayOnly(widget.date)),
-                  onUndo: e.movedFrom == null || e.move == null
+              : e.isGhost
+                  // Moved-out origin: undo from here too (no Move to… —
+                  // the item lives on its target day).
+                  ? (e.move == null
                       ? null
-                      : () => _undoMove(e.move!),
-                ),
+                      : _RowMenu(onUndo: () => _undoMove(e.move!)))
+                  : _RowMenu(
+                      onMove: () => _moveItem(context, data,
+                          item: e.item,
+                          home: e.home,
+                          current: dayOnly(widget.date)),
+                      onUndo: e.movedFrom == null || e.move == null
+                          ? null
+                          : () => _undoMove(e.move!),
+                    ),
         ),
     ];
   }
@@ -583,9 +612,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
 }
 
 class _RowMenu {
-  final VoidCallback onMove;
+  final VoidCallback? onMove;
   final VoidCallback? onUndo;
-  const _RowMenu({required this.onMove, this.onUndo});
+  const _RowMenu({this.onMove, this.onUndo});
 }
 
 class _ExerciseRow extends StatelessWidget {
@@ -593,7 +622,8 @@ class _ExerciseRow extends StatelessWidget {
   final bool showCheck;
   final VoidCallback? onTap;
 
-  /// Ghost (moved-out origin): muted, "→ Fri", no checkbox, no menu.
+  /// Ghost (moved-out origin): muted, "→ Fri", no checkbox; its menu
+  /// only offers Undo move.
   final DateTime? movedTo;
 
   /// Moved-in: a small "from Wed" chip.
@@ -703,11 +733,13 @@ class _ExerciseRow extends StatelessWidget {
                   iconSize: 18,
                   icon: Icon(Icons.more_vert, size: 18, color: muted),
                   onSelected: (v) {
-                    if (v == 'move') menu!.onMove();
+                    if (v == 'move') menu!.onMove?.call();
                     if (v == 'undo') menu!.onUndo?.call();
                   },
                   itemBuilder: (_) => [
-                    const PopupMenuItem(value: 'move', child: Text('Move to…')),
+                    if (menu!.onMove != null)
+                      const PopupMenuItem(
+                          value: 'move', child: Text('Move to…')),
                     if (menu!.onUndo != null)
                       const PopupMenuItem(
                           value: 'undo', child: Text('Undo move')),

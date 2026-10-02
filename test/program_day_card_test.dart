@@ -157,8 +157,8 @@ void main() {
     await pump(tester, date: wed, moves: _FakeRepo([benchMove()]));
     expect(find.text('Bench heavy'), findsOneWidget);
     expect(find.text('→ Fri'), findsOneWidget);
-    // Ghost has no menu and isn't counted (Wed: 4 live of 5).
-    expect(menuOf('Bench heavy'), findsNothing);
+    // Ghost isn't counted (Wed: 4 live of 5); its menu is Undo-only
+    // (covered below).
     expect(find.text('0 / 4 done'), findsOneWidget);
     // Not today → no missed section.
     expect(find.text('MISSED THIS WEEK'), findsNothing);
@@ -223,7 +223,9 @@ void main() {
     expect(find.text('→ Sat'), findsOneWidget);
   });
 
-  testWidgets('Undo move deletes the move row', (tester) async {
+  testWidgets('Undo move writes a back-home row (latest-wins cancel)', (
+    tester,
+  ) async {
     if (!hasFitness) return;
     final moves = _FakeRepo([benchMove()]);
     await pump(tester, date: fri, moves: moves);
@@ -231,11 +233,85 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Undo move'));
     await tester.pumpAndSettle();
-    expect(moves.deleted, [
-      {'id': 'm1'},
-    ]);
+    expect(moves.deleted, isEmpty);
+    final back = ProgramMove.fromRecord(moves.created.single)!;
+    expect(back.item, 'Bench heavy');
+    expect(back.from, wed);
+    expect(back.to, wed);
     expect(find.text('Bench heavy'), findsNothing);
     expect(find.text('from Wed'), findsNothing);
+  });
+
+  testWidgets('Undo move with an OLDER move row still sends it home', (
+    tester,
+  ) async {
+    if (!hasFitness) return;
+    final older = ProgramMove(
+      id: 'm0',
+      to: DateTime(2026, 10, 1),
+      from: wed,
+      item: 'Bench heavy',
+      period: 'AM',
+      source: 'manual',
+      createdAt: DateTime(2026, 9, 30, 20),
+    ).toRecord();
+    final moves = _FakeRepo([older, benchMove()]);
+    await pump(tester, date: fri, moves: moves);
+    await tester.tap(menuOf('Bench heavy'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Undo move'));
+    await tester.pumpAndSettle();
+    final all = [
+      for (final r in [...moves.rows, ...moves.created])
+        ProgramMove.fromRecord(r)!,
+    ];
+    expect(activeMoves(all, DateTime(2026, 9, 28)), isEmpty,
+        reason: 'home, not back to the older Thu move');
+  });
+
+  testWidgets('ghost (moved-out) row: menu with Undo move only', (
+    tester,
+  ) async {
+    if (!hasFitness) return;
+    final moves = _FakeRepo([benchMove()]);
+    await pump(tester, date: wed, moves: moves);
+    expect(find.text('→ Fri'), findsOneWidget);
+    await tester.tap(menuOf('Bench heavy'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(PopupMenuItem<String>, 'Move to…'),
+        findsNothing);
+    await tester.tap(find.text('Undo move'));
+    await tester.pumpAndSettle();
+    final back = ProgramMove.fromRecord(moves.created.single)!;
+    expect(back.from, wed);
+    expect(back.to, wed);
+    expect(find.text('→ Fri'), findsNothing);
+  });
+
+  testWidgets('Move to… picker: past days disabled; home stays pickable '
+      '(moving back home)', (tester) async {
+    if (!hasFitness) return;
+    final moves = _FakeRepo([benchMove()]);
+    await pump(tester, date: fri, moves: moves);
+    // Bench heavy lives on Fri (today), home Wed.
+    await tester.tap(menuOf('Bench heavy'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(PopupMenuItem<String>, 'Move to…'));
+    await tester.pumpAndSettle();
+    ListTile tile(String label) => tester.widget<ListTile>(
+        find.ancestor(of: find.text(label), matching: find.byType(ListTile)));
+    expect(tile('Mon 9/28').enabled, isFalse);
+    expect(tile('Thu 10/1').enabled, isFalse);
+    expect(tile('Wed 9/30').enabled, isTrue, reason: 'home = back home');
+    expect(tile('Sat 10/3').enabled, isTrue);
+    await tester.tap(find.text('Thu 10/1'));
+    await tester.pumpAndSettle();
+    expect(moves.created, isEmpty);
+    await tester.tap(find.text('Wed 9/30'));
+    await tester.pumpAndSettle();
+    final back = ProgramMove.fromRecord(moves.created.single)!;
+    expect(back.to, wed);
+    expect(back.from, wed);
   });
 
   testWidgets('own-day items have Move to… but no Undo', (tester) async {

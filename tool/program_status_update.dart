@@ -8,6 +8,10 @@ import 'package:airledger/services/forecast_tab.dart';
 import 'package:airledger/services/nutrition_model.dart';
 import 'package:airledger/services/program_current.dart';
 import 'package:airledger/services/program_metrics.dart';
+import 'package:airledger/services/projection_replay.dart';
+import 'package:airledger/services/projection_snapshot.dart';
+import 'package:airledger/services/projection_tracking.dart'
+    show BodyFatReading;
 import 'package:airledger/services/recomp_review.dart';
 import 'package:airledger/services/week_drivers.dart'
     show TopSetReading, parseExerciseMuscleMap;
@@ -51,6 +55,16 @@ import 'package:yaml/yaml.dart';
 ///     # into the Sunday briefing prompt.
 ///   --weekly  # force the weekly_review tab write on a non-Sunday
 ///
+/// Projection snapshots (phase-projections spec 2026-10-02): the
+/// `projection_snapshots` tab is APPEND-ONLY. At a block's first
+/// nightly run (no snapshot for the current block yet) the writer
+/// freezes that block's projection — anchored at the block's START day
+/// with only the data available then (projection_replay.dart) — and
+/// appends it once; existing rows are never rewritten. Re-running is
+/// idempotent (the block already has a snapshot → skip).
+///   --only-projection-snapshots  # compute everything, write ONLY the
+///                                # snapshot append (backfill / repair)
+///
 /// Weekly review (recomp tracking spec 2026-09-27): full runs on
 /// SUNDAYS (or --weekly) also rewrite the `weekly_review` tab — one row
 /// per Mon-Sun week (last 8, newest first) with the generated markdown.
@@ -71,6 +85,7 @@ Future<void> main(List<String> args) async {
   final weeklyBrief = args.contains('--weekly-brief');
   final forceWeekly = args.contains('--weekly');
   final dryRun = args.contains('--dry-run') || args.contains('--dry');
+  final onlySnapshots = args.contains('--only-projection-snapshots');
 
   final config = readConfig();
   final api = await sheetsApi(config.keyPath);
@@ -147,8 +162,17 @@ Future<void> main(List<String> args) async {
 
   final wHead = headerIndex(weightTab);
   final weightRows = <WeightRow>[];
+  // Body-fat readings for the projection snapshots' BF anchor (first
+  // non-blank of withings → omron → caliper per row).
+  final bodyFatRows = <BodyFatReading>[];
   for (final r in weightTab.skip(1)) {
     final date = parseSheetDate(cell(r, wHead['date']));
+    if (date != null) {
+      final bf = double.tryParse(cell(r, wHead['body_fat_withing'])) ??
+          double.tryParse(cell(r, wHead['body_fat_omron'])) ??
+          double.tryParse(cell(r, wHead['body_fat_caliper']));
+      if (bf != null) bodyFatRows.add(BodyFatReading(date, bf));
+    }
     final lbs = double.tryParse(cell(r, wHead['weight_lbs']));
     if (date == null || lbs == null) {
       anomaly('weight: missing date or weight_lbs');
@@ -753,6 +777,8 @@ Future<void> main(List<String> args) async {
   // -------------------------------------------------------------------------
   List<List<Object?>>? forecastRows;
   List<List<Object?>>? forecastMetaRows;
+  // Tonight's recalibration state, for a non-replay projection snapshot.
+  ForecastMeta? forecastMetaTonight;
   try {
     final s2Blocks = sim2BlocksFromProgramDocs(programYaml);
     if (s2Blocks == null) {
@@ -840,6 +866,7 @@ Future<void> main(List<String> args) async {
         events: merged.events,
       );
       forecastMetaRows = metaOut.toRows();
+      forecastMetaTonight = metaOut;
 
       final params = Sim2Params.fitted()
         ..a *= merged.aScale
@@ -889,6 +916,55 @@ Future<void> main(List<String> args) async {
   }
 
   // -------------------------------------------------------------------------
+  // Projection snapshot (APPEND-ONLY): the current block's frozen
+  // projection, written ONCE — at its first nightly run, or as a replay
+  // backfill when the block started before this feature (block 0).
+  // Anchored at the block's start day with only the data available
+  // then; never touches the forecast / forecast_meta writes above.
+  // -------------------------------------------------------------------------
+  final snapshotValues = await tab(projectionSnapshotsTabName);
+  List<List<Object?>>? snapshotRows;
+  try {
+    final calendar = sim2BlocksFromProgramDocs(programYaml);
+    final now = DateTime.now();
+    final currentN =
+        calendar == null ? null : sim2CurrentBlockN(calendar, now);
+    final existing = parseProjectionSnapshots(snapshotValues);
+    if (calendar == null || currentN == null) {
+      print('projection_snapshots: skipped (no block calendar / before '
+          'the first block)');
+    } else if (!snapshotNeededForBlock(existing, currentN)) {
+      print('projection_snapshots: block $currentN already frozen '
+          '(${firstSnapshotForBlock(existing, currentN)!.madeAt.toIso8601String()})'
+          ' — nothing to append');
+    } else {
+      final snap = snapshotAtBlockStart(
+        blocks: calendar,
+        blockN: currentN,
+        madeAt: now.toUtc(),
+        programVersion:
+            '${currentVersion(programYaml)?['version'] ?? 'unknown'}',
+        weighIns: weightRows,
+        bodyFat: bodyFatRows,
+        strength: strengthRows,
+        climbs: climbsFromTab(climbTab),
+        meals: mealRows,
+        workingMax: [...existingWm, ...seeds],
+        aScale: forecastMetaTonight?.aScale ?? 1,
+        bScale: forecastMetaTonight?.bScale ?? 1,
+        maintenanceOffsetKcal:
+            forecastMetaTonight?.maintenanceOffsetKcal ?? 0,
+      );
+      if (snap != null) {
+        snapshotRows = snap.toRows();
+        _printSnapshot(snap);
+      }
+    }
+  } catch (e) {
+    print('projection_snapshots: skipped ($e)');
+  }
+
+  // -------------------------------------------------------------------------
   // Weekly review rows (Sundays or --weekly): last 8 Mon-Sun weeks,
   // newest first, generated against the full history + ALL readings
   // (tab + this run's new ones).
@@ -928,7 +1004,30 @@ Future<void> main(List<String> args) async {
     if (forecastMetaRows != null) {
       print('forecast_meta: would write ${forecastMetaRows.length} rows');
     }
+    if (snapshotRows != null) {
+      print('projection_snapshots: would APPEND ${snapshotRows.length} rows '
+          '(below the existing ${snapshotValues.length})');
+    }
     _printCurrentWeekRow(filteredWeeks, flagsByWeek, psHeaders);
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // APPEND-ONLY write projection_snapshots (never rewritten)
+  // -------------------------------------------------------------------------
+  if (snapshotRows != null) {
+    await _appendRows(
+      api: api,
+      spreadsheetId: config.spreadsheetId,
+      tabName: projectionSnapshotsTabName,
+      headers: projectionSnapshotHeaders,
+      existingRowCount: snapshotValues.length,
+      rows: snapshotRows,
+    );
+    print('appended ${snapshotRows.length} projection_snapshots rows');
+  }
+  if (onlySnapshots) {
+    print('--only-projection-snapshots: other tabs left untouched');
     return;
   }
 
@@ -1035,6 +1134,27 @@ Future<void> main(List<String> args) async {
   // Report
   // -------------------------------------------------------------------------
   _printCurrentWeekRow(filteredWeeks, flagsByWeek, psHeaders);
+}
+
+// ---------------------------------------------------------------------------
+// Projection snapshot summary (dry-run / write log)
+// ---------------------------------------------------------------------------
+
+void _printSnapshot(ProjectionSnapshot s) {
+  final i = s.inputs;
+  print('projection_snapshots: block ${s.block} (${s.emphasis}) '
+      '${i['block_start']} → ${i['block_end']}, program v${s.programVersion}, '
+      'replay ${i['replay']}, r ${i['r_lb_wk']} lb/wk (${i['r_source']})');
+  print('  anchors ${jsonEncode(i['anchors'])}');
+  print('  nutrition ${jsonEncode(i['nutrition'])}');
+  print('  training_maxes ${jsonEncode(i['training_maxes'])}');
+  for (final e in s.metrics.entries) {
+    final a = e.value.first, z = e.value.last;
+    String f(double v) => v.toStringAsFixed(1);
+    print('  ${e.key.padRight(15)} ${f(a.projected)} '
+        '[${f(a.lo)}–${f(a.hi)}] → ${f(z.projected)} '
+        '[${f(z.lo)}–${f(z.hi)}] at ${ymd(z.weekStart)}');
+  }
 }
 
 // ---------------------------------------------------------------------------

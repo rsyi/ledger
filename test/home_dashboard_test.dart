@@ -14,6 +14,7 @@ import 'package:airledger/services/wilks.dart'
     show weeklyWilksSeries, wilksWeekDecomposition;
 import 'package:airledger/services/wm_store.dart';
 import 'package:airledger/services/wm_tabs.dart';
+import 'package:airledger/ui/design/design.dart';
 import 'package:airledger/ui/home_dashboard.dart';
 import 'package:airledger/ui/widgets/skeleton.dart';
 
@@ -665,10 +666,10 @@ phases:
     // The decomposition: actual weights, dated carry, per-lift points,
     // and the exact sum line matching the stat.
     final decomposition = [
-      'squat 295 → ${parts[0].displayPoints.toStringAsFixed(1)}w',
-      'bench 225 → ${parts[1].displayPoints.toStringAsFixed(1)}w',
+      'squat 295 → ${parts[0].displayPoints.toStringAsFixed(1)} points',
+      'bench 225 → ${parts[1].displayPoints.toStringAsFixed(1)} points',
       'deadlift 315 (carried from Sep 14) → '
-          '${parts[2].displayPoints.toStringAsFixed(1)}w',
+          '${parts[2].displayPoints.toStringAsFixed(1)} points',
       '= $stat',
     ].join('\n');
     expect(find.text(decomposition), findsOneWidget);
@@ -1436,5 +1437,187 @@ phases:
     // The recomp rows REPLACE the driver checklist (its 4x4 pill would
     // say "4x4 0/1"; the CARDIO row carries that content instead).
     expect(find.text('4x4'), findsNothing);
+  });
+
+  // -------------------------------------------------------------------------
+  // PROGRESS tab (progressOnly) — UI redesign 2026-10-02: shared design
+  // system (SectionHeader / AppCard / ExerciseRow / StatusChip), plain
+  // language, per-lift rows instead of the dense two-column table.
+  // -------------------------------------------------------------------------
+
+  group('Progress tab (progressOnly)', () {
+    const progressDashYaml = '''
+$dashYamlWithPhases
+last_bulk:
+  start: "2025-02-05"
+  end: "2025-10-06"
+  label: "2025 bulk"
+''';
+    Future<String?> progressFetcher(String path) async => switch (path) {
+          'coach/phase.yaml' => phaseYaml,
+          'coach/program.yaml' => programYaml,
+          'app/dashboards.yaml' => progressDashYaml,
+          _ => null,
+        };
+
+    Future<void> pumpProgress(
+      WidgetTester tester, {
+      VoidCallback? onOpenProgram,
+      Size? size,
+    }) async {
+      ProgramProvider.clearCache();
+      HomeDashboardState.clearBestWeightCache();
+      DomainConfigProvider.clearCache();
+      if (size != null) {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
+      await tester.pumpWidget(_wrap(HomeDashboard(
+        progressOnly: true,
+        provider: ProgramProvider(progressFetcher),
+        dashboards: DomainConfigProvider(progressFetcher),
+        weightView: _weightView,
+        weightRepo: _FakeStatusRepo([
+          for (var i = 0; i < 28; i++)
+            {
+              'date': DateTime(2026, 8, 27).add(Duration(days: i)),
+              'weight_lbs': 165.0 - i * (0.75 / 7),
+            },
+          {'date': DateTime(2025, 6, 5), 'weight_lbs': 184.0},
+        ]),
+        strengthView: _strengthView,
+        strengthRepo: _FakeStatusRepo([
+          // squat: recent e1RM 310 (300×1), bulk best 315 → −5 (holding)
+          {
+            'date': DateTime(2026, 9, 21),
+            'exercise': 'Barbell Squat',
+            'weight': 300,
+            'reps': 1,
+          },
+          {
+            'date': DateTime(2025, 6, 10),
+            'exercise': 'Barbell Squat',
+            'weight': 315,
+            'reps': 2,
+          },
+          // bench: recent e1RM 207 (200×1), bulk best 245 → −38 (>10%)
+          {
+            'date': DateTime(2026, 9, 19),
+            'exercise': 'Flat Barbell Bench Press',
+            'weight': 200,
+            'reps': 1,
+          },
+          {
+            'date': DateTime(2025, 6, 12),
+            'exercise': 'Flat Barbell Bench Press',
+            'weight': 245,
+            'reps': 1,
+          },
+        ]),
+        onOpenProgram: onOpenProgram,
+        today: DateTime(2026, 9, 23),
+      )));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('phase section: SectionHeader + one plain meta line + '
+        'verdict rows with StatusChips; no input strip', (tester) async {
+      await pumpProgress(tester);
+      expect(find.text('CUT'), findsOneWidget); // SectionHeader upper-cases
+      expect(
+        find.text('block 0 · week 1 · day 3 of 84 · 163 → 154 lb by Dec 13'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Weight', findRichText: true), findsWidgets);
+      expect(find.text('On track'), findsOneWidget); // weight on pace
+      expect(find.textContaining('lb/week'), findsOneWidget);
+      expect(find.textContaining('target -0.75'), findsOneWidget);
+      expect(find.byType(StatusChip), findsNWidgets(2));
+      expect(find.byType(AppCard), findsNWidgets(2)); // phase + lifts
+      // Outputs only: the input strip and the legacy cards are gone.
+      expect(find.text('THIS WEEK'), findsNothing);
+      expect(find.text('BODY'), findsNothing);
+      expect(find.text('ON TRACK'), findsNothing); // old shouting pill
+    });
+
+    testWidgets('lifts: one row per lift — e1RM, status-coloured change vs '
+        'last bulk, age in words', (tester) async {
+      await pumpProgress(tester);
+      expect(find.text('LIFTS'), findsOneWidget);
+      expect(find.text('e1RM vs last bulk'), findsOneWidget);
+      for (final n in ['Squat', 'Bench', 'Deadlift', 'Overhead press']) {
+        expect(find.text(n), findsOneWidget, reason: n);
+      }
+      expect(find.text('310 lb'), findsOneWidget);
+      expect(find.text('207 lb'), findsOneWidget);
+      expect(find.text("2 days ago · last bulk 315 (Jun '25)"), findsOneWidget);
+      expect(find.text("4 days ago · last bulk 245 (Jun '25)"), findsOneWidget);
+      expect(
+        find.text('no recent work · no last-bulk best'),
+        findsNWidgets(2), // deadlift + press
+      );
+      // Change figures carry the status colour: squat within 5% → done,
+      // bench > 10% below → problem.
+      const colors = StatusColors.light;
+      expect(tester.widget<Text>(find.text('−5 lb')).style?.color,
+          colors.done);
+      expect(tester.widget<Text>(find.text('−38 lb')).style?.color,
+          colors.problem);
+    });
+
+    testWidgets('ban-list: no cryptic compressions on the surface',
+        (tester) async {
+      await pumpProgress(tester);
+      for (final banned in [
+        RegExp(r'\d\.\dw\b'), // per-lift Wilks "128.2w"
+        RegExp(r'\bwk\b'),
+        RegExp(r'\b\d+d\b'), // "4d"
+        RegExp('RPE-adj'),
+        RegExp('bulk: actual'),
+      ]) {
+        expect(find.textContaining(banned, findRichText: true), findsNothing,
+            reason: banned.pattern);
+      }
+    });
+
+    testWidgets('lifts sheet: per-lift numbers in words incl. Wilks points '
+        '+ all-time best, RPE-adj explained, Open Program', (tester) async {
+      var opened = false;
+      await pumpProgress(tester, onOpenProgram: () => opened = true);
+      await tester.tap(find.text('Squat'));
+      await tester.pumpAndSettle();
+      expect(find.byType(DetailSheet), findsOneWidget);
+      expect(find.text('Lifts'), findsOneWidget);
+      expect(find.textContaining('Wilks points', findRichText: true),
+          findsWidgets);
+      expect(find.textContaining("315 lb · Jun '25", findRichText: true),
+          findsNWidgets(2)); // last bulk best + all-time best
+      expect(find.textContaining('reps in reserve = 10 − RPE'),
+          findsOneWidget);
+      expect(find.textContaining('2025 bulk (Feb 5 2025 – Oct 6 2025)'),
+          findsOneWidget);
+      await tester.tap(find.text('Open Program'));
+      await tester.pumpAndSettle();
+      expect(opened, isTrue);
+    });
+
+    testWidgets('weight row taps through to Program; info icon opens the '
+        'lifts sheet', (tester) async {
+      var opened = false;
+      await pumpProgress(tester, onOpenProgram: () => opened = true);
+      await tester.tap(find.textContaining('Weight', findRichText: true).first);
+      await tester.pumpAndSettle();
+      expect(opened, isTrue);
+      await tester.tap(find.byTooltip('How these are measured'));
+      await tester.pumpAndSettle();
+      expect(find.byType(DetailSheet), findsOneWidget);
+    });
+
+    testWidgets('no overflow at 360x690', (tester) async {
+      await pumpProgress(tester, size: const Size(360, 690));
+      expect(find.text('CUT'), findsOneWidget);
+    });
   });
 }

@@ -1,5 +1,17 @@
 /// Home-screen progress synthesis — PHASE hero + supporting cards.
 ///
+/// PROGRESS TAB (UI redesign 2026-10-02, `progressOnly`): rendered on the
+/// shared design system (ui/design/) — the phase as a SectionHeader + one
+/// plain meta line over ONE AppCard of verdict rows (ExerciseRow +
+/// StatusChip + a status-coloured sparkline; tap model unchanged), then
+/// a LIFTS section of per-lift rows (recent e1RM, change vs the last
+/// bulk's best — green within 5%, amber 5-10% below, red beyond — and
+/// the number's age in words). Per-lift Wilks points (the old "128.2w"
+/// tags), all-time bests and every explainer moved to the Lifts detail
+/// sheet (showDetailSheet). The sections below describe the legacy /
+/// non-progressOnly layout, which is unchanged apart from the shared
+/// sheet chrome.
+///
 /// PHASE HERO (top, full width): the declared phase's eigenvectors, per
 /// `app/dashboards.yaml` `phases:` (services/phase_eigenvectors.dart).
 /// coach/phase.yaml's current value selects the set — cut: weight_loss
@@ -149,7 +161,10 @@ import '../services/wilks.dart'
         wilksWeekDecomposition;
 import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
+import '../services/goals_service.dart' show liftDisplayName;
 import 'app_text.dart';
+import 'design/design.dart' hide AppText;
+import 'design/tokens.dart' as ds show AppText;
 import 'widgets/skeleton.dart';
 
 class HomeDashboard extends StatefulWidget {
@@ -1198,6 +1213,28 @@ class HomeDashboardState extends State<HomeDashboard> {
         widget.strengthRepo == null) {
       return const SizedBox.shrink();
     }
+    // PROGRESS tab (UI redesign 2026-10-02): the shared design system —
+    // SectionHeaders, one AppCard per section, ExerciseRow rows,
+    // StatusChip verdicts. Only a config without `phases:` falls back to
+    // the legacy grid.
+    if (widget.progressOnly) {
+      return FutureBuilder<PhaseHeroData?>(
+        future: _hero,
+        builder: (context, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return _progressLayout(context, null);
+          }
+          final hero = snap.data;
+          if (hero == null) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+              child: _legacyGrid(context),
+            );
+          }
+          return _progressLayout(context, hero);
+        },
+      );
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
       child: FutureBuilder<PhaseHeroData?>(
@@ -1262,6 +1299,298 @@ class HomeDashboardState extends State<HomeDashboard> {
     );
   }
 
+  // -------------------------------------------------------------------------
+  // PROGRESS tab layout (UI redesign 2026-10-02)
+  // -------------------------------------------------------------------------
+
+  /// Outputs only: the phase section (header + one meta line + a card of
+  /// verdict rows) and the per-lift Lifts section. [hero] null = still
+  /// loading (skeleton phase card; the lifts load independently).
+  Widget _progressLayout(BuildContext context, PhaseHeroData? hero) {
+    const gutter = EdgeInsets.symmetric(horizontal: AppSpace.gutter);
+    final meta = hero == null ? null : progressPhaseLine(hero);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionHeader(label: hero?.phaseTitle ?? 'Phase'),
+        if (meta != null && meta.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.gutter,
+              0,
+              AppSpace.gutter,
+              8,
+            ),
+            child: Text(meta, style: ds.AppText.meta(context)),
+          ),
+        if (hero == null)
+          const AppCard(margin: gutter, child: CardSkeleton.card())
+        else
+          AppCard(
+            margin: gutter,
+            padding: EdgeInsets.zero,
+            child: _dividedRows(context, [
+              for (final row in hero.rows)
+                ProgressVerdictRow(row: row, onTap: () => _onHeroRowTap(row)),
+            ]),
+          ),
+        _progressLifts(context),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  /// Rows inside one card, hairline-separated (the Week tab's pattern).
+  Widget _dividedRows(BuildContext context, List<Widget> rows) {
+    final divider = Divider(
+      height: 1,
+      thickness: 1,
+      indent: AppSpace.gutter + AppSpace.lead + AppSpace.leadGap,
+      color: Theme.of(context).colorScheme.outlineVariant.withValues(
+        alpha: 0.4,
+      ),
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < rows.length; i++) ...[
+          if (i > 0) divider,
+          rows[i],
+        ],
+      ],
+    );
+  }
+
+  /// LIFTS: one row per main lift — recent e1RM, the change vs the last
+  /// bulk's best (status-coloured), how old the number is. Per-lift
+  /// Wilks points and all-time bests live in the detail sheet.
+  Widget _progressLifts(BuildContext context) {
+    const gutter = EdgeInsets.symmetric(horizontal: AppSpace.gutter);
+    return FutureBuilder<_StrengthData?>(
+      future: _strength,
+      builder: (context, snap) {
+        final d = snap.data;
+        final hasBulk = d?.bulkWindow != null;
+        final header = SectionHeader(
+          label: 'Lifts',
+          count: snap.connectionState != ConnectionState.done
+              ? null
+              : (hasBulk ? 'e1RM vs last bulk' : 'e1RM'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.info_outline, size: 20),
+              tooltip: 'How these are measured',
+              visualDensity: VisualDensity.compact,
+              onPressed: _openLiftsSheet,
+            ),
+          ],
+        );
+        final Widget body;
+        if (snap.connectionState != ConnectionState.done) {
+          body = const AppCard(
+            margin: gutter,
+            child: CardSkeleton(
+              bars: [
+                (width: 160, height: 16),
+                (width: 160, height: 16),
+                (width: 160, height: 16),
+                (width: 160, height: 16),
+              ],
+            ),
+          );
+        } else if (d == null || d.isEmpty) {
+          body = AppCard(
+            margin: gutter,
+            onTap: _openLiftsSheet,
+            child: Text(
+              'No strength data yet',
+              style: ds.AppText.meta(context),
+            ),
+          );
+        } else {
+          body = AppCard(
+            margin: gutter,
+            padding: EdgeInsets.zero,
+            child: _dividedRows(context, [
+              for (final lift in synthesisLifts)
+                ProgressLiftRow(
+                  lift: lift,
+                  recent: d.recent[lift]?.value,
+                  recentDate: d.recent[lift]?.date,
+                  bulk: hasBulk ? d.lastBulk[lift]?.value : null,
+                  bulkDate: hasBulk ? d.lastBulk[lift]?.date : null,
+                  showBulk: hasBulk,
+                  today: _today,
+                  onTap: _openLiftsSheet,
+                ),
+            ]),
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [header, body],
+        );
+      },
+    );
+  }
+
+  /// The Lifts detail sheet: every number per lift in words (recent
+  /// e1RM, last-bulk best, all-time best, each with its Wilks points),
+  /// then how each is measured — RPE-adjusted e1RM, the bulk window,
+  /// Wilks points, the colour rule, where the working max went.
+  Future<void> _openLiftsSheet() async {
+    final d = await _strength;
+    if (!mounted) return;
+    final bw = d?.currentBwLbs;
+    final window = d?.bulkWindow;
+    final row = ds.AppText.row(context);
+    final meta = ds.AppText.meta(context);
+    final prose = row.copyWith(
+      fontWeight: FontWeight.w400,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+    String fig(_LiftValue v, String when) =>
+        '${fmtLb(v.value.roundToDouble())} lb · $when'
+        '${v.wilks == null ? '' : ' · ${v.wilks!.toStringAsFixed(1)} Wilks points'}';
+    Widget line(String label, String value) => Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(text: '$label  ', style: meta),
+            TextSpan(text: value, style: row.copyWith(fontSize: 13)),
+          ],
+        ),
+      ),
+    );
+    Widget section(String title, String text) => Padding(
+      padding: const EdgeInsets.only(top: AppSpace.sectionGap),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: row),
+          const SizedBox(height: 2),
+          Text(text, style: prose),
+        ],
+      ),
+    );
+    final lifts = <Widget>[
+      if (d != null && !d.isEmpty)
+        for (final lift in synthesisLifts)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(liftTitle(lift), style: row),
+                line(
+                  'Recent e1RM',
+                  d.recent[lift] == null
+                      ? '—'
+                      : fig(
+                          d.recent[lift]!,
+                          fmtAgoWords(d.recent[lift]!.date, _today),
+                        ),
+                ),
+                if (window != null)
+                  line(
+                    'Last bulk best',
+                    d.lastBulk[lift] == null
+                        ? '—'
+                        : fig(
+                            d.lastBulk[lift]!,
+                            fmtMonthTag(d.lastBulk[lift]!.date),
+                          ),
+                  ),
+                line(
+                  'All-time best',
+                  d.best[lift] == null
+                      ? '—'
+                      : fig(d.best[lift]!, fmtMonthTag(d.best[lift]!.date)),
+                ),
+              ],
+            ),
+          )
+      else
+        Text('No strength data yet.', style: prose),
+    ];
+    await showDetailSheet(
+      context: context,
+      title: 'Lifts',
+      subtitle: window == null
+          ? 'Your recent estimated max per lift'
+          : 'Your recent estimated max per lift vs your ${window.label}',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ...lifts,
+          const Divider(height: 8),
+          section(
+            'Recent e1RM (estimated 1-rep max)',
+            'The best estimated 1-rep max over the last 14 days of real '
+                'work, RPE-adjusted: RPE says how many reps you had left '
+                '(reps in reserve = 10 − RPE), and those count as reps — a '
+                '275×2 at RPE 8 scores like 275×4 (Epley, total reps capped '
+                'at 12). Because you don\'t train to failure, this reads '
+                'your strength better than the raw set. Sets without an RPE '
+                'score as-is. Deload weeks and easy sets under 75% effort '
+                'don\'t count; with no real work in the window it slides '
+                'back to your newest qualifying set — "4 days ago" says how '
+                'current it is.',
+          ),
+          if (window != null)
+            section(
+              'Last bulk best',
+              'The heaviest weight you ACTUALLY lifted per lift during the '
+                  '${window.label} '
+                  '(${DateFormat('MMM d yyyy').format(window.start)} – '
+                  '${DateFormat('MMM d yyyy').format(window.end)}) — the '
+                  'high-water mark the cut is defending. The window comes '
+                  'from dashboards.yaml `last_bulk` (start derived from the '
+                  'bodyweight trough; edit the dates there if it looks off).',
+            ),
+          section(
+            'Change vs last bulk',
+            'Recent e1RM minus the last bulk\'s best. Green: within 5% '
+                '(holding). Amber: 5–10% below. Red: more than 10% below. '
+                'It compares an ESTIMATE against a weight actually lifted, '
+                'so a recent e1RM can sit above a top you never lifted.',
+          ),
+          section(
+            'All-time best',
+            'The heaviest weight you\'ve ever actually lifted (any reps '
+                '≥ 1 — a 405×2 counts as 405; no estimates) over the full '
+                'strength history.',
+          ),
+          section(
+            'Wilks points',
+            'Each lift\'s share of a Wilks score — the weight scored '
+                'against bodyweight so lifts at different bodyweights '
+                'compare fairly. Recent numbers use your current '
+                'bodyweight'
+                '${bw == null ? '' : ' (${bw.toStringAsFixed(1)} lb)'}; '
+                'the bests use the bodyweight you carried the month they '
+                'were set.',
+          ),
+          section(
+            'Working max',
+            'Not shown here: it\'s the program\'s setting that session '
+                'percentages hang off, not a measured max. Confirm or '
+                'override it on the Program screen.',
+          ),
+        ],
+      ),
+      actions: [
+        if (widget.onOpenProgram != null)
+          DetailAction(
+            icon: Icons.arrow_forward,
+            label: 'Open Program',
+            onTap: widget.onOpenProgram!,
+          ),
+      ],
+    );
+  }
+
   /// Hero row taps: the Wilks rows (wilks_stability / strength_gain)
   /// open their detail sheet first — the weekly decomposition is the
   /// whole point of the tap (2026-09-25); everything else navigates
@@ -1298,50 +1627,23 @@ class HomeDashboardState extends State<HomeDashboard> {
     VoidCallback? onAction,
   }) async {
     if (!mounted) return;
-    await showModalBottomSheet<void>(
+    // Shared design-system sheet (UI redesign 2026-10-02): title, the
+    // explainer entries as the body, the onward action as a sheet row.
+    await showDetailSheet(
       context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: Theme.of(
-                  ctx,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 10),
-              Flexible(
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [for (final e in entries) _DetailTile(entry: e)],
-                  ),
-                ),
-              ),
-              if (actionLabel != null && onAction != null) ...[
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: FilledButton.tonalIcon(
-                    icon: const Icon(Icons.arrow_forward, size: 18),
-                    label: Text(actionLabel),
-                    onPressed: () {
-                      Navigator.of(ctx).pop();
-                      onAction();
-                    },
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
+      title: title,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [for (final e in entries) _DetailTile(entry: e)],
       ),
+      actions: [
+        if (actionLabel != null && onAction != null)
+          DetailAction(
+            icon: Icons.arrow_forward,
+            label: actionLabel,
+            onTap: onAction,
+          ),
+      ],
     );
   }
 
@@ -1531,7 +1833,7 @@ class HomeDashboardState extends State<HomeDashboard> {
     String liftLine(WilksLiftPart p) =>
         '${p.lift} ${fmtLb(p.weightLbs.roundToDouble())}'
         '${p.carriedFrom == null ? '' : ' (carried from ${DateFormat('MMM d').format(p.carriedFrom!)})'}'
-        ' → ${p.displayPoints.toStringAsFixed(1)}w';
+        ' → ${p.displayPoints.toStringAsFixed(1)} points';
     final nav = widget.onOpenStrengthDomain ?? widget.onOpenProgram;
     await _showDetailSheet(
       title: 'Strength — weekly Wilks',
@@ -1556,15 +1858,15 @@ class HomeDashboardState extends State<HomeDashboard> {
           ].join('\n'),
           explain:
               'The three lifts the stat sums — each line is the '
-              'lift\'s weight_kg × the WILKS-2020 coefficient at this '
+              'lift\'s weight in kg × the Wilks-2020 coefficient at this '
               'week\'s bodyweight. "carried from" = not trained this '
               'week. The lines sum to the stat exactly.',
         ),
         const _DetailEntry(
-          label: 'vs the STRENGTH card',
-          value: 'card: e1RM · this stat: actual',
+          label: 'vs the per-lift numbers',
+          value: 'lifts: e1RM · this stat: actual',
           explain:
-              'The STRENGTH card\'s per-lift numbers are 14-day best '
+              'The per-lift numbers (Lifts / STRENGTH) are 14-day best '
               'e1RM ESTIMATES (always ≥ actual) — they will not sum '
               'to this weekly actual-lift total.',
         ),
@@ -2928,9 +3230,12 @@ class _DetailTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    // Design-system roles (2026-10-02): label + value at the row role,
+    // the explainer as muted 14/400 prose (readability: 12sp meta read
+    // as fine print for paragraphs).
+    final row = ds.AppText.row(context);
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: AppSpace.sectionGap),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2938,18 +3243,14 @@ class _DetailTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: [
-              Text(
-                entry.label,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
-              ),
+              Text(entry.label, style: row),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   entry.value,
                   textAlign: TextAlign.right,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  style: row.copyWith(
+                    fontWeight: FontWeight.w400,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
@@ -2957,13 +3258,12 @@ class _DetailTile extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 2),
-          // Readability pass 2026-09-22: explainer copy at bodyMedium
-          // (14sp) — bodySmall read as fine print on the dark theme.
           Text(
             entry.explain,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            style: row.copyWith(
+              fontWeight: FontWeight.w400,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -3266,18 +3566,20 @@ class _Sparkline extends StatelessWidget {
   final double? reference;
   final double? floor;
   final Color color;
+  final Size size;
 
   const _Sparkline({
     required this.points,
     this.reference,
     this.floor,
     required this.color,
+    this.size = const Size(54, 24),
   });
 
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      size: const Size(54, 24),
+      size: size,
       painter: _SparklinePainter(
         points: points,
         reference: reference,
@@ -3549,6 +3851,219 @@ class _WeekOfNote extends StatelessWidget {
         style: AppText.tag(context)?.copyWith(
           color: Theme.of(context).colorScheme.tertiary,
           fontStyle: FontStyle.italic,
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PROGRESS tab rows (UI redesign 2026-10-02) — shared design system
+// ---------------------------------------------------------------------------
+
+/// Verdict → shared row status (green on track, amber drifting, red act).
+ItemStatus eigenItemStatus(EigenVerdict v) => switch (v) {
+  EigenVerdict.agree => ItemStatus.done,
+  EigenVerdict.drifting => ItemStatus.partial,
+  EigenVerdict.act => ItemStatus.problem,
+  EigenVerdict.unknown => ItemStatus.pending,
+};
+
+/// Plain verdict word for the [StatusChip].
+String eigenVerdictWord(EigenVerdict v) => switch (v) {
+  EigenVerdict.agree => 'On track',
+  EigenVerdict.drifting => 'Drifting',
+  EigenVerdict.act => 'Act now',
+  EigenVerdict.unknown => 'No data',
+};
+
+/// The phase section's one meta line: 'block 0 · week 2 · day 12 of 84 ·
+/// 163 → 154 lb by Dec 13' (no 'wk' compression).
+String progressPhaseLine(PhaseHeroData hero) =>
+    [?hero.blockLine, ?hero.trajectory].map(plainWeeks).join(' · ');
+
+/// Spells out week compressions: 'wk 2' → 'week 2', '1 wk below' → '1
+/// week below', '3 wks' → '3 weeks', 'lb/wk' → 'lb/week'.
+String plainWeeks(String s) => s
+    .replaceAll('lb/wk', 'lb/week')
+    .replaceAllMapped(
+      RegExp(r'(\d+) wks?\b'),
+      (m) => '${m[1]} ${m[1] == '1' ? 'week' : 'weeks'}',
+    )
+    .replaceAll(RegExp(r'\bwks?\b'), 'week');
+
+/// 'Squat', 'Bench', 'Deadlift', 'Overhead press'.
+String liftTitle(String lift) {
+  final n = liftDisplayName(lift);
+  return n.isEmpty ? n : n[0].toUpperCase() + n.substring(1);
+}
+
+/// 'today', 'yesterday', '4 days ago', '3 weeks ago', '5 months ago'.
+String fmtAgoWords(DateTime date, DateTime today) {
+  final d = DateTime.utc(today.year, today.month, today.day)
+      .difference(DateTime.utc(date.year, date.month, date.day))
+      .inDays;
+  if (d <= 0) return 'today';
+  if (d == 1) return 'yesterday';
+  String n(int v, String unit) => '$v $unit${v == 1 ? '' : 's'} ago';
+  if (d < 14) return n(d, 'day');
+  if (d < 70) return n((d / 7).round(), 'week');
+  if (d < 720) return n((d / 30.44).round(), 'month');
+  return n((d / 365.25).round(), 'year');
+}
+
+/// Recent e1RM vs the last bulk's best: within 5% = holding (green),
+/// 5–10% below = amber, more than 10% below = red. Either side missing
+/// → pending.
+ItemStatus liftDeltaStatus(double? recent, double? bulk) {
+  if (recent == null || bulk == null || bulk <= 0) return ItemStatus.pending;
+  final r = recent / bulk;
+  if (r >= 0.95) return ItemStatus.done;
+  if (r >= 0.90) return ItemStatus.partial;
+  return ItemStatus.problem;
+}
+
+/// '+6 lb' / '−30 lb' / '±0 lb' on rounded pounds.
+String fmtLbDelta(double recent, double bulk) {
+  final d = recent.round() - bulk.round();
+  if (d == 0) return '±0 lb';
+  return '${d > 0 ? '+' : '−'}${d.abs()} lb';
+}
+
+/// One phase verdict on the Progress tab: status mark · label · the one
+/// number, then the verdict as a [StatusChip] + the context line; the
+/// trend sparkline sits at the trailing edge before the chevron.
+class ProgressVerdictRow extends StatelessWidget {
+  final EigenRowData row;
+  final VoidCallback onTap;
+
+  const ProgressVerdictRow({super.key, required this.row, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final status = eigenItemStatus(row.verdict);
+    final color = StatusColors.of(context).forStatus(context, status);
+    final detail = plainWeeks(row.detail);
+    final split = detail.indexOf(' · ');
+    final head = split < 0 ? detail : detail.substring(0, split);
+    final rest = split < 0 ? null : detail.substring(split + 3);
+    final headIsValue = RegExp(r'\d').hasMatch(head);
+    final context2 = headIsValue ? rest : detail;
+    final label = row.label.isEmpty
+        ? row.label
+        : row.label[0].toUpperCase() + row.label.substring(1);
+    return ExerciseRow(
+      name: label,
+      meta: headIsValue ? head : null,
+      status: status,
+      onTap: onTap,
+      subtitle: Row(
+        children: [
+          StatusChip(label: eigenVerdictWord(row.verdict), status: status),
+          if (context2 != null && context2.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                context2,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ],
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (row.spark.length >= 2)
+            _Sparkline(
+              points: row.spark,
+              reference: row.sparkReference,
+              floor: row.sparkFloor,
+              color: color,
+              size: const Size(64, 28),
+            ),
+          Icon(
+            Icons.chevron_right,
+            size: 20,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One main lift on the Progress tab: status mark (change vs last bulk)
+/// · lift name, a meta line with how current the number is and the
+/// last bulk's best, and at the trailing edge the recent e1RM over the
+/// status-coloured change.
+class ProgressLiftRow extends StatelessWidget {
+  final String lift;
+  final double? recent;
+  final DateTime? recentDate;
+  final double? bulk;
+  final DateTime? bulkDate;
+
+  /// A last-bulk window is configured (the change figure + bulk best
+  /// render only then).
+  final bool showBulk;
+  final DateTime today;
+  final VoidCallback? onTap;
+
+  const ProgressLiftRow({
+    super.key,
+    required this.lift,
+    required this.recent,
+    required this.recentDate,
+    required this.bulk,
+    required this.bulkDate,
+    required this.showBulk,
+    required this.today,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final status = showBulk
+        ? liftDeltaStatus(recent, bulk)
+        : (recent == null ? ItemStatus.pending : ItemStatus.done);
+    final color = StatusColors.of(context).forStatus(context, status);
+    final subtitle = [
+      recentDate == null ? 'no recent work' : fmtAgoWords(recentDate!, today),
+      if (showBulk)
+        bulk == null || bulkDate == null
+            ? 'no last-bulk best'
+            : 'last bulk ${fmtLb(bulk!.roundToDouble())} '
+                  '(${fmtMonthTag(bulkDate!)})',
+    ].join(' · ');
+    final value = ds.AppText.row(context).copyWith(
+      fontWeight: FontWeight.w600,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return ExerciseRow(
+      name: liftTitle(lift),
+      status: status,
+      onTap: onTap,
+      subtitle: Text(subtitle),
+      trailing: Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              recent == null ? '—' : '${fmtLb(recent!.roundToDouble())} lb',
+              style: value,
+            ),
+            if (showBulk && recent != null && bulk != null)
+              Text(
+                fmtLbDelta(recent!, bulk!),
+                style: ds.AppText.meta(
+                  context,
+                ).copyWith(color: color, fontWeight: FontWeight.w600),
+              ),
+          ],
         ),
       ),
     );

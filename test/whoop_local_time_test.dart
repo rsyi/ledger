@@ -143,5 +143,126 @@ void main() {
         ['2026-09-25'],
       );
     });
+
+    // I2: a sleep record that comes back with NO score this pull is
+    // pending/re-scoring (e.g. the user edited it in the Whoop app) — it
+    // must not be diffed as a deletion candidate at all.
+    test('pending days are excluded from the stale candidates entirely', () {
+      expect(
+        whoopStaleDays(
+          known: {'2026-09-25', '2026-09-26'},
+          emitted: const {},
+          diffFrom: '2026-09-22',
+          fullReconcile: false,
+          pending: {'2026-09-25', '2026-09-26'},
+        ),
+        isEmpty, // both excluded → nothing left to even refuse on
+      );
+    });
+    test('pending day does not trip the empty-fetch refuse guard for '
+        'the OTHER known days', () {
+      expect(
+        whoopStaleDays(
+          known: {'2026-09-25', '2026-09-26'},
+          emitted: const {},
+          diffFrom: '2026-09-22',
+          fullReconcile: false,
+          pending: {'2026-09-25'},
+        ),
+        // '2026-09-25' excluded as pending; '2026-09-26' is a real,
+        // non-pending in-window day with nothing emitted → still refuses.
+        isNull,
+      );
+    });
+  });
+
+  group('whoopPendingWakeDays', () {
+    test('non-nap sleep with no score map → pending wake day', () {
+      final days = whoopPendingWakeDays([
+        {
+          'id': 's1',
+          'nap': false,
+          'end': '2026-10-02T06:30:00.000Z',
+          'timezone_offset': '-07:00',
+          // no 'score' key at all — pending/in-progress.
+        },
+      ]);
+      expect(days, {'2026-10-01'});
+    });
+    test('scored sleep is not pending', () {
+      final days = whoopPendingWakeDays([
+        {
+          'id': 's1',
+          'nap': false,
+          'end': '2026-10-02T06:30:00.000Z',
+          'score': {'sleep_performance_percentage': 90},
+        },
+      ]);
+      expect(days, isEmpty);
+    });
+    test('naps are skipped', () {
+      final days = whoopPendingWakeDays([
+        {'id': 'nap1', 'nap': true, 'end': '2026-10-02T06:30:00.000Z'},
+      ]);
+      expect(days, isEmpty);
+    });
+  });
+
+  group('whoopStaleWorkoutIds (C1 — window-edge margin)', () {
+    test(
+        'an id whose day falls inside the raw window but before the '
+        'margin-adjusted windowStartDay is never a deletion candidate', () {
+      // now=2026-10-01, 14d window → raw start 2026-09-17; the
+      // margin-adjusted windowStartDay pull() passes in is start+2d =
+      // 2026-09-19 (same convention as whoopStaleDays' diffFrom). A
+      // workout dated 2026-09-18 — inside the raw window, outside the
+      // margin — must survive even when the API doesn't return it,
+      // because the API filters by START INSTANT: that workout could
+      // have started just before the cutoff instant.
+      final stale = whoopStaleWorkoutIds(
+        knownIds: {'edge', 'present'},
+        dayById: {'edge': '2026-09-18', 'present': '2026-09-26'},
+        fetchedIds: const {'present'},
+        windowStartDay: '2026-09-19',
+        fullReconcile: false,
+      );
+      expect(stale, isEmpty);
+    });
+    test('an id inside the margin that the pull no longer returns is '
+        'flagged deleted', () {
+      final stale = whoopStaleWorkoutIds(
+        knownIds: {'gone', 'present'},
+        dayById: {'gone': '2026-09-25', 'present': '2026-09-26'},
+        fetchedIds: const {'present'},
+        windowStartDay: '2026-09-19',
+        fullReconcile: false,
+      );
+      expect(stale, ['gone']);
+    });
+    test('empty fetch against a non-empty in-window baseline refuses (null)',
+        () {
+      expect(
+        whoopStaleWorkoutIds(
+          knownIds: {'a'},
+          dayById: {'a': '2026-09-26'},
+          fetchedIds: const {},
+          windowStartDay: '2026-09-19',
+          fullReconcile: false,
+        ),
+        isNull,
+      );
+    });
+    test('full reconcile overrides the refuse guard', () {
+      expect(
+        whoopStaleWorkoutIds(
+          knownIds: {'a'},
+          dayById: {'a': '2026-09-26'},
+          fetchedIds: const {},
+          windowStartDay: '2026-09-19',
+          fullReconcile: true,
+        ),
+        ['a'],
+      );
+    });
   });
 }

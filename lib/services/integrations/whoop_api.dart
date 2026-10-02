@@ -207,18 +207,67 @@ Duration? whoopLatestOffset(List<dynamic> sleeps) {
 /// fix) or vanished upstream. Null = refuse to diff: nothing was emitted
 /// but in-window days are known (an API glitch, not a wipe) unless
 /// [fullReconcile].
+/// [pending] (I2, 2026-10-01): days whose sleep came back THIS pull with
+/// no score — pending/re-scoring after an edit in the Whoop app, not a
+/// deletion — are excluded from the candidate set entirely, so they
+/// neither get flagged stale nor count toward the empty-fetch refuse
+/// guard above.
 List<String>? whoopStaleDays({
   required Set<String> known,
   required Set<String> emitted,
   required String diffFrom,
   required bool fullReconcile,
+  Set<String> pending = const {},
 }) {
   final inWindow = [
     for (final d in known)
-      if (d.compareTo(diffFrom) >= 0) d,
+      if (d.compareTo(diffFrom) >= 0 && !pending.contains(d)) d,
   ]..sort();
   if (emitted.isEmpty && inWindow.isNotEmpty && !fullReconcile) return null;
   return [for (final d in inWindow) if (!emitted.contains(d)) d];
+}
+
+/// Local wake days of non-nap sleep records that came back with NO score
+/// map this pull (score absent/not a map) — pending/re-scoring in the
+/// Whoop app (e.g. an edited sleep), not a deletion. Feeds [whoopStaleDays]
+/// `pending` (I2).
+Set<String> whoopPendingWakeDays(List<dynamic> sleeps) {
+  final out = <String>{};
+  for (final s in sleeps) {
+    if (s is! Map || s['nap'] == true) continue;
+    if (s['score'] is Map) continue; // scored → not pending
+    final end = DateTime.tryParse(s['end']?.toString() ?? '');
+    if (end == null) continue;
+    out.add(_isoDate(_wall(end, whoopOffset(s['timezone_offset']))));
+  }
+  return out;
+}
+
+/// Previously-seen workout ids ([knownIds], via [dayById]) whose day
+/// falls inside the pulled window (>= [windowStartDay]) that THIS pull
+/// did not re-fetch ([fetchedIds]) — deleted upstream. [windowStartDay]
+/// must carry the SAME +2-day margin as [whoopStaleDays]' `diffFrom`
+/// (C1): the API filters by START INSTANT, so a workout whose LOCAL DAY
+/// is the window's first calendar day can have started just before the
+/// cutoff instant and legitimately be excluded from the fetch — without
+/// the margin that workout is wrongly diffed as deleted. Null = refuse to
+/// diff: nothing was fetched but in-window ids are known (an API
+/// glitch, not a mass delete) unless [fullReconcile].
+List<String>? whoopStaleWorkoutIds({
+  required Set<String> knownIds,
+  required Map<String, String> dayById,
+  required Set<String> fetchedIds,
+  required String windowStartDay,
+  required bool fullReconcile,
+}) {
+  final inWindow = [
+    for (final id in knownIds)
+      if ((dayById[id] ?? '').compareTo(windowStartDay) >= 0) id,
+  ];
+  if (fetchedIds.isEmpty && inWindow.isNotEmpty && !fullReconcile) {
+    return null;
+  }
+  return [for (final id in inWindow) if (!fetchedIds.contains(id)) id];
 }
 
 /// Fold the recovery-by-day fields into the sleep records (matched on the
@@ -612,6 +661,9 @@ class WhoopApiIntegration implements Integration {
         diffFrom: _isoDate(
             now.subtract(window).add(const Duration(days: 2)).toUtc()),
         fullReconcile: fullReconcile,
+        // I2: a night that re-scored (no score this pull, non-nap) is
+        // pending, not deleted.
+        pending: whoopPendingWakeDays(sleepRecs),
       );
       if (records.isNotEmpty || (stale?.isNotEmpty ?? false)) {
         // match-by-date (no match_field) — one recovery row per day.
@@ -646,23 +698,23 @@ class WhoopApiIntegration implements Integration {
         final knownIds = _decodeDays(await repo.metaGet(_kWorkoutIds));
         final workoutDayById = _decodeDayMap(await repo.metaGet(_kWorkoutDayMap));
         // Deletions: a previously-seen id that falls in the pulled window
-        // (its date >= start) but was NOT returned this pull. Guard: a
+        // but was NOT returned this pull. Margin matches whoopStaleDays'
+        // diffFrom (C1): the API filters by START INSTANT, so a workout
+        // on the window's first calendar day can start before the cutoff
+        // instant and legitimately be excluded — without the +2-day
+        // margin that workout is wrongly flagged deleted. Guard: a
         // non-empty baseline vanishing entirely is treated as an API
         // glitch, not a wipe — refuse to diff (fullReconcile overrides).
-        final windowStartDay = _isoDate(now.subtract(window).toUtc());
-        final deleted = <String>[];
-        final inWindowKnown = knownIds.where((id) {
-          final day = workoutDayById[id];
-          return day != null && day.compareTo(windowStartDay) >= 0;
-        }).toList();
-        final suspectWipe = fetchedIds.isEmpty &&
-            inWindowKnown.isNotEmpty &&
-            !fullReconcile;
-        if (!suspectWipe) {
-          for (final id in inWindowKnown) {
-            if (!fetchedIds.contains(id)) deleted.add(id);
-          }
-        }
+        final windowStartDay = _isoDate(
+            now.subtract(window).add(const Duration(days: 2)).toUtc());
+        final deleted = whoopStaleWorkoutIds(
+              knownIds: knownIds,
+              dayById: workoutDayById,
+              fetchedIds: fetchedIds,
+              windowStartDay: windowStartDay,
+              fullReconcile: fullReconcile,
+            ) ??
+            const <String>[];
 
         if (rows.isNotEmpty || deleted.isNotEmpty) {
           await repo.ingest(workoutsView, {

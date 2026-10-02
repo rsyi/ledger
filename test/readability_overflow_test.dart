@@ -220,6 +220,26 @@ domains:
         lessThan(tester.getTopLeft(find.text('PHASE')).dy));
     expect(find.textContaining('You are here'), findsOneWidget);
 
+    // Shared-style phase + blocks (UI redesign consistency pass): the
+    // phase name rides the header, the title is plain words, blocks are
+    // named rows ("Block 0 · Cut") with the accent you-are-here line —
+    // no "B0" badges, no abbreviations.
+    expect(find.text('Cut · since Oct 6, 2025'), findsOneWidget);
+    expect(find.text('Target 154 lb · −0.75 lb/week'), findsOneWidget);
+    expect(find.textContaining('Block 0 · Cut', findRichText: true),
+        findsOneWidget);
+    expect(find.text('You are here · week 1 of 12'), findsOneWidget);
+    expect(find.text('B0'), findsNothing);
+    for (final banned in ['wks', 'lb/wk', 'SBD', 'OHP']) {
+      expect(find.textContaining(banned, findRichText: true), findsNothing,
+          reason: banned);
+    }
+    // Exit criteria sit behind the Details disclosure.
+    expect(find.textContaining('Exit:'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('plan-phase-details')));
+    await tester.pumpAndSettle();
+    expect(find.text('Exit: 154 lb or Wilks floor breached'), findsOneWidget);
+
     // Scroll the rest of the lazy ListView into layout — projection
     // summary, strength chart, nutrition card, folds, the Model details
     // disclosure — so every section gets overflow-checked at this width.

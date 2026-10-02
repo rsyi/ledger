@@ -35,6 +35,7 @@ import '../services/sim2_harness.dart'
     show sim2BlocksFromProgramDocs, sim2ExpectationsFromProgramDocs;
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
+import '../services/display_names.dart' show sentenceCase;
 import 'design/design.dart';
 import 'widgets/forecast_section.dart';
 
@@ -357,7 +358,10 @@ class _PlanView extends StatelessWidget {
             stats: stats,
           ),
         ),
-        const SectionHeader(label: 'Phase'),
+        SectionHeader(
+          label: 'Phase',
+          count: phaseHeaderMeta(phaseVersion),
+        ),
         Padding(
           padding: gutter,
           child: _DeclaredCard(
@@ -365,7 +369,7 @@ class _PlanView extends StatelessWidget {
             targetRate: targetRate,
           ),
         ),
-        const SizedBox(height: 8),
+        const SectionHeader(label: 'Blocks'),
         Padding(
           padding: gutter,
           child: _BlockTimeline(
@@ -402,16 +406,38 @@ class _PlanView extends StatelessWidget {
 // 1. Declared
 // ---------------------------------------------------------------------------
 
-class _DeclaredCard extends StatelessWidget {
+/// "Cut · since Oct 6, 2025" — the PHASE SectionHeader's count.
+String? phaseHeaderMeta(Map<Object?, Object?>? phaseVersion) {
+  final p = phaseVersion;
+  if (p == null) return null;
+  final value = p['value']?.toString();
+  final since = p['effective_from']?.toString();
+  return [
+    if (value != null && value.isNotEmpty) sentenceCase(value),
+    if (since != null) 'since ${_fmtIso(since)}',
+  ].join(' · ');
+}
+
+/// The phase declaration in the shared style: a title ("Target 154 lb
+/// · −0.75 lb/week"), the reason as one meta line, and the exit
+/// criteria behind a "Details" disclosure (the phase name + since date
+/// ride in the SectionHeader above).
+class _DeclaredCard extends StatefulWidget {
   final Map<Object?, Object?>? phaseVersion;
   final double? targetRate;
 
   const _DeclaredCard({required this.phaseVersion, required this.targetRate});
 
   @override
+  State<_DeclaredCard> createState() => _DeclaredCardState();
+}
+
+class _DeclaredCardState extends State<_DeclaredCard> {
+  bool _open = false;
+
+  @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final p = phaseVersion;
+    final p = widget.phaseVersion;
     if (p == null) {
       return AppCard(
         child: Text(
@@ -420,56 +446,90 @@ class _DeclaredCard extends StatelessWidget {
         ),
       );
     }
-    final value = p['value']?.toString() ?? '?';
-    final since = p['effective_from']?.toString();
     final targetWt = p['target_weight_lb'];
-    final reason = p['reason']?.toString();
-    final exit = p['exit_criteria']?.toString();
+    final targetRate = widget.targetRate;
+    final reason = p['reason']?.toString().trim();
+    final exit = p['exit_criteria']?.toString().trim();
+    final hasDetails = exit != null && exit.isNotEmpty;
+    final meta = AppText.meta(context);
+    final scheme = Theme.of(context).colorScheme;
 
-    final small = AppText.meta(context);
+    final title = [
+      if (targetWt != null) 'Target $targetWt lb',
+      if (targetRate != null) '${_fmtSigned(targetRate)} lb/week',
+    ].join(' · ');
 
     return AppCard(
+      padding: EdgeInsets.zero,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 3,
-                ),
-                decoration: BoxDecoration(
-                  color: scheme.primary,
-                  borderRadius: BorderRadius.circular(AppRadius.chip),
-                ),
-                child: Text(
-                  value.toUpperCase(),
-                  style: AppText.section(context).copyWith(
-                    color: scheme.onPrimary,
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              AppSpace.gutter,
+              12,
+              AppSpace.gutter,
+              hasDetails ? 4 : 12,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (title.isNotEmpty)
+                  Text(title, style: AppText.title(context)),
+                if (reason != null && reason.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    reason,
+                    key: const ValueKey('plan-phase-reason'),
+                    style: meta,
+                    maxLines: _open ? null : 2,
+                    overflow: _open ? null : TextOverflow.ellipsis,
                   ),
+                ],
+              ],
+            ),
+          ),
+          if (hasDetails) ...[
+            InkWell(
+              key: const ValueKey('plan-phase-details'),
+              onTap: () => setState(() => _open = !_open),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpace.gutter,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: [
+                    Text(
+                      _open ? 'Hide details' : 'Details',
+                      style: meta.copyWith(
+                        color: scheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Icon(
+                      _open ? Icons.expand_less : Icons.expand_more,
+                      size: 18,
+                      color: scheme.primary,
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 10),
-              if (since != null)
-                Text('since ${_fmtIso(since)}', style: small),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            [
-              if (targetWt != null) 'Target $targetWt lb',
-              if (targetRate != null) '${_fmtSigned(targetRate!)} lb/wk',
-            ].join(' · '),
-            style: AppText.title(context),
-          ),
-          if (reason != null) ...[
-            const SizedBox(height: 6),
-            Text(reason, style: small.copyWith(fontStyle: FontStyle.italic)),
-          ],
-          if (exit != null) ...[
-            const SizedBox(height: 6),
-            Text('Exit: $exit', style: small),
+            ),
+            if (_open)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.gutter,
+                  0,
+                  AppSpace.gutter,
+                  12,
+                ),
+                child: Text(
+                  'Exit: $exit',
+                  key: const ValueKey('plan-phase-exit'),
+                  style: meta,
+                ),
+              ),
           ],
         ],
       ),
@@ -477,8 +537,19 @@ class _DeclaredCard extends StatelessWidget {
   }
 }
 
-/// The 8 program blocks as a vertical timeline with a you-are-here
-/// marker on the current block (block-progress bar + week N).
+/// "You are here · week 2 of 12" (+ " · light week" off-normal weeks).
+String youAreHereLine({
+  required int weekInBlock,
+  required int? totalWeeks,
+  required String weekType,
+}) =>
+    'You are here · week $weekInBlock'
+    '${totalWeeks != null && totalWeeks > 0 ? ' of $totalWeeks' : ''}'
+    '${weekType != 'normal' ? ' · $weekType week' : ''}';
+
+/// The program blocks as rows in one card ("Block 0 · Cut", dates,
+/// weight range), past blocks checked, the current block marked in the
+/// app accent with "You are here · week N of M" + a block-progress bar.
 class _BlockTimeline extends StatelessWidget {
   final Map<Object?, Object?>? programVersion;
   final ProgramSlice? slice;
@@ -490,30 +561,17 @@ class _BlockTimeline extends StatelessWidget {
     required this.today,
   });
 
-  static Color _emphasisColor(BuildContext context, String emphasis) {
-    final scheme = Theme.of(context).colorScheme;
-    return switch (emphasis) {
-      'cut' => scheme.error,
-      'reverse' => scheme.tertiary,
-      'climbing' => scheme.secondary,
-      _ => scheme.primary, // lifting
-    };
-  }
-
   @override
   Widget build(BuildContext context) {
     final blocks = programVersion?['blocks'];
     if (blocks is! List) return const SizedBox.shrink();
     final currentN = slice?.block['number'] as int?;
-
-    return AppCard(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Column(
-        children: [
-          for (final b in blocks)
-            if (b is Map) _blockRow(context, b, currentN),
-        ],
-      ),
+    return RowGroupCard(
+      margin: EdgeInsets.zero,
+      rows: [
+        for (final b in blocks)
+          if (b is Map) _blockRow(context, b, currentN),
+      ],
     );
   }
 
@@ -526,117 +584,84 @@ class _BlockTimeline extends StatelessWidget {
     final weights = b['weight'] as List?;
     final start = dates != null ? DateTime.tryParse(dates[0].toString()) : null;
     final end = dates != null ? DateTime.tryParse(dates[1].toString()) : null;
+    final fmt = DateFormat("MMM d ''yy");
     final dateStr = start != null && end != null
-        ? '${DateFormat('MMM d yy').format(start)} – '
-              '${DateFormat('MMM d yy').format(end)}'
+        ? '${fmt.format(start)} – ${fmt.format(end)}'
         : '';
     final wtStr = weights != null && weights.length == 2
         ? '${weights[0]}→${weights[1]} lb'
         : '';
-    final color = _emphasisColor(context, emphasis);
+    final todayD = DateTime(today.year, today.month, today.day);
+    final past =
+        !isCurrent &&
+        end != null &&
+        DateTime(end.year, end.month, end.day).isBefore(todayD);
 
     // Block progress for the you-are-here marker.
     double? progress;
+    int? totalWeeks;
     if (isCurrent && start != null && end != null) {
-      final total = end.difference(start).inDays + 1;
-      final done =
-          DateTime(
-            today.year,
-            today.month,
-            today.day,
-          ).difference(DateTime(start.year, start.month, start.day)).inDays +
+      final s0 = DateTime(start.year, start.month, start.day);
+      final total = DateTime(end.year, end.month, end.day)
+              .difference(s0)
+              .inDays +
           1;
-      if (total > 0) progress = (done / total).clamp(0.0, 1.0);
+      final done = todayD.difference(s0).inDays + 1;
+      if (total > 0) {
+        progress = (done / total).clamp(0.0, 1.0);
+        totalWeeks = (total / 7).ceil();
+      }
     }
 
-    final row = Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5, horizontal: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    final meta = AppText.meta(context);
+    final subtitle = isCurrent
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 30,
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: isCurrent ? 1.0 : 0.15),
-                  borderRadius: BorderRadius.circular(5),
+              Text(dateStr),
+              Text(
+                youAreHereLine(
+                  weekInBlock: slice?.weekInBlock ?? 1,
+                  totalWeeks: totalWeeks,
+                  weekType: slice?.weekType ?? 'normal',
                 ),
-                child: Text(
-                  'B$n',
-                  textAlign: TextAlign.center,
-                  style: AppText.meta(context).copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: isCurrent ? scheme.surface : color,
-                  ),
+                style: TextStyle(
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(width: 10),
-              SizedBox(
-                width: 68,
-                child: Text(
-                  emphasis,
-                  style: AppText.meta(context).copyWith(
-                    color: scheme.onSurface,
-                    fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Text(dateStr, style: AppText.meta(context)),
-              ),
-              Text(wtStr, style: AppText.meta(context)),
-            ],
-          ),
-          if (isCurrent && progress != null) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const SizedBox(width: 40),
-                Expanded(
+              if (progress != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, right: 8),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(3),
                     child: LinearProgressIndicator(
                       value: progress,
-                      minHeight: 5,
-                      color: color,
-                      backgroundColor: color.withValues(alpha: 0.15),
+                      minHeight: 4,
+                      color: scheme.primary,
+                      backgroundColor: scheme.primary.withValues(alpha: 0.15),
                     ),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 3),
-            Row(
-              children: [
-                const SizedBox(width: 40),
-                // Expanded so the line WRAPS at narrow widths (360dp)
-                // instead of overflowing — reflow over ellipsis.
-                Expanded(
-                  child: Text(
-                    'You are here — week ${slice?.weekInBlock} of block $n'
-                    '${slice?.weekType != 'normal' ? ' (${slice?.weekType} week)' : ''}',
-                    style: AppText.meta(context).copyWith(
-                      color: color,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
+            ],
+          )
+        : Text(dateStr);
 
-    if (!isCurrent) return row;
-    return Container(
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(AppRadius.chip),
-      ),
-      child: row,
+    return ExerciseRow(
+      key: ValueKey('plan-block-$n'),
+      name: 'Block $n · ${sentenceCase(emphasis)}',
+      status: past ? ItemStatus.done : ItemStatus.pending,
+      leading: isCurrent
+          ? Icon(Icons.radio_button_checked, size: 18, color: scheme.primary)
+          : null,
+      subtitle: subtitle,
+      trailing: wtStr.isEmpty
+          ? null
+          : Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Text(wtStr, style: meta),
+            ),
     );
   }
 }
@@ -682,10 +707,10 @@ class _VerdictCard extends StatelessWidget {
 
     final declared =
         'Declared $phase'
-        '${targetRate != null ? ' (target ${_fmtSigned(targetRate!)} lb/wk)' : ''}';
+        '${targetRate != null ? ' (target ${_fmtSigned(targetRate!)} lb/week)' : ''}';
     final observed = v.observedRateLbWk == null
         ? 'no observed rate yet'
-        : 'observed ${_fmtSigned(v.observedRateLbWk!)} lb/wk over 3 wks';
+        : 'observed ${_fmtSigned(v.observedRateLbWk!)} lb/week over 3 weeks';
 
     return AppCard(
       child: Row(
@@ -697,7 +722,10 @@ class _VerdictCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(v.label, style: AppText.title(context).copyWith(color: fg)),
+                Text(
+                  sentenceCase(v.label),
+                  style: AppText.title(context).copyWith(color: fg),
+                ),
                 const SizedBox(height: 4),
                 Text('$declared · $observed', style: AppText.meta(context)),
               ],
@@ -713,7 +741,9 @@ class _VerdictCard extends StatelessWidget {
 // Formatting
 // ---------------------------------------------------------------------------
 
-String _fmtSigned(double v) => '${v > 0 ? '+' : ''}${v.toStringAsFixed(2)}';
+/// Signed with a true minus sign: `+0.25`, `−0.75`.
+String _fmtSigned(double v) =>
+    '${v > 0 ? '+' : (v < 0 ? '−' : '')}${v.abs().toStringAsFixed(2)}';
 
 String _fmtIso(String iso) {
   final d = DateTime.tryParse(iso);

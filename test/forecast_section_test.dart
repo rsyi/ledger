@@ -353,6 +353,20 @@ void main() {
         findsOneWidget);
     expect(find.textContaining('expectation range, not target'),
         findsOneWidget);
+    // The visible legend stays short (no "shaded: SBD … OHP" paragraph);
+    // the full explanation — incl. the overhead-press range — lives in
+    // Model details.
+    for (final banned in ['SBD', 'OHP', 'solid:', 'dotted:']) {
+      expect(find.textContaining(banned, findRichText: true), findsNothing,
+          reason: banned);
+    }
+    expect(find.byKey(const ValueKey('forecast-strength-explainer')),
+        findsNothing);
+    await openModelDetails(tester);
+    final explainer = textOf(tester, 'forecast-strength-explainer');
+    expect(explainer, contains('squat+bench+deadlift'));
+    expect(explainer, contains('overhead press 150–165'));
+    expect(explainer, contains('975–1060'));
   });
 
   testWidgets('folds collapsed by default; body comp expands', (tester) async {

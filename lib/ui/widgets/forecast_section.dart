@@ -445,6 +445,19 @@ class _ForecastSectionState extends State<ForecastSection> {
         '${DateFormat('MMM d').format(e.date)} (${e.what})';
   }
 
+  /// The shaded expectation bands in words (squat+bench+deadlift total
+  /// + overhead press) — empty when program.yaml declares none.
+  String _expectationNote() {
+    final e = widget.inputs.expectations;
+    final sbd = e?.sbdTotalLb;
+    if (sbd == null) return '';
+    final ohp = e?.ohpLb;
+    return ' The shaded band is the one-year expectation range for the '
+        'squat+bench+deadlift total (${_lb(sbd[0])}–${_lb(sbd[1])})'
+        '${ohp != null ? ', overhead press ${_lb(ohp[0])}–${_lb(ohp[1])}' : ''}'
+        ' — an expectation range, not a target.';
+  }
+
   /// Everything a reader doesn't need to judge the plan but the model
   /// owes as provenance: the nightly-tracking status, the
   /// single-trajectory note, per-chart model caveats, and the
@@ -474,6 +487,15 @@ class _ForecastSectionState extends State<ForecastSection> {
           'calibrates strength + the recovery budget, §3-§6 are priors. '
           'Nightly tracking recalibrates within ±50% (guarded).',
           key: const ValueKey('forecast-model-note'),
+        ),
+        note(
+          'Strength chart: the solid line is the expected '
+          'squat+bench+deadlift total (${_lb(_run.last.sTrue)} at the '
+          'horizon); dashed is what your logged e1RMs will show '
+          '(${_lb(_run.last.sIdx)}); dotted (the capacity toggle) is '
+          'capacity (${_lb(_run.last.sCap)}).'
+          '${_expectationNote()}',
+          key: const ValueKey('forecast-strength-explainer'),
         ),
         note(
           'Strength: true expressed ${_lb(_run.last.sTrue)} vs app index '
@@ -509,6 +531,7 @@ class _ForecastSectionState extends State<ForecastSection> {
 
   Widget _strengthBody(BuildContext context, String horizonLabel) {
     final scheme = Theme.of(context).colorScheme;
+    final meta = AppText.meta(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -538,32 +561,34 @@ class _ForecastSectionState extends State<ForecastSection> {
           ],
         ),
         const SizedBox(height: 4),
-        Text(
+        // One-line legend (wraps per item at narrow widths); what each
+        // line means lives in Model details.
+        Wrap(
           key: const ValueKey('sim2-strength-legend'),
-          'solid: expected total ${_lb(_run.last.sTrue)} · dashed: what '
-          'your logged e1RMs will show ${_lb(_run.last.sIdx)}'
-          '${_showCapacity ? ' · dotted: capacity '
-                    '${_lb(_run.last.sCap)}' : ''}',
-          style: AppText.meta(context),
+          spacing: 12,
+          runSpacing: 2,
+          children: [
+            Text('— expected ${_lb(_run.last.sTrue)}', style: meta),
+            Text('- - logged ${_lb(_run.last.sIdx)}', style: meta),
+            if (_showCapacity)
+              Text('··· capacity ${_lb(_run.last.sCap)}', style: meta),
+          ],
         ),
         const SizedBox(height: 2),
         Text(
           'Squat ${_lb(_run.last.squat)} · Bench ${_lb(_run.last.bench)} · '
           'Deadlift ${_lb(_run.last.deadlift)} · '
-          'Press ${_lb(_run.last.press)} by $horizonLabel',
+          'Overhead press ${_lb(_run.last.press)} by $horizonLabel',
           style: AppText.row(context),
         ),
         if (widget.inputs.expectations?.sbdTotalLb != null)
           Text(
             key: const ValueKey('sim2-expectation-strength'),
-            'shaded: SBD '
+            'Shaded '
             '${_lb(widget.inputs.expectations!.sbdTotalLb![0])}–'
-            '${_lb(widget.inputs.expectations!.sbdTotalLb![1])}'
-            '${widget.inputs.expectations!.ohpLb != null ? ' · OHP '
-                      '${_lb(widget.inputs.expectations!.ohpLb![0])}–'
-                      '${_lb(widget.inputs.expectations!.ohpLb![1])}' : ''}'
-            ' — expectation range, not target',
-            style: AppText.meta(context),
+            '${_lb(widget.inputs.expectations!.sbdTotalLb![1])}: '
+            'expectation range, not target',
+            style: meta,
           ),
       ],
     );
@@ -809,7 +834,7 @@ class _NutritionCard extends StatelessWidget {
   String _avg(NutritionAvg? a) => a == null
       ? '—'
       : '${a.kcal.round()} kcal · protein ${a.proteinG.round()} · '
-            'carbs ${a.carbsG.round()} (${a.loggedDays}d logged)';
+            'carbs ${a.carbsG.round()} (${a.loggedDays} days logged)';
 
   @override
   Widget build(BuildContext context) {
@@ -847,8 +872,8 @@ class _NutritionCard extends StatelessWidget {
               style: AppText.meta(context),
             )
           else ...[
-            row('7d avg', _avg(n.avg7)),
-            row('14d avg', _avg(n.avg14)),
+            row('7-day avg', _avg(n.avg7)),
+            row('14-day avg', _avg(n.avg14)),
             row(
               'maintenance',
               m == null
@@ -857,7 +882,7 @@ class _NutritionCard extends StatelessWidget {
                   : '~${n.effectiveMaintenanceKcal!.round()} ± '
                         '${m.bandKcal.round()} kcal '
                         '(${m.method == 'regression' ? 'regression' : 'energy balance'}, '
-                        '${m.pairedDays}d'
+                        '${m.pairedDays} days'
                         '${n.maintenanceOffsetKcal != 0 ? ', recal '
                                   '${_signed(n.maintenanceOffsetKcal, decimals: 0)}' : ''})',
               key: const ValueKey('nutrition-maintenance'),
@@ -866,7 +891,7 @@ class _NutritionCard extends StatelessWidget {
               'implied rate',
               n.rCurrentLbWk == null
                   ? '—'
-                  : '${_signed(n.rCurrentLbWk!)} lb/wk at current intake',
+                  : '${_signed(n.rCurrentLbWk!)} lb/week at current intake',
               key: const ValueKey('nutrition-rate'),
             ),
             const SizedBox(height: 6),
@@ -907,7 +932,7 @@ class _NutritionCard extends StatelessWidget {
             if (delta != 0 && n.canProject)
               Text(
                 'projection at ${n.projectedIntakeKcal!.round()} kcal: '
-                '${_signed(n.rProjectedLbWk!)} lb/wk · '
+                '${_signed(n.rProjectedLbWk!)} lb/week · '
                 'protein ${n.projectedProteinG!.round()} g · '
                 'carbs ${n.projectedCarbsG!.round()} g '
                 '(macros scaled proportionally)',
@@ -1342,11 +1367,11 @@ class _StatsRow extends StatelessWidget {
               : '${stats.bw7dAvg!.toStringAsFixed(1)} lb',
         ),
         stat(
-          'rate / wk',
+          'rate / week',
           stats.bwRateLbWk == null ? '—' : '${_signed(stats.bwRateLbWk!)} lb',
         ),
         stat(
-          '3-wk change',
+          '3-week change',
           stats.bw3wkChange == null ? '—' : '${_signed(stats.bw3wkChange!)} lb',
         ),
       ],

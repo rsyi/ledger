@@ -13,10 +13,14 @@
 ///     [day−6, day]; when that week has none, the latest reading in
 ///     [day−27, day]; else null. (No DEXA source exists yet.)
 ///   * `e1rm_<lift>` — "latest e1RM": the best RPE-adjusted e1RM
-///     (weight × (1 + min(12, min(reps,12) + (10 − RPE))/30)) in the most
-///     recent Monday-start week (rows dated ≤ day) in which the lift has
-///     a set; strength_total = squat + bench + deadlift (null unless all
-///     three exist). Same basis as the forecast's observed index.
+///     (weight × (1 + min(12, min(reps,12) + (10 − RPE))/30)) over the
+///     ROLLING 7 days ending on the day; when the lift wasn't trained in
+///     that window, the 7 days ending on its last trained date (≤ day).
+///     strength_total = squat + bench + deadlift (null unless all three
+///     exist). ACTUALS v2 ([projectionActualsVersion]): v1 used the
+///     calendar Monday-week, which read the mid-week VOLUME sets on
+///     every day before the week's top (press 20 lb low Mon–Fri) — the
+///     rolling window always holds the latest weekly top.
 ///   * climbing_grade — the 4-week rolling p75 of numeric V grades
 ///     (≥ 5 ascents) for the Monday-week containing the day, stepping
 ///     back up to 12 weeks when the window is thin.
@@ -107,20 +111,27 @@ double? bodyFatActualAt(List<BodyFatReading> readings, DateTime day) {
 /// never trained by [day] are absent.
 Map<String, double> e1rmActualsAt(List<StrengthRow> rows, DateTime day) {
   final end = _d(day);
-  final bestWeek = <String, DateTime>{};
-  final best = <String, double>{};
+  final sets = <String, List<(DateTime, double)>>{};
+  final lastDay = <String, DateTime>{};
   for (final r in rows) {
     final lift = mainLiftByExercise[r.exercise];
     if (lift == null || r.weight <= 0 || r.reps < 1) continue;
-    if (_d(r.date).isAfter(end)) continue;
-    final wk = _monday(r.date);
-    final e = rpeAdjustedE1rm(r.weight, r.reps, r.rpe);
-    final cur = bestWeek[lift];
-    if (cur == null || wk.isAfter(cur)) {
-      bestWeek[lift] = wk;
-      best[lift] = e;
-    } else if (wk == cur && e > best[lift]!) {
-      best[lift] = e;
+    final d = _d(r.date);
+    if (d.isAfter(end)) continue;
+    (sets[lift] ??= []).add((d, rpeAdjustedE1rm(r.weight, r.reps, r.rpe)));
+    final cur = lastDay[lift];
+    if (cur == null || d.isAfter(cur)) lastDay[lift] = d;
+  }
+  final best = <String, double>{};
+  for (final lift in sets.keys) {
+    // The window ends today when the lift was trained in the last 7
+    // days, else on its last trained date (carry-back).
+    final last = lastDay[lift]!;
+    final windowEnd = _days(last, end) <= 6 ? end : last;
+    final windowStart = windowEnd.subtract(const Duration(days: 6));
+    for (final (d, e) in sets[lift]!) {
+      if (d.isBefore(windowStart) || d.isAfter(windowEnd)) continue;
+      if ((best[lift] ?? double.negativeInfinity) < e) best[lift] = e;
     }
   }
   return best;

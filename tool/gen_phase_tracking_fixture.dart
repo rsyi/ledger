@@ -182,6 +182,20 @@ void main(List<String> args) {
       ],
     ),
     actualsCase(
+      'e1rm: rolling 7 days keeps the last top over mid-week volume; '
+          'carry-back for an untrained lift',
+      '2026-10-01',
+      strength: [
+        ['2026-09-26', 'Overhead Press', 120, 5, 8.5],
+        ['2026-09-30', 'Overhead Press', 90, 10, 7],
+        ['2026-09-01', 'Barbell Deadlift', 300, 3, 8],
+        ['2026-08-28', 'Barbell Deadlift', 310, 1, 8],
+        ['2026-08-20', 'Barbell Deadlift', 400, 1, 8],
+        ['2026-09-29', 'Barbell Squat', 300, 1, 8],
+        ['2026-09-24', 'Flat Barbell Bench Press', 225, 1, 8],
+      ],
+    ),
+    actualsCase(
       'climbing: thin week steps back; null grades ignored',
       '2026-09-30',
       climbs: [
@@ -340,13 +354,25 @@ void main(List<String> args) {
     String made, {
     String inputs = '',
   }) => [block, metric, week, v, v - 1, v + 1, made, '16', inputs];
-  String inp(String start, String end, String emphasis) => jsonEncode({
-    'block_start': start,
-    'block_end': end,
-    'block_emphasis': emphasis,
-  });
+  String inp(String start, String end, String emphasis, {int? version = 2}) =>
+      jsonEncode({
+        'block_start': start,
+        'block_end': end,
+        'block_emphasis': emphasis,
+        'actuals_version': ?version,
+      });
   final selRows = <List<Object?>>[
     projectionSnapshotHeaders,
+    // An older snapshot on the superseded v1 actual definitions —
+    // earlier made_at, but the v2 set below must win selection.
+    row(
+      0,
+      'bodyweight',
+      '2026-09-21',
+      170,
+      '2026-10-01T00:00:00.000Z',
+      inputs: inp('2026-09-21', '2026-12-13', 'cut', version: null),
+    ),
     row(
       0,
       'bodyweight',

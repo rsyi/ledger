@@ -72,6 +72,16 @@ const List<String> projectionSnapshotHeaders = [
   'inputs_json',
 ];
 
+/// Version of the ACTUAL definitions the anchors were computed with
+/// (projection_tracking.dart). v1 = calendar-week e1RM; v2 = rolling
+/// 7-day e1RM. A snapshot's week-0 anchors must use the same definition
+/// as the live actuals it is tracked against, so selection prefers the
+/// newest version present for a block (an anchor-definition change is
+/// a system re-baseline) and the nightly writer re-freezes a block
+/// whose snapshots all predate the current version. Older snapshots
+/// stay in the tab (append-only history).
+const int projectionActualsVersion = 2;
+
 /// Model identity recorded in every snapshot's inputs.
 const String projectionModelVersion = 'sim2 v2.1 (fitted 2026-09-26)';
 
@@ -174,6 +184,13 @@ class ProjectionSnapshot {
     required this.metrics,
     this.inputs = const {},
   });
+
+  /// The actual-definitions version the anchors used (1 when absent —
+  /// the first backfill predates the field).
+  int get actualsVersion =>
+      (inputs['actuals_version'] as num?)?.toInt() ??
+      int.tryParse('${inputs['actuals_version']}') ??
+      1;
 
   /// Block emphasis (cut / reverse / climbing / lifting) from inputs.
   String? get emphasis => inputs['block_emphasis']?.toString();
@@ -420,6 +437,7 @@ ProjectionSnapshot? buildProjectionSnapshot({
     'anchor_date': _ymd(block.start),
     'program_version': programVersion,
     'model_version': projectionModelVersion,
+    'actuals_version': projectionActualsVersion,
     'r_lb_wk': _r2(baseR),
     'r_source': rLbWk == null ? 'declared_block_rate' : 'nutrition',
     'protein_g_per_lb': _r2(proteinGPerLb),
@@ -564,9 +582,17 @@ class _Group {
   _Group(this.block, this.madeAt, this.programVersion);
 }
 
-/// The block's FIRST snapshot (earliest made_at) — what the UI and the
-/// coach track against (re-baselining is out of scope v1). Null when the
-/// block has none.
+/// Selection order: the newest actuals_version wins, then the earliest
+/// made_at (re-snapshots with the same definitions never displace the
+/// first — user re-baselining is out of scope v1).
+bool _preferred(ProjectionSnapshot a, ProjectionSnapshot b) =>
+    a.actualsVersion != b.actualsVersion
+        ? a.actualsVersion > b.actualsVersion
+        : a.madeAt.isBefore(b.madeAt);
+
+/// The block's FIRST snapshot (earliest made_at among those on the
+/// newest actuals definition) — what the UI and the coach track
+/// against. Null when the block has none.
 ProjectionSnapshot? firstSnapshotForBlock(
   List<ProjectionSnapshot> snapshots,
   int block,
@@ -574,19 +600,20 @@ ProjectionSnapshot? firstSnapshotForBlock(
   ProjectionSnapshot? best;
   for (final s in snapshots) {
     if (s.block != block) continue;
-    if (best == null || s.madeAt.isBefore(best.madeAt)) best = s;
+    if (best == null || _preferred(s, best)) best = s;
   }
   return best;
 }
 
-/// First snapshot per block, keyed by block number.
+/// First snapshot per block ([firstSnapshotForBlock]'s rule), keyed by
+/// block number.
 Map<int, ProjectionSnapshot> firstSnapshotsByBlock(
   List<ProjectionSnapshot> snapshots,
 ) {
   final out = <int, ProjectionSnapshot>{};
   for (final s in snapshots) {
     final cur = out[s.block];
-    if (cur == null || s.madeAt.isBefore(cur.madeAt)) out[s.block] = s;
+    if (cur == null || _preferred(s, cur)) out[s.block] = s;
   }
   return out;
 }
@@ -611,9 +638,13 @@ ProjectionSnapshot? snapshotForDay(
   return latest;
 }
 
-/// Whether the nightly writer still owes [block] its snapshot.
+/// Whether the nightly writer still owes [block] its snapshot: none
+/// yet, or every existing one predates [projectionActualsVersion]
+/// (anchors on a superseded actual definition — re-freeze once).
 bool snapshotNeededForBlock(List<ProjectionSnapshot> existing, int block) =>
-    !existing.any((s) => s.block == block);
+    !existing.any(
+      (s) => s.block == block && s.actualsVersion >= projectionActualsVersion,
+    );
 
 // ---------------------------------------------------------------------------
 // helpers

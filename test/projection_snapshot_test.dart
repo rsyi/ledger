@@ -247,7 +247,12 @@ void main() {
   });
 
   group('selection', () {
-    List<List<Object?>> rowsAt(int block, DateTime made, double v) => [
+    List<List<Object?>> rowsAt(
+      int block,
+      DateTime made,
+      double v, {
+      int? version = projectionActualsVersion,
+    }) => [
       [
         block,
         'bodyweight',
@@ -257,7 +262,7 @@ void main() {
         v + 1,
         made.toIso8601String(),
         '16',
-        '',
+        version == null ? '' : jsonEncode({'actuals_version': version}),
       ],
     ];
 
@@ -287,6 +292,30 @@ void main() {
       expect(snapshotNeededForBlock(all, 0), isFalse);
       expect(snapshotNeededForBlock(all, 1), isTrue);
       expect(snapshotNeededForBlock(const [], 0), isTrue);
+    });
+
+    test('actuals version: a block frozen only on a superseded definition '
+        'is re-frozen once; the newest definition wins selection', () {
+      final v1 = parseProjectionSnapshots([
+        projectionSnapshotHeaders,
+        ...rowsAt(0, DateTime.utc(2026, 10, 2), 161, version: null),
+      ]);
+      expect(v1.single.actualsVersion, 1); // no field → v1
+      expect(snapshotNeededForBlock(v1, 0), isTrue);
+      final both = parseProjectionSnapshots([
+        projectionSnapshotHeaders,
+        ...rowsAt(0, DateTime.utc(2026, 10, 2), 161, version: null),
+        ...rowsAt(0, DateTime.utc(2026, 10, 3), 162),
+        ...rowsAt(0, DateTime.utc(2026, 10, 9), 150), // later v2 re-snap
+      ]);
+      expect(snapshotNeededForBlock(both, 0), isFalse);
+      final first = firstSnapshotForBlock(both, 0)!;
+      expect(first.madeAt, DateTime.utc(2026, 10, 3));
+      expect(firstSnapshotsByBlock(both)[0]!.madeAt, DateTime.utc(2026, 10, 3));
+    });
+
+    test('builder records the current actuals version', () {
+      expect(_build(paths: 2).actualsVersion, projectionActualsVersion);
     });
   });
 

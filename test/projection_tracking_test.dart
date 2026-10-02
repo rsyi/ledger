@@ -94,6 +94,51 @@ void main() {
       expect(a[ProjectionMetric.vo2max], isNull);
     });
 
+    test('e1rm: rolling 7 days keeps last Saturday\'s top over this '
+        'Wednesday\'s volume sets; carries back when untrained', () {
+      final rows = [
+        StrengthRow(
+          date: d(9, 26),
+          exercise: 'Overhead Press',
+          weight: 120,
+          reps: 5,
+          rpe: 8.5,
+        ), // 146
+        StrengthRow(
+          date: d(9, 30),
+          exercise: 'Overhead Press',
+          weight: 90,
+          reps: 10,
+          rpe: 7,
+        ), // 126 (volume)
+        StrengthRow(
+          date: d(9, 1),
+          exercise: 'Barbell Deadlift',
+          weight: 300,
+          reps: 3,
+          rpe: 8,
+        ), // 300 × (1 + 5/30) = 350
+        StrengthRow(
+          date: d(8, 28),
+          exercise: 'Barbell Deadlift',
+          weight: 310,
+          reps: 1,
+          rpe: 8,
+        ), // 341 (inside the carried window)
+        StrengthRow(
+          date: d(8, 20),
+          exercise: 'Barbell Deadlift',
+          weight: 400,
+          reps: 1,
+          rpe: 8,
+        ), // outside it
+      ];
+      final e = e1rmActualsAt(rows, d(10, 1));
+      expect(e['press'], closeTo(146, 1e-9));
+      expect(e['deadlift'], closeTo(350, 1e-9));
+      expect(e1rmActualsAt(rows, d(10, 3))['press'], closeTo(126, 1e-9));
+    });
+
     test('climbing: 4-week p75 with ≥ 5 grades, steps back when thin', () {
       final climbs = [
         for (final g in [3, 4, 5, 5, 6]) (date: d(9, 2), vGrade: g),

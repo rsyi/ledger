@@ -12,6 +12,9 @@
 /// come — so the model can't call it a rest day.
 library;
 
+import 'missed_work.dart' show programItemKind;
+import 'prescribed_exercises.dart';
+import 'program_moves.dart' show EffectiveItem;
 import 'whoop_activity.dart';
 
 /// A meal eaten today (macros already summed per record; nulls = not
@@ -128,13 +131,120 @@ class SynthProgramDay {
   /// or null when no climb is scheduled.
   final String? climbCall;
 
+  /// Program items MOVED INTO today from another day of the week
+  /// (program_moves) — part of today's program.
+  final List<SynthMovedItem> movedIn;
+
+  /// Today's program items MOVED OUT to another day — not today's work
+  /// (the routine prose above still names them).
+  final List<SynthMovedItem> movedOut;
+
   const SynthProgramDay({
     this.morning = '',
     this.afternoon = '',
     this.plannedLifts = const [],
     this.wants4x4 = false,
     this.climbCall,
+    this.movedIn = const [],
+    this.movedOut = const [],
   });
+}
+
+/// A program item relocated into / out of today.
+class SynthMovedItem {
+  final String name;
+  final String scheme;
+
+  /// moved-in: the day it came from; moved-out: the day it went to.
+  final DateTime otherDay;
+
+  /// 'lift' | 'climb' | 'cardio'.
+  final String kind;
+
+  /// moved-in only: already logged today.
+  final bool done;
+
+  const SynthMovedItem({
+    required this.name,
+    required this.otherDay,
+    this.scheme = '',
+    this.kind = 'lift',
+    this.done = false,
+  });
+}
+
+/// Applies today's effective (post-moves) entries to [base]: moved-in
+/// items join today's program (done-marked from [loggedToday] / [climbed]
+/// / [did4x4]); moved-out items leave it — their planned lifts drop out,
+/// a moved-out 4x4 / climb clears [SynthProgramDay.wants4x4] /
+/// [SynthProgramDay.climbCall], and a moved-in one sets them. [today] is
+/// today's list from `effectiveWeek` (ghosts = moved out). Pure.
+SynthProgramDay synthProgramWithMoves(
+  SynthProgramDay base,
+  List<EffectiveItem> today, {
+  List<String> loggedToday = const [],
+  bool climbed = false,
+  bool did4x4 = false,
+}) {
+  final movedIn = <SynthMovedItem>[];
+  final movedOut = <SynthMovedItem>[];
+  for (final e in today) {
+    final kind = programItemKind(e.item);
+    if (e.isGhost) {
+      movedOut.add(SynthMovedItem(
+        name: e.item.name,
+        scheme: e.item.scheme,
+        otherDay: e.movedTo!,
+        kind: kind,
+      ));
+    } else if (e.movedFrom != null) {
+      final done = switch (kind) {
+        'climb' => climbed,
+        'cardio' => did4x4,
+        _ => markPrescribedDone([e.item], loggedToday).first.done,
+      };
+      movedIn.add(SynthMovedItem(
+        name: e.item.name,
+        scheme: e.item.scheme,
+        otherDay: e.movedFrom!,
+        kind: kind,
+        done: done,
+      ));
+    }
+  }
+  if (movedIn.isEmpty && movedOut.isEmpty) return base;
+  final outLifts = [
+    for (final m in movedOut)
+      if (m.kind == 'lift') m.name,
+  ];
+  // Names still on today (staying + moved-in). A planned lift is dropped
+  // only when it matches a moved-out item and NO staying item — token
+  // matching is loose ("Deadlift" ~ "Romanian Deadlift"), so ambiguity
+  // keeps the lift (the prompt still names what moved out).
+  final staying = [
+    for (final e in today)
+      if (!e.isGhost) e.item.name,
+  ];
+  final inClimb = movedIn.where((m) => m.kind == 'climb').firstOrNull;
+  return SynthProgramDay(
+    morning: base.morning,
+    afternoon: base.afternoon,
+    plannedLifts: [
+      for (final l in base.plannedLifts)
+        if (!outLifts.any((o) => loggedMatchesPrescribed(l, o)) ||
+            staying.any((n) => loggedMatchesPrescribed(l, n)))
+          l,
+    ],
+    wants4x4: movedIn.any((m) => m.kind == 'cardio') ||
+        (base.wants4x4 && !movedOut.any((m) => m.kind == 'cardio')),
+    climbCall: inClimb != null
+        ? inClimb.name
+        : movedOut.any((m) => m.kind == 'climb')
+            ? null
+            : base.climbCall,
+    movedIn: movedIn,
+    movedOut: movedOut,
+  );
 }
 
 /// What was actually logged today across domains.
@@ -329,6 +439,11 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
   if (c.program.climbCall != null) {
     callParts.add('climbing (${c.program.climbCall})');
   }
+  for (final m in c.program.movedIn) {
+    callParts.add('moved in from ${_wdName(m.otherDay)}: ${m.name}'
+        '${m.scheme.trim().isEmpty ? '' : ' (${m.scheme.trim()})'}'
+        '${m.done ? ' — done' : ''}');
+  }
   if (callParts.isEmpty) {
     b.writeln('- rest day (no training scheduled)');
   } else {
@@ -340,6 +455,14 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
       .where((s) => s.trim().isNotEmpty)
       .join(' / ');
   if (prose.isNotEmpty) b.writeln('  routine: $prose');
+  if (c.program.movedOut.isNotEmpty) {
+    final out = [
+      for (final m in c.program.movedOut)
+        '${m.name} → ${_wdName(m.otherDay)}',
+    ];
+    b.writeln('  moved OUT of today (not today\'s work — do not nag): '
+        '${out.join(', ')}');
+  }
   b.writeln();
 
   b.writeln('DONE SO FAR TODAY:');
@@ -393,6 +516,11 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
   if (c.liftsRemaining.isNotEmpty) {
     left.add('lifting: ${c.liftsRemaining.join(', ')}');
   }
+  for (final m in c.program.movedIn) {
+    if (m.kind == 'lift' && !m.done) {
+      left.add('${m.name} (moved from ${_wdName(m.otherDay)})');
+    }
+  }
   if (c.cardioToCome) left.add('4x4 cardio');
   if (c.climbToCome) left.add('climbing (${c.program.climbCall})');
   final pf = c.targets.resolvedProteinBand;
@@ -409,6 +537,9 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
 
   return b.toString().trimRight();
 }
+
+const _wdNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+String _wdName(DateTime d) => _wdNames[d.weekday - 1];
 
 /// Compact recovery read ("slept 7.4h · recovery 80 (green) · HRV 65ms,
 /// 7d avg 74"), or null when no numeric signal is present (the line is

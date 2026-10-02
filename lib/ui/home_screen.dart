@@ -848,6 +848,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   readOnlyRepo: data.readOnlyRepo,
                   forView: data.registry.forView,
                 ),
+                // Moved-in items count as today's program; moved-out
+                // ones don't.
+                programMovesView: programMovesView,
+                programMovesRepo: programMovesRepo,
                 provider: programProvider,
               );
               // Feature 3: post-log notification driver — one boot-time

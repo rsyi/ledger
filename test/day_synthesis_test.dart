@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/services/day_synthesis.dart';
+import 'package:airledger/services/prescribed_exercises.dart';
+import 'package:airledger/services/program_moves.dart';
 import 'package:airledger/services/whoop_activity.dart';
 
 void main() {
@@ -357,6 +359,89 @@ void main() {
       expect(c.liftsRemaining, isEmpty);
       final p = buildDaySynthesisPrompt(c);
       expect(p, isNot(contains('Whoop saw a lifting session')));
+    });
+  });
+
+  group('synthProgramWithMoves', () {
+    final wed = DateTime(2026, 9, 30);
+    final fri = DateTime(2026, 10, 2);
+    final sat = DateTime(2026, 10, 3);
+    PrescribedItem item(String name, {String scheme = '1x3', int sets = 1}) =>
+        PrescribedItem(name: name, scheme: scheme, period: 'PM',
+            targetSets: sets);
+
+    test('no moves → base unchanged', () {
+      const base = SynthProgramDay(plannedLifts: ['Deadlift']);
+      final out = synthProgramWithMoves(base, [
+        EffectiveItem(item: item('Deadlift top set'), home: fri),
+      ]);
+      expect(identical(out, base), isTrue);
+    });
+
+    test('moved-in lift joins today; moved-out lift leaves it', () {
+      const base = SynthProgramDay(
+        plannedLifts: ['Lateral Raise', 'Deadlift', 'Romanian Deadlift'],
+        afternoon: 'PM: Deadlift top set; RDL 2x8-12; laterals',
+      );
+      final out = synthProgramWithMoves(base, [
+        EffectiveItem(item: item('Deadlift top set'), home: fri),
+        EffectiveItem(
+            item: item('Lateral raise', scheme: '3x12', sets: 3),
+            home: fri,
+            movedTo: sat),
+        EffectiveItem(
+            item: item('Bench top set'), home: wed, movedFrom: wed),
+      ]);
+      // Laterals left; "Romanian Deadlift" stays (ambiguous vs the
+      // staying deadlift — kept rather than over-excluded).
+      expect(out.plannedLifts, ['Deadlift', 'Romanian Deadlift']);
+      expect(out.movedOut.single.name, 'Lateral raise');
+      expect(out.movedOut.single.otherDay, sat);
+      expect(out.movedIn.single.name, 'Bench top set');
+      expect(out.movedIn.single.done, isFalse);
+
+      final prompt = buildDaySynthesisPrompt(ctx(program: out));
+      expect(prompt, contains('- moved in from Wed: Bench top set (1x3)'));
+      expect(prompt, contains('moved OUT of today'));
+      expect(prompt, contains('Lateral raise → Sat'));
+      expect(prompt, contains('Bench top set (moved from Wed)'));
+    });
+
+    test('moved-in lift logged today reads done, not still to come', () {
+      final out = synthProgramWithMoves(const SynthProgramDay(), [
+        EffectiveItem(item: item('Bench top set'), home: wed, movedFrom: wed),
+      ], loggedToday: ['Bench Press']);
+      expect(out.movedIn.single.done, isTrue);
+      final prompt = buildDaySynthesisPrompt(ctx(program: out));
+      expect(prompt, contains('Bench top set (1x3) — done'));
+      expect(prompt, isNot(contains('(moved from Wed)')));
+    });
+
+    test('climb / 4x4 moves flip climbCall + wants4x4', () {
+      final tue = DateTime(2026, 9, 29);
+      final out = synthProgramWithMoves(
+        const SynthProgramDay(wants4x4: true),
+        [
+          EffectiveItem(
+              item: item('Bike 4x4', scheme: '4x4', sets: 4),
+              home: fri,
+              movedTo: sat),
+          EffectiveItem(
+              item: item('Hard climb', scheme: '(limit)'),
+              home: tue,
+              movedFrom: tue),
+        ],
+      );
+      expect(out.wants4x4, isFalse);
+      expect(out.climbCall, 'Hard climb');
+      final gone = synthProgramWithMoves(
+        const SynthProgramDay(climbCall: 'hard session'),
+        [
+          EffectiveItem(
+              item: item('Hard climb'), home: fri, movedTo: sat),
+        ],
+      );
+      expect(gone.climbCall, isNull);
     });
   });
 }

@@ -5,13 +5,17 @@ import '../models/view_schema.dart';
 import 'chat_runner.dart';
 import 'coach_tools.dart';
 import 'github_client.dart';
+import 'missed_work.dart';
 import 'program_current.dart';
+import 'program_moves.dart';
 import 'program_provider.dart';
+import 'program_week.dart' show mondayOf;
 import 'program_slice_text.dart';
 import 'video_rpe.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 import 'week_planner.dart' show buildWeekPlannedEntries;
+import 'week_state_loader.dart';
 import 'whoop_activity.dart';
 
 /// Fetches one coach doc by repo path (e.g. `coach/goals.md`). Returns
@@ -151,15 +155,37 @@ class CoachBrain {
   Future<String> reply(
     List<Record> history, {
     required ProposalSink onProposal,
-  }) async {
-    final system = await buildSystemPrompt(now());
+    MovesProposalSink? onMovesProposal,
+  }) {
     final userTurn = '## Chat history (oldest first)\n\n'
         '${renderHistory(history)}\n\n'
         'Reply to the newest user message(s) now.';
+    return _runTurn(userTurn,
+        onProposal: onProposal, onMovesProposal: onMovesProposal);
+  }
+
+  /// One app-initiated turn (no chat history) — e.g. the daily
+  /// carryover check's "Missed work detected…" ask. Same system prompt
+  /// and tools as [reply]; returns the assistant's text.
+  Future<String> ask(
+    String userMessage, {
+    required ProposalSink onProposal,
+    MovesProposalSink? onMovesProposal,
+  }) =>
+      _runTurn(userMessage,
+          onProposal: onProposal, onMovesProposal: onMovesProposal);
+
+  Future<String> _runTurn(
+    String userTurn, {
+    required ProposalSink onProposal,
+    MovesProposalSink? onMovesProposal,
+  }) async {
+    final system = await buildSystemPrompt(now());
     final tools = CoachToolset(
       views: views,
       onProposal: onProposal,
       programDay: _programDayResolver,
+      onMovesProposal: onMovesProposal,
       now: now,
     ).build();
     final runner = ChatRunner(model);
@@ -221,6 +247,7 @@ in a desktop Claude session — you cannot edit files from here.''';
     final docs = await _docsSection();
     final dump = await _ledgerDump(today);
     final activity = await _activitySection(today);
+    final movesSection = await _movesSection(today);
     final videoRpe = await _videoRpeSection();
     final sections = [
       systemPrompt,
@@ -229,6 +256,7 @@ in a desktop Claude session — you cannot edit files from here.''';
       '## Coach docs\n\n$docs',
       '## Ledger data (last ${dumpWindow.inDays} days + planned)\n\n$dump',
       ?activity,
+      ?movesSection,
       ?videoRpe,
     ];
     return sections.join('\n\n');
@@ -410,6 +438,147 @@ in a desktop Claude session — you cannot edit files from here.''';
     }
   }
 
+  /// Placement rules for carried work (spec 2026-10-02 §6) — the same
+  /// wording as coach/PROMPT.md's nightly "Missed work" section.
+  static const placementRules =
+      'Within this week only · no lifting on Tuesday (program says "NO '
+      'lifting today, ever") · squat and deadlift never on the same day · '
+      'at most one carried MAIN lift per day · mains before accessories; '
+      "if it can't all fit, accessories expire first · never on a day with "
+      'a pain flag in daily_notes · respect low recovery (Whoop recovery < '
+      "34 → don't add load that day) · state the reasoning in one line.";
+
+  /// "## This week: moves + missed work": active moves, the missed list
+  /// (each item followed by the exact item/from_date/period keys
+  /// propose_moves must copy — tool/missed_work.dart's format), what each
+  /// remaining day holds (moves applied), the placement rules and the
+  /// propose_moves instruction. Pure.
+  static String renderMovesSection({
+    required Map<String, ProgramMove> moves,
+    required MissedWork? missed,
+    required Map<DateTime, List<EffectiveItem>> week,
+    required DateTime today,
+  }) {
+    const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    String label(DateTime d) => '${wd[d.weekday - 1]} ${d.month}/${d.day}';
+    final t = DateTime(today.year, today.month, today.day);
+    final mon = mondayOf(t);
+    final sun = DateTime(mon.year, mon.month, mon.day + 6);
+    final b = StringBuffer()
+      ..writeln('## This week: moves + missed work')
+      ..writeln()
+      ..writeln('Week ${label(mon)} – ${label(sun)} (Mon–Sun). Unplaced '
+          'work expires at the end of Sunday; next week starts clean.')
+      ..writeln()
+      ..writeln('MOVES THIS WEEK:');
+    if (moves.isEmpty) {
+      b.writeln('none');
+    } else {
+      final ms = moves.values.toList()
+        ..sort((a, c) => a.from.compareTo(c.from));
+      for (final m in ms) {
+        final src = m.source.isEmpty ? '' : ' (${m.source})';
+        final note = m.note.isEmpty ? '' : ' — ${m.note}';
+        b.writeln('- ${m.item}: ${label(m.from)} → ${label(m.to)}$src$note');
+      }
+    }
+    b
+      ..writeln()
+      ..writeln('MISSED THIS WEEK:');
+    if (missed == null) {
+      b.writeln('(unknown — no strength log available)');
+    } else if (missed.isEmpty) {
+      b.writeln('none');
+    } else {
+      final lines = missed.toPromptLines().split('\n');
+      for (var i = 0; i < missed.missed.length; i++) {
+        final m = missed.missed[i];
+        final moved =
+            m.day == m.home ? '' : ' (moved from ${label(m.home)})';
+        b
+          ..writeln('${lines[i]}$moved')
+          ..writeln('    item="${m.item.name}" from_date=${_fmtDate(m.home)} '
+              'period=${m.item.period.isEmpty ? '-' : m.item.period}');
+      }
+    }
+    b
+      ..writeln()
+      ..writeln('REMAINING DAYS:');
+    for (var d = t; !d.isAfter(sun); d = DateTime(d.year, d.month, d.day + 1)) {
+      final items = [
+        for (final e in week[d] ?? const <EffectiveItem>[])
+          if (!e.isGhost) e,
+      ];
+      if (items.isEmpty) {
+        b.writeln('- ${label(d)}: rest / nothing prescribed');
+        continue;
+      }
+      String from(EffectiveItem e) => e.movedFrom == null
+          ? ''
+          : ' (moved from ${wd[e.movedFrom!.weekday - 1]})';
+      final parts = [
+        for (final e in items)
+          '${e.item.period.isEmpty ? '' : '${e.item.period} '}'
+              '${e.item.name}${from(e)}',
+      ];
+      b.writeln('- ${label(d)}: ${parts.join('; ')}');
+    }
+    b
+      ..writeln()
+      ..writeln('Placement rules (you decide within them): $placementRules')
+      ..writeln('Only move an item to a day in REMAINING DAYS (never the '
+          'past, never next week). Copy item / from_date / period EXACTLY '
+          'from the missed line (from_date is the program\'s original day, '
+          'even if the item was already moved once). One entry per item; '
+          'items you let expire are simply left out (say so).')
+      ..write('When something is missed, call propose_moves — never claim '
+          "it's moved; the card handles it.");
+    return b.toString();
+  }
+
+  /// Loads the effective week + missed work through the shared
+  /// [WeekStateLoader] and renders [renderMovesSection]. Null (section
+  /// omitted) on any failure or when there's no program.
+  Future<String?> _movesSection(DateTime today) async {
+    try {
+      final state = await weekStateLoader().load(today, withMissed: true);
+      if (state == null) return null;
+      return renderMovesSection(
+        moves: state.moves,
+        missed: state.missed,
+        week: state.week,
+        today: today,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// A [WeekStateLoader] over this brain's views + repos (read-only views
+  /// such as climbing ride [readOnlyRepo]). Missing views are skipped.
+  WeekStateLoader weekStateLoader() {
+    WarehouseConnector? repoFor(ViewSchema? v) =>
+        v == null ? null : (v.readOnly ? readOnlyRepo : repository);
+    final moves = views['program_moves'];
+    final strength = views['strength'];
+    final workouts = views['whoop_workouts'];
+    final cardio = views['cardio'];
+    final climbing = views['climbing'];
+    return WeekStateLoader(
+      loadDocs: ProgramProvider(fetchDoc, now: now).load,
+      programMovesView: moves,
+      programMovesRepo: repoFor(moves),
+      strengthView: strength,
+      strengthRepo: repoFor(strength),
+      workoutsView: workouts,
+      workoutsRepo: repoFor(workouts),
+      cardioView: cardio,
+      cardioRepo: repoFor(cardio),
+      climbingView: climbing,
+      climbingRepo: repoFor(climbing),
+    );
+  }
+
   /// AI-vs-logged RPE calibration lines from meta `video_rpe_log`
   /// (written by VideoRpeService at estimate/save time). Null (section
   /// omitted) when there's no meta seam, no log, or any read error.
@@ -545,6 +714,14 @@ in a desktop Claude session — you cannot edit files from here.''';
               ? '${p.entries.length} entries'
               : p.summary;
           return '[$role] (proposed ${p.view} plan for $dateStr: $detail)';
+        }
+        final mp = MovesProposal.tryParse(text);
+        if (mp != null) {
+          final moves = [
+            for (final m in mp.moves)
+              '${m.item} ${_fmtDate(m.from)} → ${_fmtDate(m.to)}',
+          ].join('; ');
+          return '[$role] (proposed moves: $moves)';
         }
       }
       return '[$role] $text';

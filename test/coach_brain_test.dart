@@ -1,9 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/models/coach_proposal.dart';
 import 'package:airledger/models/database_config.dart';
 import 'package:airledger/models/model_config.dart';
 import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/coach_brain.dart';
+import 'package:airledger/services/missed_work.dart';
+import 'package:airledger/services/prescribed_exercises.dart';
+import 'package:airledger/services/program_moves.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
 import 'package:airledger/services/whoop_activity.dart';
@@ -282,5 +287,139 @@ void main() {
     final s = await b.buildSystemPrompt(today);
     expect(s, isNot(contains('running \u{b7} strain 9.0 [unlogged]')));
     expect(s, contains('walking \u{b7} strain 3.0 [unlogged]'));
+  });
+
+  group('renderMovesSection', () {
+    // Thu 2026-10-01; week Mon 9/28..Sun 10/4.
+    final thu = DateTime(2026, 10, 1, 9);
+    DateTime d(int i) => DateTime(2026, 9, 28 + i);
+    final bench = PrescribedItem(
+        name: 'Bench top set', scheme: '1x3 @ RPE 8', period: 'PM',
+        targetSets: 1);
+    final rdl = PrescribedItem(
+        name: 'RDL', scheme: '2x8-12', period: 'PM', targetSets: 2);
+    final move = ProgramMove(
+        id: 'm1', from: d(0), to: d(4), item: 'RDL', period: 'PM',
+        source: 'manual');
+
+    test('lists moves, missed keys, remaining days, rules, instruction',
+        () {
+      final week = <DateTime, List<EffectiveItem>>{
+        d(0): [EffectiveItem(item: rdl, home: d(0), movedTo: d(4), move: move)],
+        d(2): [EffectiveItem(item: bench, home: d(2))],
+        d(3): const [],
+        d(4): [EffectiveItem(item: rdl, home: d(0), movedFrom: d(0), move: move)],
+      };
+      final missed = MissedWork(
+        missed: [
+          MissedItem(
+              item: bench.withLogged(0), day: d(2), home: d(2),
+              setsShort: 1, kind: 'lift'),
+        ],
+        remainingDays: [d(3), d(4), d(5), d(6)],
+      );
+      final s = CoachBrain.renderMovesSection(
+        moves: {move.key: move},
+        missed: missed,
+        week: week,
+        today: thu,
+      );
+      expect(s, startsWith('## This week: moves + missed work'));
+      expect(s, contains('Week Mon 9/28 – Sun 10/4'));
+      expect(s, contains('- RDL: Mon 9/28 → Fri 10/2 (manual)'));
+      expect(s, contains('- Bench top set (1x3 @ RPE 8) — due Wed 9/30, 0/1 sets'));
+      expect(s, contains('item="Bench top set" from_date=2026-09-30 period=PM'));
+      expect(s, contains('- Thu 10/1: rest / nothing prescribed'));
+      expect(s, contains('- Fri 10/2: PM RDL (moved from Mon)'));
+      expect(s, contains('- Sun 10/4: rest / nothing prescribed'));
+      expect(s, isNot(contains('Wed 9/30:'))); // past days aren't remaining
+      expect(s, contains('no lifting on Tuesday'));
+      expect(s, contains('squat and deadlift never on the same day'));
+      expect(s, contains('Whoop recovery < 34'));
+      expect(s, contains('call propose_moves — never claim'));
+    });
+
+    test('none / unknown when nothing moved or no strength log', () {
+      final s = CoachBrain.renderMovesSection(
+        moves: const {},
+        missed: null,
+        week: const {},
+        today: thu,
+      );
+      expect(s, contains('MOVES THIS WEEK:\nnone'));
+      expect(s, contains('(unknown — no strength log available)'));
+      final s2 = CoachBrain.renderMovesSection(
+        moves: const {},
+        missed: MissedWork(missed: const [], remainingDays: [d(3)]),
+        week: const {},
+        today: thu,
+      );
+      expect(s2, contains('MISSED THIS WEEK:\nnone'));
+    });
+
+    test('section omitted from the system prompt without a program',
+        () async {
+      final s = await brain().buildSystemPrompt(today);
+      expect(s, isNot(contains('## This week: moves + missed work')));
+    });
+  });
+
+  test('renderHistory renders a moves proposal compactly', () {
+    final p = MovesProposal(summary: 'x', moves: [
+      ProposedMove(
+          item: 'RDL', from: DateTime(2026, 9, 28), to: DateTime(2026, 10, 2)),
+    ]);
+    final out = CoachBrain.renderHistory([
+      {'role': 'coach', 'kind': 'proposal', 'ts': '1', 'text': p.encode()},
+    ]);
+    expect(out, '[coach] (proposed moves: RDL 2026-09-28 → 2026-10-02)');
+  });
+
+  test('moves section rides the system prompt (live program.yaml)',
+      () async {
+    const fitness = '../airledger-fitness';
+    if (!File('$fitness/coach/program.yaml').existsSync()) {
+      markTestSkipped('airledger-fitness not checked out');
+      return;
+    }
+    CoachBrain.clearDocCache();
+    addTearDown(CoachBrain.clearDocCache);
+    final fri = DateTime(2026, 10, 2, 9);
+    final move = ProgramMove(
+      id: 'm1',
+      to: DateTime(2026, 10, 2),
+      from: DateTime(2026, 9, 30),
+      item: 'Bench heavy',
+      period: 'AM',
+      source: 'coach',
+    );
+    final b = CoachBrain(
+      model: ModelConfig(
+        name: 'sonnet',
+        vendor: ModelVendor.anthropic,
+        modelRef: 'claude-sonnet-4-6',
+        apiKey: 'test-key',
+        apiUrl: 'https://api.anthropic.com/v1',
+      ),
+      repository: _FakeRepo({
+        'program_moves': [move.toRecord()],
+        'strength': const [],
+      }),
+      views: {
+        'program_moves': _view('program_moves',
+            ['id', 'date', 'from_date', 'item', 'period', 'source']),
+        'strength': _view('strength', ['id', 'date', 'exercise']),
+      },
+      fetchDoc: (p) async {
+        final f = File('$fitness/$p');
+        return f.existsSync() ? f.readAsStringSync() : null;
+      },
+      now: () => fri,
+    );
+    final s = await b.buildSystemPrompt(fri);
+    expect(s, contains('## This week: moves + missed work'));
+    expect(s, contains('- Bench heavy: Wed 9/30 → Fri 10/2 (coach)'));
+    expect(s, contains('(moved from Wed)'));
+    expect(s, contains('MISSED THIS WEEK:'));
   });
 }

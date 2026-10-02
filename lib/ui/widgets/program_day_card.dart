@@ -9,12 +9,12 @@ import '../../services/log_event_bus.dart';
 import '../../services/missed_work.dart';
 import '../../services/prescribed_exercises.dart';
 import '../../services/program_moves.dart';
-import '../../services/program_provider.dart' show IntentDocs, ProgramProvider;
-import '../../services/program_week.dart'
-    show dayOnly, mondayOf, prescribedDay, prescribedWeek;
+import '../../services/program_provider.dart' show ProgramProvider;
+import '../../services/program_week.dart' show dayOnly, mondayOf;
 import '../../services/set_recommendation.dart';
 import '../../services/sync_scheduler.dart';
 import '../../services/warehouse_connector.dart';
+import '../../services/week_state_loader.dart';
 import '../../services/whoop_activity.dart';
 
 /// The program view for a day: the prescribed session as a CHECKLIST
@@ -165,33 +165,25 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   Future<_DayData?> _load() async {
     final provider = widget.provider;
     if (provider == null) return null;
-    IntentDocs? docs;
-    try {
-      docs = await provider.load();
-    } catch (_) {
-      return null;
-    }
     final date = dayOnly(widget.date);
     final isToday = date == dayOnly(widget.now());
-    // Shared with prescribedWeek so the card and the week can't drift.
-    final (prescription, _) = prescribedDay(docs, date, label: widget.label);
-    if (prescription == null) return null;
-
-    // The effective week: the prescription with this week's moves applied.
-    // Each source is read ONCE per load (no per-row reads).
-    var moves = const <String, ProgramMove>{};
-    final mv = widget.programMovesView;
-    final mr = widget.programMovesRepo;
-    if (mv != null && mr != null) {
-      try {
-        moves = activeMoves([
-          for (final r in await mr.list(mv)) ?ProgramMove.fromRecord(r),
-        ], mondayOf(date));
-      } catch (_) {/* honest: unmoved week */}
-    }
-    final week = effectiveWeek(
-        prescribedWeek(docs, date, label: widget.label), moves);
-    var entries = week[date] ?? const <EffectiveItem>[];
+    // One shared loader (card, coach, synthesis, carryover check): the
+    // effective week + logged work, each source read ONCE per load.
+    final state = await WeekStateLoader(
+      loadDocs: provider.load,
+      programMovesView: widget.programMovesView,
+      programMovesRepo: widget.programMovesRepo,
+      strengthView: widget.strengthView,
+      strengthRepo: widget.strengthRepo,
+      workoutsView: widget.workoutsView,
+      workoutsRepo: widget.workoutsRepo,
+      cardioView: widget.cardioView,
+      cardioRepo: widget.cardioRepo,
+      climbingView: widget.climbingView,
+      climbingRepo: widget.climbingRepo,
+    ).load(date, label: widget.label, withMissed: isToday);
+    if (state == null) return null;
+    var entries = state.day;
 
     // Done-marking + Whoop credit apply to the items that live here
     // (ghosts are shown, never counted).
@@ -215,79 +207,19 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       ];
     }
 
-    final sv = widget.strengthView;
-    final sr = widget.strengthRepo;
-    final strengthWeek = <({DateTime date, String exercise})>[];
-    if (sv != null && sr != null) {
-      final logged = <String>[];
-      final mon = mondayOf(date);
-      try {
-        final rows = await sr.list(sv);
-        _strengthRows = rows;
-        for (final r in rows) {
-          final d = _date(r['date']);
-          final ex = r['exercise']?.toString().trim();
-          if (d == null || ex == null || ex.isEmpty) continue;
-          if (_sameDay(d, date)) logged.add(ex);
-          if (mondayOf(d) == mon) {
-            strengthWeek.add((date: dayOnly(d), exercise: ex));
-          }
-        }
-      } catch (_) {/* honest empty */}
-      entries = mapLive((items) => markPrescribedDone(items, logged));
+    if (widget.strengthView != null && widget.strengthRepo != null) {
+      if (state.strengthRows != null) _strengthRows = state.strengthRows;
+      entries =
+          mapLive((items) => markPrescribedDone(items, state.loggedOnDate));
     }
-
-    var whoop = const <WhoopActivity>[];
-    final wv = widget.workoutsView;
-    final wr = widget.workoutsRepo;
-    if (wv != null && wr != null) {
-      try {
-        whoop = whoopActivitiesFromRecords(await wr.list(wv));
-        final day = [
-          for (final a in whoop)
-            if (_sameDay(a.date, date)) a,
-        ];
-        entries = mapLive((items) => creditClimbItems(items, day));
-      } catch (_) {/* honest: logged-only */}
+    final day = [
+      for (final a in state.whoop)
+        if (_sameDay(a.date, date)) a,
+    ];
+    if (day.isNotEmpty) {
+      entries = mapLive((items) => creditClimbItems(items, day));
     }
-
-    MissedWork? missed;
-    if (isToday && sv != null && sr != null) {
-      final kaya = <DateTime>[];
-      final cv = widget.climbingView;
-      final cr = widget.climbingRepo;
-      if (cv != null && cr != null) {
-        try {
-          for (final r in await cr.list(cv)) {
-            final d = _date(r['date']);
-            if (d != null) kaya.add(d);
-          }
-        } catch (_) {/* honest: Whoop-only */}
-      }
-      // 4x4 days — same type filter as the Goals tab (blank type counts).
-      const fourByFourTypes = {'treadmill', 'bike', 'stairmaster'};
-      final cardioDays = <DateTime>{};
-      final kv = widget.cardioView;
-      final kr = widget.cardioRepo;
-      if (kv != null && kr != null) {
-        try {
-          for (final r in await kr.list(kv)) {
-            final type = r['type']?.toString().trim().toLowerCase() ?? '';
-            if (type.isNotEmpty && !fourByFourTypes.contains(type)) continue;
-            final d = _date(r['date']);
-            if (d != null) cardioDays.add(dayOnly(d));
-          }
-        } catch (_) {/* honest empty */}
-      }
-      missed = detectMissedWork(
-        week: week,
-        strengthRows: strengthWeek,
-        climbDays: climbDaysUnion(kaya, whoopClimbDays(whoop)),
-        cardio4x4Days: cardioDays,
-        today: date,
-      );
-    }
-    return _DayData(prescription, entries, week, missed);
+    return _DayData(state.prescription, entries, state.week, state.missed);
   }
 
   bool get _canMove =>

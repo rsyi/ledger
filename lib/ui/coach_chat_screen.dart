@@ -305,6 +305,7 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
       final text = await brain.reply(
         List.of(_messages),
         onProposal: _postProposal,
+        onMovesProposal: _postMovesProposal,
       );
       // A proposal row may already have been persisted by the tool; an
       // empty text reply (tool-only turn) is fine — skip creating a row.
@@ -336,6 +337,22 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
   /// Persists a propose_schedule result as a kind=proposal row in this
   /// thread — same shape as a reply row, JSON payload in `text`.
   Future<void> _postProposal(CoachProposal p) async {
+    final now = DateTime.now();
+    await widget.repository.create(widget.view, <String, Object?>{
+      'id': const Uuid().v4(),
+      'date': DateTime(now.year, now.month, now.day),
+      'ts': now.toIso8601String(),
+      'role': 'coach',
+      'kind': 'proposal',
+      'thread': widget.threadId,
+      'text': p.encode(),
+    });
+    await _load();
+  }
+
+  /// Persists a propose_moves result as a kind=proposal row (type moves)
+  /// in this thread — mirrors [_postProposal]; renders as the moves card.
+  Future<void> _postMovesProposal(MovesProposal p) async {
     final now = DateTime.now();
     await widget.repository.create(widget.view, <String, Object?>{
       'id': const Uuid().v4(),

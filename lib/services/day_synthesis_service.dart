@@ -13,6 +13,7 @@ import 'program_observed.dart' show observedWeightStats;
 import 'program_provider.dart';
 import 'today_program_call.dart';
 import 'warehouse_connector.dart';
+import 'week_state_loader.dart';
 import 'weight_series.dart' show loadDailyWeighIns;
 import 'whoop_activity.dart';
 import 'wilks.dart' show contemporaneousBodyweightLbs;
@@ -101,6 +102,11 @@ class DaySynthesisService {
   final ViewSchema? workoutsView;
   final WarehouseConnector? workoutsRepo;
 
+  /// `program_moves` — today's program includes items moved IN from
+  /// another day and drops items moved OUT. Null → the plain routine.
+  final ViewSchema? programMovesView;
+  final WarehouseConnector? programMovesRepo;
+
   final ProgramProvider? provider;
   final DateTime Function() now;
 
@@ -122,6 +128,8 @@ class DaySynthesisService {
     this.analytics,
     this.workoutsView,
     this.workoutsRepo,
+    this.programMovesView,
+    this.programMovesRepo,
     required this.provider,
     this.now = DateTime.now,
   });
@@ -138,8 +146,10 @@ class DaySynthesisService {
   /// (commit 7573f0c) that still say "no macro targets set today". v3
   /// (bump 2026-09-30): the prompt now carries a recovery/sleep line, so
   /// caches written without it are regenerated to factor readiness. v4
-  /// (2026-10-01): Whoop activity line + climb credit.
-  static const _cacheVersion = 4;
+  /// (2026-10-01): Whoop activity line + climb credit. v5 (2026-10-02):
+  /// program_moves — moved-in items join today's program, moved-out
+  /// ones leave it.
+  static const _cacheVersion = 5;
 
   static String _dayKey(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
@@ -328,6 +338,27 @@ class DaySynthesisService {
               wants4x4: call.containsKey('cardio'),
               climbCall: call['climbing'],
             );
+            // Moves: today's effective items (shared loader — moves read
+            // only; the logged work is already in hand above).
+            if (programMovesView != null && programMovesRepo != null) {
+              try {
+                final state = await WeekStateLoader(
+                  loadDocs: () async => docs,
+                  programMovesView: programMovesView,
+                  programMovesRepo: programMovesRepo,
+                ).load(clock);
+                if (state != null) {
+                  program = synthProgramWithMoves(
+                    program,
+                    state.day,
+                    loggedToday: [for (final s in sets) s.exercise],
+                    climbed: climbCount > 0 ||
+                        activities.any((a) => a.kind == ActivityKind.climb),
+                    did4x4: did4x4,
+                  );
+                }
+              } catch (_) {/* honest: the unmoved routine */}
+            }
           }
         }
       } catch (_) {/* no program → still synthesize what's logged */}

@@ -180,4 +180,117 @@ void main() {
     expect(out, contains('Squat'));
     expect(out, contains('"entry_count": 1'));
   });
+
+  group('propose_moves', () {
+    // Thu 2026-10-01 → week Mon 9/28..Sun 10/4.
+    late List<MovesProposal> moved;
+    CoachToolset movesToolset() {
+      moved = [];
+      return CoachToolset(
+        views: const {},
+        onProposal: (_) async {},
+        onMovesProposal: (p) async => moved.add(p),
+        now: () => DateTime(2026, 10, 1, 9),
+      );
+    }
+
+    Future<String> runMoves(CoachToolset t, Map<String, dynamic> input) => t
+        .build()
+        .firstWhere((tool) => tool.name == 'propose_moves')
+        .run(input);
+
+    test('omitted without a sink', () {
+      final t = CoachToolset(views: const {}, onProposal: (_) async {});
+      expect(t.build().map((x) => x.name), isNot(contains('propose_moves')));
+    });
+
+    test('happy path sinks a MovesProposal that round-trips', () async {
+      final out = await runMoves(movesToolset(), {
+        'summary': 'Bench top set Wed → Fri',
+        'moves': [
+          {
+            'item': 'Bench top set',
+            'from_date': '2026-09-30',
+            'to_date': '2026-10-02',
+            'period': 'PM',
+            'note': 'missed Wed',
+          },
+        ],
+      });
+      expect(out, contains('Do not claim'));
+      expect(moved, hasLength(1));
+      final p = moved.single;
+      expect(p.summary, 'Bench top set Wed → Fri');
+      expect(p.moves.single.item, 'Bench top set');
+      expect(p.moves.single.from, DateTime(2026, 9, 30));
+      expect(p.moves.single.to, DateTime(2026, 10, 2));
+      expect(p.moves.single.period, 'PM');
+      final back = MovesProposal.tryParse(p.encode())!;
+      expect(back.moves.single.to, DateTime(2026, 10, 2));
+    });
+
+    test('moving into today is allowed', () async {
+      await runMoves(movesToolset(), {
+        'summary': 's',
+        'moves': [
+          {'item': 'RDL', 'from_date': '2026-09-28', 'to_date': '2026-10-01'},
+        ],
+      });
+      expect(moved.single.moves.single.to, DateTime(2026, 10, 1));
+    });
+
+    for (final (name, move, msg) in [
+      (
+        'to outside the week',
+        {'item': 'RDL', 'from_date': '2026-09-28', 'to_date': '2026-10-05'},
+        'outside this week',
+      ),
+      (
+        'from outside the week',
+        {'item': 'RDL', 'from_date': '2026-09-27', 'to_date': '2026-10-02'},
+        'outside this week',
+      ),
+      (
+        'to == from',
+        {'item': 'RDL', 'from_date': '2026-10-02', 'to_date': '2026-10-02'},
+        'equals from_date',
+      ),
+      (
+        'to in the past',
+        {'item': 'RDL', 'from_date': '2026-09-28', 'to_date': '2026-09-29'},
+        'in the past',
+      ),
+      (
+        'bad date',
+        {'item': 'RDL', 'from_date': 'Wed', 'to_date': '2026-10-02'},
+        'yyyy-MM-dd',
+      ),
+      (
+        'blank item',
+        {'item': ' ', 'from_date': '2026-09-28', 'to_date': '2026-10-02'},
+        'item is required',
+      ),
+    ]) {
+      test('rejects $name', () async {
+        final t = movesToolset();
+        await expectLater(
+          runMoves(t, {
+            'summary': 's',
+            'moves': [move],
+          }),
+          throwsA(isA<StateError>()
+              .having((e) => e.message, 'message', contains(msg))),
+        );
+        expect(moved, isEmpty);
+      });
+    }
+
+    test('rejects empty moves', () async {
+      final t = movesToolset();
+      await expectLater(
+        runMoves(t, {'summary': 's', 'moves': []}),
+        throwsA(isA<StateError>()),
+      );
+    });
+  });
 }

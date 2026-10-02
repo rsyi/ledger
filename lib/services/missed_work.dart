@@ -95,6 +95,10 @@ bool _has4x4(String s) => s.toLowerCase().contains('4x4');
 bool _hasClimb(String s) =>
     RegExp(r'climb', caseSensitive: false).hasMatch(s);
 
+/// 'lift' | 'climb' | 'cardio' (4x4) — the detector's item kinds, shared
+/// with the day synthesis' moved-item handling.
+String programItemKind(PrescribedItem i) => _kindOf(i);
+
 /// The NAME decides first: the live Tue "Climb — HARD session" scheme
 /// mentions "AM-4x4" in its prose, which must not make it a 4x4 item.
 String _kindOf(PrescribedItem i) {

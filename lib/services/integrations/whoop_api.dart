@@ -49,6 +49,25 @@ const _kMinPullInterval = Duration(hours: 6);
 const _kFirstPullWindow = Duration(days: 30);
 const _kRollingWindow = Duration(days: 14);
 
+/// Whoop's per-record `timezone_offset` ("-07:00", "+05:30", "Z") as a
+/// Duration. Null when absent or malformed — callers then fall back to
+/// the UTC instant (the pre-2026-10-01 behaviour), never throw.
+Duration? whoopOffset(Object? raw) {
+  if (raw is! String) return null;
+  final s = raw.trim();
+  if (s == 'Z') return Duration.zero;
+  final m = RegExp(r'^([+-])(\d{2}):?(\d{2})$').firstMatch(s);
+  if (m == null) return null;
+  final mins = int.parse(m.group(2)!) * 60 + int.parse(m.group(3)!);
+  return Duration(minutes: m.group(1) == '-' ? -mins : mins);
+}
+
+/// The wall-clock reading of [instant] at [offset], as a UTC DateTime
+/// whose fields ARE the local time (so `_isoDate`/`_isoDateTime` print
+/// local values). Null offset → the UTC reading.
+DateTime _wall(DateTime instant, Duration? offset) =>
+    instant.toUtc().add(offset ?? Duration.zero);
+
 // ---------------------------------------------------------------------------
 // Pure transforms (TDD'd in test/whoop_api_transform_test.dart).
 // ---------------------------------------------------------------------------
@@ -75,11 +94,9 @@ List<Map<String, dynamic>> whoopSleepToRecovery(List<dynamic> records) {
     if (endStr == null) continue;
     final end = DateTime.tryParse(endStr);
     if (end == null) continue;
-    // Trust the timestamp's own date portion as the wake day (Whoop
-    // stamps in UTC; converting to the device's local zone would shove
-    // an early-morning wake back a calendar day — the Kaya Z-suffix
-    // convention). Compare instants via the parsed ms for latest-wins.
-    final day = _isoDate(end.toUtc());
+    // Wake day = the sleep end's LOCAL date (timezone_offset); UTC when
+    // the record carries no offset.
+    final day = _isoDate(_wall(end, whoopOffset(s['timezone_offset'])));
     final endMs = end.millisecondsSinceEpoch;
     final existing = endByDay[day];
     if (existing != null && existing >= endMs) continue; // latest wins
@@ -213,13 +230,13 @@ const _kWhoopSports = <int, String>{
 /// Record shape (v2 /activity/workout): {id, start, end, sport_id,
 /// sport_name?, score: {strain, average_heart_rate, max_heart_rate,
 /// kilojoule}}. kcal = kilojoule / 4.184 (1dp); duration_min =
-/// (end − start) minutes (1dp); strain 1dp. The workout DATE is the
-/// start timestamp's own date portion (trust the wire instant as the
-/// activity wall-clock, Kaya convention — converting to the device zone
-/// would shove an evening session back a day). start_time/end_time are
-/// carried as second-precision datetime strings for the date/time
-/// overlap join the coach uses to line a workout up with the day's
-/// logged training session.
+/// (end − start) minutes (1dp); strain 1dp. The workout DATE and
+/// start/end times are LOCAL wall-clock via the record's
+/// `timezone_offset` (UTC when absent) — the raw UTC date put evening
+/// Pacific sessions on the next day (fixed 2026-10-01). start_time/
+/// end_time are carried as second-precision datetime strings for the
+/// date/time overlap join the coach uses to line a workout up with the
+/// day's logged training session.
 List<Map<String, dynamic>> whoopWorkoutsToRows(List<dynamic> records) {
   final byId = <String, Map<String, dynamic>>{};
   final startByIdMs = <String, int>{};
@@ -237,7 +254,8 @@ List<Map<String, dynamic>> whoopWorkoutsToRows(List<dynamic> records) {
     final end = DateTime.tryParse(endStr);
     if (start == null || end == null) continue;
 
-    final day = _isoDate(start.toUtc());
+    final off = whoopOffset(w['timezone_offset']);
+    final day = _isoDate(_wall(start, off));
     final durationMin =
         _round1(end.difference(start).inMilliseconds / 60000.0);
 
@@ -246,8 +264,14 @@ List<Map<String, dynamic>> whoopWorkoutsToRows(List<dynamic> records) {
       'date': {'kind': 'date', 'value': day},
       // Engine serde tag is `date_time` (NOT `datetime` — the Macrofactor
       // trap pinned by integration_kind_tags_test).
-      'start_time': {'kind': 'date_time', 'value': _isoDateTime(start)},
-      'end_time': {'kind': 'date_time', 'value': _isoDateTime(end)},
+      'start_time': {
+        'kind': 'date_time',
+        'value': _isoDateTime(_wall(start, off)),
+      },
+      'end_time': {
+        'kind': 'date_time',
+        'value': _isoDateTime(_wall(end, off)),
+      },
       'sport': {'kind': 'string', 'value': _sportName(w)},
       ..._numRound1(score, 'strain', 'strain'),
       ..._num(score, 'average_heart_rate', 'avg_hr'),

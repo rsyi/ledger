@@ -308,6 +308,15 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
           '${a.strain == null ? '' : ' · strain ${a.strain!.toStringAsFixed(1)}'}'
           '${a.durationMin == null ? '' : ' · ${a.durationMin!.round()} min'}');
     }
+    // M5: without this, a Whoop-seen lift plus unlogged planned lifts
+    // reads as a contradiction ("you lifted" + "still to come: lifting
+    // squat, bench") — the model would otherwise nag about work that
+    // likely happened but wasn't logged set-by-set.
+    if (c.activities.any((a) => a.kind == ActivityKind.lift) &&
+        c.liftsRemaining.isNotEmpty) {
+      b.writeln('  (Whoop saw a lifting session — remaining lifts may '
+          "simply be unlogged; don't nag about them.)");
+    }
     b.writeln();
   }
 

@@ -299,5 +299,64 @@ void main() {
       expect(p, contains('ACTIVITY (Whoop'));
       expect(p, contains('rock-climbing 14:58 · strain 14.8 · 86 min'));
     });
+
+    test('M5: a Whoop lift does not leave the prompt nagging about '
+        'remaining planned lifts', () {
+      final c = DaySynthesisContext(
+        hour: 20,
+        phase: 'cut',
+        program: const SynthProgramDay(plannedLifts: ['Squat', 'Bench']),
+        logged: const SynthLogged(), // nothing logged in-app
+        targets: const SynthTargets(),
+        activities: [
+          WhoopActivity(
+            date: DateTime(2026, 10, 1),
+            sport: 'weightlifting',
+            kind: ActivityKind.lift,
+            strain: 11.8,
+          ),
+        ],
+      );
+      expect(c.liftsRemaining, ['squat', 'bench']); // unlogged in-app
+      final p = buildDaySynthesisPrompt(c);
+      expect(
+        p,
+        contains("(Whoop saw a lifting session — remaining lifts may "
+            "simply be unlogged; don't nag about them.)"),
+      );
+    });
+
+    test('no contradiction note when there is no Whoop lift activity', () {
+      final c = DaySynthesisContext(
+        hour: 20,
+        phase: 'cut',
+        program: const SynthProgramDay(plannedLifts: ['Squat']),
+        logged: const SynthLogged(),
+        targets: const SynthTargets(),
+        activities: const [],
+      );
+      final p = buildDaySynthesisPrompt(c);
+      expect(p, isNot(contains('Whoop saw a lifting session')));
+    });
+
+    test('no contradiction note when nothing is left to do', () {
+      final c = DaySynthesisContext(
+        hour: 20,
+        phase: 'cut',
+        program: const SynthProgramDay(plannedLifts: ['Squat']),
+        logged: const SynthLogged(sets: [SynthSet(exercise: 'Squat')]),
+        targets: const SynthTargets(),
+        activities: [
+          WhoopActivity(
+            date: DateTime(2026, 10, 1),
+            sport: 'weightlifting',
+            kind: ActivityKind.lift,
+          ),
+        ],
+      );
+      expect(c.liftsRemaining, isEmpty);
+      final p = buildDaySynthesisPrompt(c);
+      expect(p, isNot(contains('Whoop saw a lifting session')));
+    });
   });
 }

@@ -28,12 +28,17 @@ class PrescribedItem {
   /// Matching sets logged so far.
   final int loggedSets;
 
+  /// Set when an external source (Whoop) credited this item instead of
+  /// logged sets — shown in place of the "k/N" counter ("strain 14.8").
+  final String? creditNote;
+
   const PrescribedItem({
     required this.name,
     required this.scheme,
     required this.period,
     this.targetSets = 1,
     this.loggedSets = 0,
+    this.creditNote,
   });
 
   /// Complete only when every prescribed set is logged.
@@ -45,6 +50,17 @@ class PrescribedItem {
         period: period,
         targetSets: targetSets,
         loggedSets: n,
+        creditNote: creditNote,
+      );
+
+  /// Marks the item complete on an external source's say-so.
+  PrescribedItem withCredit(String note) => PrescribedItem(
+        name: name,
+        scheme: scheme,
+        period: period,
+        targetSets: targetSets,
+        loggedSets: targetSets,
+        creditNote: note,
       );
 }
 

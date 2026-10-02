@@ -19,6 +19,7 @@ import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 import '../models/view_schema.dart';
 import 'whoop_activity.dart';
+import 'working_sets.dart';
 
 /// Cardio `type`s that count as a 4x4 session (blank counts too) — same
 /// filter as the Goals tab and tool/missed_work.dart.
@@ -44,7 +45,8 @@ class WeekState {
   /// failed) — the card's info sheet reuses it.
   final List<Record>? strengthRows;
 
-  /// Exercise names logged on [date].
+  /// Exercise names of the WORKING sets logged on [date] (warm-ups
+  /// excluded — `workingSetRecords`), one entry per set.
   final List<String> loggedOnDate;
 
   /// Whoop workouts (all days; empty when no source / failed).
@@ -148,7 +150,8 @@ class WeekStateLoader {
       try {
         final rows = await sr.list(sv);
         strengthRows = rows;
-        for (final r in rows) {
+        // Only WORKING sets credit prescribed items (card + detector).
+        for (final r in workingSetRecords(rows)) {
           final d = _date(r['date']);
           final ex = r['exercise']?.toString().trim();
           if (d == null || ex == null || ex.isEmpty) continue;

@@ -17,6 +17,7 @@ import 'week_state_loader.dart';
 import 'weight_series.dart' show loadDailyWeighIns;
 import 'whoop_activity.dart';
 import 'wilks.dart' show contemporaneousBodyweightLbs;
+import 'working_sets.dart';
 
 /// The synthesis plus the small tally the post-log notification reads. The
 /// synthesis text is what the card shows; the tally lets a notification
@@ -213,18 +214,27 @@ class DaySynthesisService {
     }
 
     final sets = <SynthSet>[];
+    // Today's WORKING-set names (warm-ups excluded) — what credits the
+    // program's moved-in items.
+    var workingToday = const <String>[];
     if (strengthView != null && strengthRepo != null) {
       try {
+        final todayRows = <Map<String, Object?>>[];
         for (final r in await strengthRepo!.list(strengthView!)) {
           if (!_sameDay(_date(r['date']), dayStart)) continue;
           final ex = r['exercise']?.toString().trim();
           if (ex == null || ex.isEmpty) continue;
+          todayRows.add(r);
           sets.add(SynthSet(
             exercise: ex,
             weight: _num(r['weight']),
             reps: _num(r['reps'])?.round(),
           ));
         }
+        workingToday = [
+          for (final r in workingSetRecords(todayRows))
+            r['exercise'].toString().trim(),
+        ];
       } catch (_) {/* honest empty */}
     }
 
@@ -351,7 +361,7 @@ class DaySynthesisService {
                   program = synthProgramWithMoves(
                     program,
                     state.day,
-                    loggedToday: [for (final s in sets) s.exercise],
+                    loggedToday: workingToday,
                     climbed: climbCount > 0 ||
                         activities.any((a) => a.kind == ActivityKind.climb),
                     did4x4: did4x4,

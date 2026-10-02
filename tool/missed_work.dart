@@ -9,6 +9,7 @@ import 'package:airledger/services/prescribed_exercises.dart';
 import 'package:airledger/services/program_moves.dart';
 import 'package:airledger/services/program_week.dart';
 import 'package:airledger/services/whoop_activity.dart';
+import 'package:airledger/services/working_sets.dart';
 import 'package:googleapis/sheets/v4.dart' as gsheets;
 import 'package:yaml/yaml.dart';
 
@@ -77,8 +78,9 @@ Future<void> main(List<String> args) async {
   final moveRows = await rows('program_moves');
 
   final allMoves = [for (final r in moveRows) ?ProgramMove.fromRecord(r)];
+  // Working sets only — warm-ups never credit prescribed items.
   final strengthSets = <({DateTime date, String exercise})>[
-    for (final r in strength)
+    for (final r in workingSetRecords(strength))
       if (_day(r['date']) case final d?)
         if ((r['exercise'] ?? '').toString().trim() case final ex
             when ex.isNotEmpty)

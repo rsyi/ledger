@@ -180,6 +180,21 @@ void main() {
     expect(find.text('1 / 6 done'), findsOneWidget);
   });
 
+  testWidgets('untagged ramp sets don\'t credit a prescribed item', (
+    tester,
+  ) async {
+    if (!hasFitness) return;
+    // Fri bench volume 3x8-10: 3 untagged ramp sets (95/135/155, no RPE)
+    // + 2 working sets → 2/3, not done.
+    final strength = _FakeRepo([
+      for (final (i, w) in [(0, 95), (1, 135), (2, 155), (3, 225), (4, 225)])
+        {'id': 's$i', 'date': fri, 'exercise': 'Bench Press', 'weight': w},
+    ]);
+    await pump(tester, date: fri, moves: _FakeRepo(), strength: strength);
+    expect(find.text('2/3'), findsOneWidget);
+    expect(find.text('0 / 5 done'), findsOneWidget);
+  });
+
   testWidgets('Move to… writes a manual program_moves row', (tester) async {
     if (!hasFitness) return;
     final moves = _FakeRepo();

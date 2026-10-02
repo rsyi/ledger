@@ -138,10 +138,9 @@ void main() {
         expect(lifts.any(low.contains), isFalse,
             reason: 'Tuesday lifting item leaked: ${it.name} ${it.scheme}');
       }
-      // NOTE: the Tue PM hard climb does NOT parse today — the prose
-      // mentions "partner day", which hits the parser's 'partner' skip
-      // key and drops the whole segment (pre-existing; see report). Only
-      // the no-lifting property is pinned here.
+      // The PM hard climb parses ("partner day" sits inside its parens,
+      // where skip words don't apply).
+      expect(tue.where(isClimbItem), hasLength(1));
     });
   });
 }

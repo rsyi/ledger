@@ -128,7 +128,10 @@ List<PrescribedItem> parsePrescribedProse(String? morning, String? afternoon) {
     for (var seg in _splitTopLevel(tidy)) {
       seg = seg.trim();
       if (seg.isEmpty) continue;
-      final low = seg.toLowerCase();
+      // Skip words count only OUTSIDE parentheses — "(…; partner day)"
+      // annotates a real session, it isn't a non-exercise clause.
+      final low =
+          seg.replaceAll(RegExp(r'\([^)]*\)?'), ' ').toLowerCase();
       if (_skip.any((k) => low.startsWith(k) || low.contains(k))) continue;
       // Name = text before the first ':', '(' or digit.
       final m = RegExp(r'[:(\d]').firstMatch(seg);

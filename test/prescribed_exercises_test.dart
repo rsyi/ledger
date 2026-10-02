@@ -97,4 +97,10 @@ void main() {
     expect(items.single.period, 'PM');
     expect(items.single.scheme, contains('low fatigue'));
   });
+
+  test('Tue PM climb survives a skip word inside its parentheses', () {
+    final items = parsePrescribedProse(null,
+        "PM: Climb — HARD session (the week's quality/limit climbing; partner day). The Tue AM-4x4 + PM-climb double session is the week's biggest recovery bite — keep both honest, no junk volume.");
+    expect(items.where((i) => i.name.startsWith('Climb')), hasLength(1));
+  });
 }

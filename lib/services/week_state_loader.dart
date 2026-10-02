@@ -89,6 +89,11 @@ class WeekStateLoader {
   final ViewSchema? climbingView;
   final WarehouseConnector? climbingRepo;
 
+  /// Calisthenics log (skill/variation/sets) — credits skill items like
+  /// "Handstand practice" exactly as strength sets do.
+  final ViewSchema? calisthenicsView;
+  final WarehouseConnector? calisthenicsRepo;
+
   /// Clock for the Kaya cache TTL.
   final DateTime Function() now;
 
@@ -104,6 +109,8 @@ class WeekStateLoader {
     this.cardioRepo,
     this.climbingView,
     this.climbingRepo,
+    this.calisthenicsView,
+    this.calisthenicsRepo,
     this.now = DateTime.now,
   });
 
@@ -191,6 +198,8 @@ class WeekStateLoader {
     final cr = climbingRepo;
     final kv = cardioView;
     final kr = cardioRepo;
+    final xv = calisthenicsView;
+    final xr = calisthenicsRepo;
     final missedOn = withMissed && sv != null && sr != null;
     final reads = await Future.wait<Object?>([
       _try(mv == null || mr == null ? null : () => mr.list(mv)),
@@ -200,12 +209,14 @@ class WeekStateLoader {
           ? null
           : () => _kayaDays(cv, cr, now())),
       _try(!missedOn || kv == null || kr == null ? null : () => kr.list(kv)),
+      _try(xv == null || xr == null ? null : () => xr.list(xv)),
     ]);
     final moveRows = reads[0] as List<Record>?;
     final strengthList = reads[1] as List<Record>?;
     final workoutRows = reads[2] as List<Record>?;
     final kaya = (reads[3] as List<DateTime>?) ?? const <DateTime>[];
     final cardioRows = reads[4] as List<Record>?;
+    final calisthenicsRows = reads[5] as List<Record>?;
 
     var moves = const <String, ProgramMove>{};
     if (moveRows != null) {
@@ -234,6 +245,15 @@ class WeekStateLoader {
           }
         }
       } catch (_) {/* honest empty */}
+    }
+    // Calisthenics sets credit skill items the same way (one per set).
+    if (calisthenicsRows != null) {
+      try {
+        for (final c in calisthenicsLoggedSets(calisthenicsRows)) {
+          if (c.date == day) logged.add(c.exercise);
+          if (mondayOf(c.date) == mon) strengthWeek.add(c);
+        }
+      } catch (_) {/* honest: strength-only */}
     }
 
     var whoop = const <WhoopActivity>[];

@@ -105,3 +105,28 @@ List<Map<String, Object?>> workingSetRecords(
         r,
   ];
 }
+
+/// Calisthenics log rows (skill / variation / sets) as logged sets for
+/// program crediting — one entry per set (blank sets = 1), named
+/// "skill variation" so "handstand" credits "Handstand practice".
+/// Rows without a date or skill are skipped.
+List<({DateTime date, String exercise})> calisthenicsLoggedSets(
+    Iterable<Map<String, Object?>> rows) {
+  final out = <({DateTime date, String exercise})>[];
+  for (final r in rows) {
+    final raw = r['date'];
+    final d = raw is DateTime ? raw : DateTime.tryParse(raw?.toString() ?? '');
+    final skill = r['skill']?.toString().trim() ?? '';
+    if (d == null || skill.isEmpty) continue;
+    final variation = r['variation']?.toString().trim() ?? '';
+    final name = variation.isEmpty ? skill : '$skill $variation';
+    final setsRaw = r['sets'];
+    final sets = setsRaw is num
+        ? setsRaw.round()
+        : (num.tryParse(setsRaw?.toString() ?? '')?.round() ?? 1);
+    for (var i = 0; i < (sets < 1 ? 1 : sets); i++) {
+      out.add((date: DateTime(d.year, d.month, d.day), exercise: name));
+    }
+  }
+  return out;
+}

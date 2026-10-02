@@ -1393,6 +1393,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             ? null
                             : data.registry.forView(dashStrengthView),
                         workoutsView: dashWorkoutsView,
+                        calisthenicsView: dashCalisthenicsView,
+                        calisthenicsRepo: dashCalisthenicsView == null
+                            ? null
+                            : data.registry.forView(dashCalisthenicsView),
                         workoutsRepo: dashboardRepoFor(
                           dashWorkoutsView,
                           readOnlyRepo: data.readOnlyRepo,
@@ -1636,6 +1640,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               ? null
                               : data.registry.forView(dashStrengthView),
                           workoutsView: dashWorkoutsView,
+                        calisthenicsView: dashCalisthenicsView,
+                        calisthenicsRepo: dashCalisthenicsView == null
+                            ? null
+                            : data.registry.forView(dashCalisthenicsView),
                           workoutsRepo: dashboardRepoFor(
                             dashWorkoutsView,
                             readOnlyRepo: data.readOnlyRepo,

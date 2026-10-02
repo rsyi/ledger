@@ -44,6 +44,11 @@ class ProgramDayCard extends StatefulWidget {
   final ViewSchema? workoutsView;
   final WarehouseConnector? workoutsRepo;
 
+  /// Calisthenics log — a logged handstand/muscle-up set ticks the
+  /// matching skill item.
+  final ViewSchema? calisthenicsView;
+  final WarehouseConnector? calisthenicsRepo;
+
   /// `program_moves` — relocations within the Mon–Sun week. Null → the
   /// card shows the plain prescription (no Move to… / Undo).
   final ViewSchema? programMovesView;
@@ -69,6 +74,8 @@ class ProgramDayCard extends StatefulWidget {
     this.strengthRepo,
     this.workoutsView,
     this.workoutsRepo,
+    this.calisthenicsView,
+    this.calisthenicsRepo,
     this.programMovesView,
     this.programMovesRepo,
     this.cardioView,
@@ -187,6 +194,8 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       cardioRepo: widget.cardioRepo,
       climbingView: widget.climbingView,
       climbingRepo: widget.climbingRepo,
+      calisthenicsView: widget.calisthenicsView,
+      calisthenicsRepo: widget.calisthenicsRepo,
     ).load(date, label: widget.label, withMissed: isToday);
     if (state == null) return null;
     var entries = state.day;

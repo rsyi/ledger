@@ -566,6 +566,7 @@ in a desktop Claude session — you cannot edit files from here.''';
     final workouts = views['whoop_workouts'];
     final cardio = views['cardio'];
     final climbing = views['climbing'];
+    final calisthenics = views['calisthenics'];
     return WeekStateLoader(
       loadDocs: ProgramProvider(fetchDoc, now: now).load,
       programMovesView: moves,
@@ -578,6 +579,8 @@ in a desktop Claude session — you cannot edit files from here.''';
       cardioRepo: repoFor(cardio),
       climbingView: climbing,
       climbingRepo: repoFor(climbing),
+      calisthenicsView: calisthenics,
+      calisthenicsRepo: repoFor(calisthenics),
     );
   }
 

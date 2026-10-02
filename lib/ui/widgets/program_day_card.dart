@@ -121,6 +121,11 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   /// sheet can open. Refreshed with every reload (log events included).
   List<Map<String, Object?>>? _strengthRows;
 
+  /// The last loaded data for the CURRENT day — shown while a reload (a
+  /// log event, a move) is in flight, so the card never collapses to a
+  /// spinner after its first load. Cleared when the day changes.
+  _DayData? _last;
+
   @override
   void initState() {
     super.initState();
@@ -134,6 +139,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   void didUpdateWidget(ProgramDayCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!_sameDay(oldWidget.date, widget.date) || oldWidget.label != widget.label) {
+      _last = null; // another day's data must not stand in
       _future = _load(); // build follows didUpdateWidget — no setState
     }
   }
@@ -352,7 +358,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     return FutureBuilder<_DayData?>(
       future: _future,
       builder: (context, snap) {
-        if (snap.connectionState != ConnectionState.done) {
+        final loading = snap.connectionState != ConnectionState.done;
+        if (!loading) _last = snap.data;
+        if (loading && _last == null) {
           return const Card(
             margin: EdgeInsets.fromLTRB(12, 0, 12, 12),
             child: SizedBox(
@@ -361,7 +369,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
             ),
           );
         }
-        final data = snap.data;
+        final data = loading ? _last : snap.data;
         if (data == null) return const SizedBox.shrink();
         final theme = Theme.of(context);
         final muted = theme.colorScheme.onSurfaceVariant;

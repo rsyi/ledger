@@ -34,6 +34,7 @@ import 'package:googleapis_auth/auth_io.dart';
 import '../app_config.dart' show KayaGmailConfig;
 import '../transient_retry.dart';
 import '../kaya_csv.dart';
+import '../week_state_loader.dart';
 import 'gmail_gateway.dart';
 import 'integration.dart';
 
@@ -146,6 +147,8 @@ Future<KayaGmailImport?> kayaImportFromGmail({
       await gmail.attachmentData(messageId: id, attachmentId: att.attachmentId!);
   final snapshot = parseKayaExportCsv(decodeGmailBody(data));
   await store.replaceAll(snapshot.tabRows);
+  // The climbing tab just changed — drop the week loader's cached copy.
+  WeekStateLoader.clearKayaCache();
   return KayaGmailImport(
     messageId: id,
     receivedAt: gmailInternalDate(msg)!,

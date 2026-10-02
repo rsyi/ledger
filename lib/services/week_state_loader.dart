@@ -5,7 +5,9 @@
 /// Shared by the program day card, CoachBrain's moves/missed section,
 /// the day synthesis and the in-app carryover check so every surface
 /// reads the same sources the same way (spec 2026-10-02 §3/§7). Each
-/// source is listed ONCE per load; every read degrades honestly (a
+/// source is listed ONCE per load, all in parallel (the read-only Kaya
+/// climbing tab is session-cached — [WeekStateLoader.kayaCacheTtl]);
+/// every read degrades honestly (a
 /// failed moves read = an unmoved week, a failed log read = nothing
 /// logged) — only a failed program-doc load yields null.
 library;
@@ -87,6 +89,9 @@ class WeekStateLoader {
   final ViewSchema? climbingView;
   final WarehouseConnector? climbingRepo;
 
+  /// Clock for the Kaya cache TTL.
+  final DateTime Function() now;
+
   const WeekStateLoader({
     required this.loadDocs,
     this.programMovesView,
@@ -99,10 +104,56 @@ class WeekStateLoader {
     this.cardioRepo,
     this.climbingView,
     this.climbingRepo,
+    this.now = DateTime.now,
   });
 
   /// Whether the strength source is configured (missed work needs it).
   bool get hasStrength => strengthView != null && strengthRepo != null;
+
+  /// Session cache of the read-only Kaya climbing tab's dates: that read
+  /// is a NETWORK fetch of ~1.4k rows, and the tab only changes on a Kaya
+  /// import — re-reading it on every log event (program card) / coach
+  /// turn was the slow path. Single entry keyed by repo identity + view
+  /// name (the card and the coach share the bootstrap's read-only repo);
+  /// failed reads are never cached.
+  static const kayaCacheTtl = Duration(minutes: 30);
+  static ({
+    WarehouseConnector repo,
+    String view,
+    DateTime at,
+    List<DateTime> days,
+  })? _kaya;
+
+  /// Drops the Kaya cache (after an import; tests).
+  static void clearKayaCache() => _kaya = null;
+
+  static Future<List<DateTime>> _kayaDays(
+      ViewSchema view, WarehouseConnector repo, DateTime now) async {
+    final c = _kaya;
+    if (c != null &&
+        identical(c.repo, repo) &&
+        c.view == view.name &&
+        now.difference(c.at) < kayaCacheTtl &&
+        !now.isBefore(c.at)) {
+      return c.days;
+    }
+    final days = <DateTime>[
+      for (final r in await repo.list(view)) ?_date(r['date']),
+    ];
+    _kaya = (repo: repo, view: view.name, at: now, days: days);
+    return days;
+  }
+
+  /// [read], or null when the source is missing or the read throws
+  /// (every source degrades honestly).
+  static Future<T?> _try<T>(Future<T> Function()? read) async {
+    if (read == null) return null;
+    try {
+      return await read();
+    } catch (_) {
+      return null;
+    }
+  }
 
   static DateTime? _date(Object? v) {
     if (v is DateTime) return v;
@@ -129,13 +180,38 @@ class WeekStateLoader {
     final (prescription, _) = prescribedDay(docs, day, label: label);
     if (prescription == null) return null;
 
-    var moves = const <String, ProgramMove>{};
+    // Independent sources, read in parallel (each once per load).
     final mv = programMovesView;
     final mr = programMovesRepo;
-    if (mv != null && mr != null) {
+    final sv = strengthView;
+    final sr = strengthRepo;
+    final wv = workoutsView;
+    final wr = workoutsRepo;
+    final cv = climbingView;
+    final cr = climbingRepo;
+    final kv = cardioView;
+    final kr = cardioRepo;
+    final missedOn = withMissed && sv != null && sr != null;
+    final reads = await Future.wait<Object?>([
+      _try(mv == null || mr == null ? null : () => mr.list(mv)),
+      _try(sv == null || sr == null ? null : () => sr.list(sv)),
+      _try(wv == null || wr == null ? null : () => wr.list(wv)),
+      _try(!missedOn || cv == null || cr == null
+          ? null
+          : () => _kayaDays(cv, cr, now())),
+      _try(!missedOn || kv == null || kr == null ? null : () => kr.list(kv)),
+    ]);
+    final moveRows = reads[0] as List<Record>?;
+    final strengthList = reads[1] as List<Record>?;
+    final workoutRows = reads[2] as List<Record>?;
+    final kaya = (reads[3] as List<DateTime>?) ?? const <DateTime>[];
+    final cardioRows = reads[4] as List<Record>?;
+
+    var moves = const <String, ProgramMove>{};
+    if (moveRows != null) {
       try {
         moves = activeMoves([
-          for (final r in await mr.list(mv)) ?ProgramMove.fromRecord(r),
+          for (final r in moveRows) ?ProgramMove.fromRecord(r),
         ], mon);
       } catch (_) {/* honest: unmoved week */}
     }
@@ -144,14 +220,11 @@ class WeekStateLoader {
     List<Record>? strengthRows;
     final logged = <String>[];
     final strengthWeek = <({DateTime date, String exercise})>[];
-    final sv = strengthView;
-    final sr = strengthRepo;
-    if (sv != null && sr != null) {
+    if (strengthList != null) {
       try {
-        final rows = await sr.list(sv);
-        strengthRows = rows;
+        strengthRows = strengthList;
         // Only WORKING sets credit prescribed items (card + detector).
-        for (final r in workingSetRecords(rows)) {
+        for (final r in workingSetRecords(strengthList)) {
           final d = _date(r['date']);
           final ex = r['exercise']?.toString().trim();
           if (d == null || ex == null || ex.isEmpty) continue;
@@ -164,41 +237,22 @@ class WeekStateLoader {
     }
 
     var whoop = const <WhoopActivity>[];
-    final wv = workoutsView;
-    final wr = workoutsRepo;
-    if (wv != null && wr != null) {
+    if (workoutRows != null) {
       try {
-        whoop = whoopActivitiesFromRecords(await wr.list(wv));
+        whoop = whoopActivitiesFromRecords(workoutRows);
       } catch (_) {/* honest: logged-only */}
     }
 
     MissedWork? missed;
-    if (withMissed && sv != null && sr != null) {
-      final kaya = <DateTime>[];
-      final cv = climbingView;
-      final cr = climbingRepo;
-      if (cv != null && cr != null) {
-        try {
-          for (final r in await cr.list(cv)) {
-            final d = _date(r['date']);
-            if (d != null) kaya.add(d);
-          }
-        } catch (_) {/* honest: Whoop-only */}
-      }
+    if (missedOn) {
       final cardioDays = <DateTime>{};
-      final kv = cardioView;
-      final kr = cardioRepo;
-      if (kv != null && kr != null) {
-        try {
-          for (final r in await kr.list(kv)) {
-            final type = r['type']?.toString().trim().toLowerCase() ?? '';
-            if (type.isNotEmpty && !fourByFourCardioTypes.contains(type)) {
-              continue;
-            }
-            final d = _date(r['date']);
-            if (d != null) cardioDays.add(dayOnly(d));
-          }
-        } catch (_) {/* honest empty */}
+      for (final r in cardioRows ?? const <Record>[]) {
+        final type = r['type']?.toString().trim().toLowerCase() ?? '';
+        if (type.isNotEmpty && !fourByFourCardioTypes.contains(type)) {
+          continue;
+        }
+        final d = _date(r['date']);
+        if (d != null) cardioDays.add(dayOnly(d));
       }
       missed = detectMissedWork(
         week: week,

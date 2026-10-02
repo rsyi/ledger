@@ -1,6 +1,7 @@
 // ProgramDayCard — effective (post-moves) items, Move to… / Undo, and the
 // "Missed this week" section. Runs against the LIVE airledger-fitness
 // program.yaml (cut week of Mon 2026-09-28), like program_week_test.
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -11,7 +12,9 @@ import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/program_moves.dart';
 import 'package:airledger/services/program_provider.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
+import 'package:airledger/services/log_event_bus.dart';
 import 'package:airledger/services/warehouse_connector.dart';
+import 'package:airledger/services/week_state_loader.dart';
 import 'package:airledger/ui/widgets/program_day_card.dart';
 
 const _fitness = '../airledger-fitness';
@@ -21,6 +24,9 @@ class _FakeRepo implements WarehouseConnector {
   final created = <Record>[];
   final deleted = <Record>[];
   int lists = 0;
+
+  /// When set, list() waits on it (holds a reload mid-flight).
+  Completer<void>? gate;
   _FakeRepo([List<Record>? rows]) : rows = rows ?? [];
 
   @override
@@ -30,6 +36,7 @@ class _FakeRepo implements WarehouseConnector {
   @override
   Future<List<Record>> list(ViewSchema view, {DateTime? onDate}) async {
     lists++;
+    await gate?.future;
     return [...rows, ...created];
   }
 
@@ -87,7 +94,10 @@ void main() {
   final fri = DateTime(2026, 10, 2);
   final wed = DateTime(2026, 9, 30);
 
-  setUp(ProgramProvider.clearCache);
+  setUp(() {
+    ProgramProvider.clearCache();
+    WeekStateLoader.clearKayaCache();
+  });
 
   Record benchMove() => ProgramMove(
     id: 'm1',
@@ -372,5 +382,32 @@ void main() {
     expect(m.to, DateTime(2026, 10, 3));
     expect(m.source, 'manual');
     expect(find.text('Squat heavy — Mon, 0/1 sets'), findsNothing);
+  });
+
+  testWidgets('a log event reloads WITHOUT a spinner and without '
+      're-reading the Kaya climbing tab', (tester) async {
+    if (!hasFitness) return;
+    final climbing = _FakeRepo([
+      {'id': 'c1', 'date': DateTime(2026, 9, 29)},
+    ]);
+    final strength = _FakeRepo();
+    await pump(tester,
+        date: fri, moves: _FakeRepo(), strength: strength, climbing: climbing);
+    expect(climbing.lists, 1);
+    final strengthLists = strength.lists;
+    expect(find.text('0 / 5 done'), findsOneWidget);
+
+    strength.gate = Completer<void>();
+    LogEventBus.instance.publish(const LogEvent('strength', {}));
+    await tester.pump(); // event delivered → reload in flight
+    await tester.pump();
+    expect(strength.lists, strengthLists + 1, reason: 'reload started');
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text('0 / 5 done'), findsOneWidget,
+        reason: 'previous data stays up while reloading');
+    strength.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(strength.lists, strengthLists + 1);
+    expect(climbing.lists, 1, reason: 'Kaya climb days cached');
   });
 }

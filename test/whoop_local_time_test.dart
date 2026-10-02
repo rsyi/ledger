@@ -63,4 +63,85 @@ void main() {
       expect((recs.single['date'] as Map)['value'], '2026-10-01');
     });
   });
+
+  group('recovery day', () {
+    test('keyed on its sleep_id wake day', () {
+      final days = whoopSleepWakeDays([
+        {
+          'id': 's1',
+          'nap': false,
+          'end': '2026-10-02T06:30:00.000Z',
+          'timezone_offset': '-07:00',
+          'score': {},
+        },
+        {'id': 'nap1', 'nap': true, 'end': '2026-10-02T20:00:00.000Z'},
+      ]);
+      expect(days, {'s1': '2026-10-01'});
+      final f = whoopRecoveryFields([
+        {
+          'sleep_id': 's1',
+          'created_at': '2026-10-02T14:00:00.000Z',
+          'score': {'recovery_score': 70},
+        },
+      ], sleepDays: days);
+      expect(f.keys, ['2026-10-01']);
+    });
+    test('falls back to created_at shifted by the latest sleep offset', () {
+      final f = whoopRecoveryFields([
+        {
+          'sleep_id': 'unknown',
+          'created_at': '2026-10-02T03:00:00.000Z',
+          'score': {'recovery_score': 70},
+        },
+      ], fallbackOffset: const Duration(hours: -7));
+      expect(f.keys, ['2026-10-01']);
+    });
+    test('whoopLatestOffset picks the latest-ending sleep', () {
+      expect(
+        whoopLatestOffset([
+          {'end': '2026-10-01T10:00:00Z', 'timezone_offset': '-04:00'},
+          {'end': '2026-10-02T10:00:00Z', 'timezone_offset': '-07:00'},
+        ]),
+        const Duration(hours: -7),
+      );
+      expect(whoopLatestOffset(const []), isNull);
+    });
+  });
+
+  group('whoopStaleDays', () {
+    test('known in-window days not re-emitted are stale', () {
+      expect(
+        whoopStaleDays(
+          known: {'2026-09-20', '2026-09-25', '2026-09-26'},
+          emitted: {'2026-09-25'},
+          diffFrom: '2026-09-22',
+          fullReconcile: false,
+        ),
+        ['2026-09-26'],
+      );
+    });
+    test('empty fetch against a non-empty in-window baseline → null (refuse)',
+        () {
+      expect(
+        whoopStaleDays(
+          known: {'2026-09-25'},
+          emitted: const {},
+          diffFrom: '2026-09-22',
+          fullReconcile: false,
+        ),
+        isNull,
+      );
+    });
+    test('full reconcile overrides the guard', () {
+      expect(
+        whoopStaleDays(
+          known: {'2026-09-25'},
+          emitted: const {},
+          diffFrom: '2026-09-22',
+          fullReconcile: true,
+        ),
+        ['2026-09-25'],
+      );
+    });
+  });
 }

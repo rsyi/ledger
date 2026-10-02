@@ -128,12 +128,20 @@ List<Map<String, dynamic>> whoopSleepToRecovery(List<dynamic> records) {
   return [for (final d in days) byDay[d]!];
 }
 
-/// Transform Whoop v2 recovery records into a day → objective-fields map,
-/// keyed on the recovery's `created_at` local day. Score-less records are
+/// Transform Whoop v2 recovery records into a day → objective-fields map.
+/// Each record is keyed on its linked sleep's LOCAL wake day (via
+/// [sleepDays], `sleep_id` → day — recovery records carry no offset of
+/// their own); when the sleep_id is unknown (or missing), falls back to
+/// `created_at` shifted by [fallbackOffset] (the user's current zone,
+/// from [whoopLatestOffset]), else raw UTC. Score-less records are
 /// skipped. Later `created_at` wins a same-day collision. Fields:
 /// recovery_score, hrv_ms (hrv_rmssd_milli), resting_hr
 /// (resting_heart_rate).
-Map<String, Map<String, dynamic>> whoopRecoveryFields(List<dynamic> records) {
+Map<String, Map<String, dynamic>> whoopRecoveryFields(
+  List<dynamic> records, {
+  Map<String, String> sleepDays = const {},
+  Duration? fallbackOffset,
+}) {
   final out = <String, Map<String, dynamic>>{};
   final atByDay = <String, int>{};
   for (final r in records) {
@@ -146,7 +154,10 @@ Map<String, Map<String, dynamic>> whoopRecoveryFields(List<dynamic> records) {
     final created = DateTime.tryParse(createdStr);
     if (created == null) continue;
     final ms = created.millisecondsSinceEpoch;
-    final day = _isoDate(created.toUtc());
+    // Recovery is "this morning's" read: key it on its sleep's local wake
+    // day; else created_at shifted by the user's current zone; else UTC.
+    final day = sleepDays[r['sleep_id']?.toString()] ??
+        _isoDate(_wall(created, fallbackOffset));
     final existing = atByDay[day];
     if (existing != null && existing >= ms) continue;
     out[day] = <String, dynamic>{
@@ -157,6 +168,57 @@ Map<String, Map<String, dynamic>> whoopRecoveryFields(List<dynamic> records) {
     atByDay[day] = ms;
   }
   return out;
+}
+
+/// Sleep id → its LOCAL wake day, for keying recovery records (which
+/// carry no offset of their own). Naps and records without id/end skip.
+Map<String, String> whoopSleepWakeDays(List<dynamic> sleeps) {
+  final out = <String, String>{};
+  for (final s in sleeps) {
+    if (s is! Map || s['nap'] == true) continue;
+    final id = s['id']?.toString();
+    final end = DateTime.tryParse(s['end']?.toString() ?? '');
+    if (id == null || id.isEmpty || end == null) continue;
+    out[id] = _isoDate(_wall(end, whoopOffset(s['timezone_offset'])));
+  }
+  return out;
+}
+
+/// The offset of the latest-ending sleep in the batch (the user's current
+/// zone), or null when none carries one.
+Duration? whoopLatestOffset(List<dynamic> sleeps) {
+  DateTime? best;
+  Duration? off;
+  for (final s in sleeps) {
+    if (s is! Map) continue;
+    final end = DateTime.tryParse(s['end']?.toString() ?? '');
+    final o = whoopOffset(s['timezone_offset']);
+    if (end == null || o == null) continue;
+    if (best == null || end.isAfter(best)) {
+      best = end;
+      off = o;
+    }
+  }
+  return off;
+}
+
+/// Days the source previously wrote ([known]) inside the diff window
+/// (>= [diffFrom]) that this pull did not re-emit — they moved (local-date
+/// fix) or vanished upstream. Null = refuse to diff: nothing was emitted
+/// but in-window days are known (an API glitch, not a wipe) unless
+/// [fullReconcile].
+List<String>? whoopStaleDays({
+  required Set<String> known,
+  required Set<String> emitted,
+  required String diffFrom,
+  required bool fullReconcile,
+}) {
+  final inWindow = [
+    for (final d in known)
+      if (d.compareTo(diffFrom) >= 0) d,
+  ]..sort();
+  if (emitted.isEmpty && inWindow.isNotEmpty && !fullReconcile) return null;
+  return [for (final d in inWindow) if (!emitted.contains(d)) d];
 }
 
 /// Fold the recovery-by-day fields into the sleep records (matched on the
@@ -533,10 +595,25 @@ class WhoopApiIntegration implements Integration {
 
       final records = whoopMergeRecovery(
         sleep: whoopSleepToRecovery(sleepRecs),
-        recovery: whoopRecoveryFields(recoveryRecs),
+        recovery: whoopRecoveryFields(
+          recoveryRecs,
+          sleepDays: whoopSleepWakeDays(sleepRecs),
+          fallbackOffset: whoopLatestOffset(sleepRecs),
+        ),
       );
-
-      if (records.isNotEmpty) {
+      final emitted = <String>{
+        for (final r in records) ((r['date'] as Map)['value']) as String,
+      };
+      // Stale-day diff starts 2 days inside the window: the API filters
+      // by START, so the window's first night can fall outside it.
+      final stale = whoopStaleDays(
+        known: known,
+        emitted: emitted,
+        diffFrom: _isoDate(
+            now.subtract(window).add(const Duration(days: 2)).toUtc()),
+        fullReconcile: fullReconcile,
+      );
+      if (records.isNotEmpty || (stale?.isNotEmpty ?? false)) {
         // match-by-date (no match_field) — one recovery row per day.
         // notes stays fill-if-blank so a manual note is never
         // overwritten by an empty Whoop pull.
@@ -545,10 +622,11 @@ class WhoopApiIntegration implements Integration {
           'owned_fields': _ownedFields,
           'fill_if_blank_fields': const ['notes'],
           'records': records,
+          if (stale != null && stale.isNotEmpty) 'deleted_dates': stale,
         });
-        for (final r in records) {
-          known.add(((r['date'] as Map)['value']) as String);
-        }
+        known
+          ..addAll(emitted)
+          ..removeAll(stale ?? const <String>[]);
         await repo.metaSet(_kDays, jsonEncode(known.toList()..sort()));
       }
 

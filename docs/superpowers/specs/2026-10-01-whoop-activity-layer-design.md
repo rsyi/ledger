@@ -38,8 +38,10 @@ sessions land on the next day (e.g. a 19:30 PT walk dated tomorrow).
 - Fields are integration-owned, so one Full reconcile rewrites existing
   rows. Workouts are matched by `workout_id`, so a corrected date updates
   in place (no duplicates). Recovery is match-by-date: a row whose date
-  moves leaves the old date's row behind — the reconcile's deleted-days
-  diff (known days not re-emitted in window) clears it; verify on device.
+  moves would leave the old date's row behind. Add a deleted-days diff to
+  the recovery pull (known days inside the window not re-emitted →
+  `deleted_dates`, Withings pattern; same empty-fetch mass-delete guard
+  as workouts) so the stale row is removed.
 
 ## 2. Activity classifier — `lib/services/whoop_activity.dart` (pure)
 

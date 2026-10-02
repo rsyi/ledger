@@ -12,7 +12,7 @@ library;
 import 'day_prescription.dart';
 import 'prescribed_exercises.dart';
 import 'program_current.dart' show programCurrent;
-import 'program_provider.dart' show IntentDocs;
+import 'intent_docs.dart';
 
 /// Local-midnight calendar day of [d] (its y/m/d, whatever its zone).
 DateTime dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);

@@ -42,6 +42,11 @@ if [ "$(date +%u)" = "7" ]; then
   WEEKLY_REVIEW="$(cd "$APP" && dart run tool/program_status_update.dart --weekly-brief 2>/dev/null)" || true
 fi
 
+# Missed work this Mon-Sun week (+ moves, remaining days, expiry) for
+# the coach's carryover proposal. Read-only; a failure must never stop
+# the briefing.
+MISSED="$(cd "$APP" && dart run tool/missed_work.dart --date "$TARGET" 2>/dev/null)" || true
+
 PROMPT="$(
   printf 'MODE: BRIEFING\n\n'
   cat "$FIT/coach/PROMPT.md"
@@ -53,6 +58,9 @@ PROMPT="$(
   if [ -n "$WEEKLY_REVIEW" ]; then
     printf '\n\n# weekly_review (generated tonight)\n\n%s\n' "$WEEKLY_REVIEW"
   fi
+  if [ -n "$MISSED" ]; then
+    printf '\n\n# missed_work\n\n%s\n' "$MISSED"
+  fi
   printf '\n\n# metrics.md\n\n'; cat "$FIT/coach/metrics.md"
   # Templates retired (2026-09-30): the program_slice above is the
   # authoritative day-by-day prescription; program.yaml `routine:` holds
@@ -61,8 +69,11 @@ PROMPT="$(
 )"
 
 # Max-plan session via the claude CLI; sonnet is plenty and gentler on
-# plan limits. Output is plain text — posted verbatim as the briefing.
+# plan limits. Output is plain text — posted as the briefing; an optional
+# fenced ```moves block (missed-work carryover) is split off by
+# --split-moves and posted first as a kind=proposal card (a bad block is
+# stripped + logged, never blocks the briefing).
 OUT="$(claude -p "$PROMPT" --model sonnet --output-format text)"
 
-printf '%s' "$OUT" | (cd "$APP" && dart run tool/coach_msg.dart post --role coach --kind briefing --thread briefings)
+printf '%s' "$OUT" | (cd "$APP" && dart run tool/coach_msg.dart post --role coach --kind briefing --split-moves --thread briefings)
 echo "=== coach run done $(date) ==="

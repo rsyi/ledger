@@ -3,7 +3,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:airledger/models/coach_proposal.dart';
 import 'package:airledger/models/view_schema.dart';
+import 'package:airledger/services/moves_block.dart';
 import 'package:airledger/services/input_parser.dart';
 import 'package:airledger/services/schema_parser.dart';
 import 'package:googleapis/sheets/v4.dart' as gsheets;
@@ -14,12 +16,21 @@ import 'package:uuid/uuid.dart';
 /// Coach chat message tool — posts and inspects the `coach_chat` tab.
 ///
 ///   echo 'text' | dart run tool/coach_msg.dart post --role coach --kind reply [--thread <id>]
+///   echo "$PAYLOAD_JSON" | dart run tool/coach_msg.dart post --role coach --kind proposal --thread briefings
+///   echo "$OUT"   | dart run tool/coach_msg.dart post --role coach --kind briefing --split-moves --thread briefings
 ///   dart run tool/coach_msg.dart pending
 ///   dart run tool/coach_msg.dart briefing-exists --date YYYY-MM-DD
 ///
 /// `post` appends one row (id=UUID, date=today, ts=now ISO, role, kind,
 /// thread, text from stdin), creating the tab with headers if missing.
 /// --thread defaults to "general" (blank in the sheet = general).
+/// `--kind proposal` posts the stdin JSON payload verbatim (it must parse
+/// as a MovesProposal or legacy CoachProposal, else abort).
+/// `--kind briefing --split-moves` treats stdin as raw LLM output: an
+/// optional fenced ```moves block is extracted (extractMovesBlock) and
+/// posted FIRST as a `kind=proposal` row on the same thread, then the
+/// briefing text with the block stripped. A failed proposal post is
+/// logged and never blocks the briefing.
 /// `pending` prints the full chat history and exits 0 when the newest
 /// message is from the user (i.e. a reply is owed); otherwise exits 3.
 /// `briefing-exists` exits 0 if a coach briefing row exists for the given
@@ -54,6 +65,7 @@ Future<void> post(List<String> args) async {
   String? role;
   String? kind;
   String thread = 'general';
+  var splitMoves = false;
   for (var i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--role':
@@ -62,6 +74,8 @@ Future<void> post(List<String> args) async {
         kind = args[++i];
       case '--thread':
         thread = args[++i];
+      case '--split-moves':
+        splitMoves = true;
       default:
         abort('unknown arg: ${args[i]}');
     }
@@ -69,13 +83,55 @@ Future<void> post(List<String> args) async {
   if (role == null || !{'coach', 'user'}.contains(role)) {
     abort('post requires --role coach|user');
   }
-  if (kind == null || !{'briefing', 'reply', 'user'}.contains(kind)) {
-    abort('post requires --kind briefing|reply|user');
+  if (kind == null ||
+      !{'briefing', 'reply', 'user', 'proposal'}.contains(kind)) {
+    abort('post requires --kind briefing|reply|user|proposal');
+  }
+  if (splitMoves && kind != 'briefing') {
+    abort('--split-moves requires --kind briefing');
   }
 
-  final text = (await stdin.transform(utf8.decoder).join()).trim();
+  var text = (await stdin.transform(utf8.decoder).join()).trim();
   if (text.isEmpty) abort('empty message text on stdin');
 
+  if (kind == 'proposal' &&
+      MovesProposal.tryParse(text) == null &&
+      CoachProposal.tryParse(text) == null) {
+    abort('--kind proposal: stdin is not a valid proposal payload');
+  }
+
+  if (splitMoves) {
+    final raw = text;
+    final split = extractMovesBlock(raw);
+    text = split.text;
+    final proposal = split.proposal;
+    if (proposal != null) {
+      try {
+        await appendRow(role, 'proposal', thread, proposal.encode());
+        print('posted proposal (${proposal.moves.length} move(s))');
+      } catch (e) {
+        stderr.writeln('warn: moves proposal post failed: $e');
+      }
+    } else if (RegExp(r'```[ \t]*moves', caseSensitive: false)
+        .hasMatch(raw)) {
+      stderr.writeln('warn: moves block present but unparseable / no '
+          'valid moves — stripped, no proposal posted');
+    }
+    if (text.isEmpty) abort('empty briefing text after stripping moves');
+  }
+
+  await appendRow(role, kind, thread, text);
+  print('posted $kind (${text.length} chars)');
+  exit(0);
+}
+
+/// Appends one coach_chat row (creating the tab + headers if missing).
+Future<void> appendRow(
+  String role,
+  String kind,
+  String thread,
+  String text,
+) async {
   final view = loadView('coach_chat');
   if (view == null) abort('coach_chat schema missing from $viewsDir');
   final config = readConfig();
@@ -128,8 +184,6 @@ Future<void> post(List<String> args) async {
     "'${view.table}'!A1",
     valueInputOption: 'RAW',
   );
-  print('posted $kind (${text.length} chars)');
-  exit(0);
 }
 
 Future<void> pending(List<String> args) async {

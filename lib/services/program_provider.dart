@@ -10,14 +10,9 @@ import 'package:yaml/yaml.dart';
 
 import 'coach_brain.dart' show CoachDocFetcher;
 import 'doc_cache.dart';
+import 'intent_docs.dart';
 
-/// Parsed trio of intent YAML files. All three fields are nullable: the
-/// caller should handle missing/malformed docs gracefully.
-typedef IntentDocs = ({
-  Map<Object?, Object?>? program,
-  Map<Object?, Object?>? phase,
-  Map<Object?, Object?>? strategy,
-});
+export 'intent_docs.dart';
 
 /// Fetches and parses the three intent YAML files ([program], [phase],
 /// [strategy]) from the coach repo, using the same 1 h static cache that

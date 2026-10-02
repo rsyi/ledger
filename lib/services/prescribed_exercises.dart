@@ -92,6 +92,7 @@ const _skip = [
   'optional',
   'max hangs',
   'rest',
+  'accessories:',
 ];
 
 // Words that qualify an exercise but don't identify it.
@@ -153,8 +154,9 @@ List<PrescribedItem> parsePrescribedProse(String? morning, String? afternoon) {
   return out;
 }
 
-/// Splits prose into exercise segments on ';' and ". then"/", then",
-/// ignoring separators inside parentheses.
+/// Splits prose into exercise segments on ';', ". then"/", then" and a
+/// sentence boundary that opens a labelled clause (". Accessories: …" —
+/// a note, dropped via [_skip]), ignoring separators inside parentheses.
 List<String> _splitTopLevel(String prose) {
   // Mask parenthesised spans so their ';' / "then" can't split.
   final masked = StringBuffer();
@@ -167,7 +169,8 @@ List<String> _splitTopLevel(String prose) {
   final out = <String>[];
   var start = 0;
   for (final m
-      in RegExp(r';|(?:[.,]\s+)[Tt]hen\s+').allMatches(masked.toString())) {
+      in RegExp(r';|(?:[.,]\s+)[Tt]hen\s+|(?<=\.)\s+(?=[A-Z][a-z]+:)')
+          .allMatches(masked.toString())) {
     out.add(prose.substring(start, m.start));
     start = m.end;
   }

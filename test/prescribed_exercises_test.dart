@@ -36,6 +36,29 @@ void main() {
       expect(names.any((n) => n.contains('optional')), isFalse);
     });
 
+    test('drops a trailing "Accessories:" note sentence (live Mon prose)', () {
+      // Verbatim from airledger-fitness coach/program.yaml v15
+      // routine.week.mon.morning.
+      const mon =
+          'Squat heavy: wave top per strength_wave_cut (wk1 5@81% / wk2 '
+          '4@84% / wk3 3@86% / wk4 deload 5@~70% TM, RPE 7-8). Then '
+          'Bulgarian split squat 3x8-12/leg; bench volume 4x8 @ 68% TM; '
+          'lateral raise 3x12-20; triceps extension 2-3x10-15. Accessories: '
+          'double progression, start bottom of range @ 1-2 RIR.';
+      final items = parsePrescribedProse(mon, null);
+      expect([for (final i in items) i.name.toLowerCase()], [
+        'squat heavy',
+        'bulgarian split squat',
+        'bench volume',
+        'lateral raise',
+        'triceps extension',
+      ]);
+      final tri = items.last;
+      expect(tri.scheme, isNot(contains('Accessories')));
+      expect(tri.scheme, isNot(contains('progression')));
+      expect(tri.targetSets, 2);
+    });
+
     test('skips non-exercise clauses', () {
       final items = parsePrescribedProse(
           'Bench top set, then back-offs 3x5-8; No squat or deadlift today; '

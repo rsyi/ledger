@@ -39,8 +39,11 @@ const _kSleepUrl = 'https://api.prod.whoop.com/developer/v2/activity/sleep';
 const _kRecoveryUrl = 'https://api.prod.whoop.com/developer/v2/recovery';
 const _kWorkoutUrl = 'https://api.prod.whoop.com/developer/v2/activity/workout';
 const _kRedirectUri = 'ledger://oauth/whoop';
-// offline → refresh token; read scopes for the three record types.
-const _kScope = 'read:sleep read:recovery read:cycles offline';
+// offline → refresh token; read scopes for the record types pulled.
+// read:workout was missing when the workouts pull landed (2026-09-30),
+// so tokens granted before then 401 on /activity/workout — a refresh
+// can't widen scope; the user must Reconnect (menu action below).
+const _kScope = 'read:sleep read:recovery read:cycles read:workout offline';
 
 const _kMinPullInterval = Duration(hours: 6);
 const _kFirstPullWindow = Duration(days: 30);
@@ -400,7 +403,7 @@ class WhoopApiIntegration implements Integration {
     }
     if (!await isConnected) return 'Not connected';
     final status = await repo.metaGet(_kStatus);
-    if (status == 'reconnect') return 'Reconnect needed';
+    if (status == 'reconnect') return 'Reconnect needed (⋮ → Reconnect)';
     if (status == 'error') {
       final e = await repo.metaGet(_kError) ?? 'unknown';
       return 'Error: $e';
@@ -414,9 +417,11 @@ class WhoopApiIntegration implements Integration {
     return 'Connected · last pulled $when · $nights night(s) synced';
   }
 
+  /// Reconnect re-runs the consent flow while connected — the only way
+  /// to pick up scopes added after the original grant.
   @override
   Map<String, Future<void> Function(BuildContext)> get extraMenuActions =>
-      const {};
+      {'Reconnect': connect};
 
   @override
   Future<void> connect(BuildContext context) async {
@@ -584,6 +589,11 @@ class WhoopApiIntegration implements Integration {
       await repo.metaSet(_kLastPull, DateTime.now().toIso8601String());
       await repo.metaSet(_kStatus, 'ok');
       await repo.metaSet(_kError, '');
+    } on _WhoopUnauthorized catch (e) {
+      // Token rejected by a data endpoint (revoked, or a scope the grant
+      // lacks) — refreshing won't fix it; only a fresh consent will.
+      await repo.metaSet(_kStatus, 'reconnect');
+      await repo.metaSet(_kError, e.toString());
     } catch (e) {
       await repo.metaSet(_kStatus, 'error');
       await repo.metaSet(_kError, e.toString());
@@ -624,6 +634,9 @@ class WhoopApiIntegration implements Integration {
       final resp = await http.get(url, headers: {
         'Authorization': 'Bearer $token',
       });
+      if (resp.statusCode == 401) {
+        throw _WhoopUnauthorized('whoop $base: 401 ${resp.body}');
+      }
       if (resp.statusCode != 200) {
         throw StateError('whoop $base: ${resp.statusCode} ${resp.body}');
       }
@@ -689,4 +702,11 @@ class WhoopApiIntegration implements Integration {
       return null;
     }
   }
+}
+
+class _WhoopUnauthorized implements Exception {
+  _WhoopUnauthorized(this.message);
+  final String message;
+  @override
+  String toString() => message;
 }

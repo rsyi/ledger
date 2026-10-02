@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/models/coach_proposal.dart';
 import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/coach_tools.dart';
+import 'package:airledger/services/prescribed_exercises.dart';
+import 'package:airledger/services/program_moves.dart';
 
 ViewSchema _view(String name, List<String> dims,
         {Set<String> requiredDims = const {}}) =>
@@ -284,6 +286,82 @@ void main() {
         expect(moved, isEmpty);
       });
     }
+
+    group('item validation against the program week', () {
+      final wed = DateTime(2026, 9, 30);
+      Map<DateTime, List<EffectiveItem>> week() => effectiveWeek({
+            for (var i = 0; i < 7; i++)
+              DateTime(2026, 9, 28 + i): i == 2
+                  ? const [
+                      PrescribedItem(
+                          name: 'Bench heavy', scheme: '1x3', period: 'PM'),
+                      PrescribedItem(
+                          name: 'Pull-ups', scheme: '3x8', period: 'PM'),
+                    ]
+                  : const <PrescribedItem>[],
+          }, const {});
+
+      CoachToolset weekToolset({bool fail = false}) {
+        moved = [];
+        return CoachToolset(
+          views: const {},
+          onProposal: (_) async {},
+          onMovesProposal: (p) async => moved.add(p),
+          now: () => DateTime(2026, 10, 1, 9),
+          movesWeek: () async {
+            if (fail) throw StateError('docs down');
+            return week();
+          },
+        );
+      }
+
+      test('an item not on from_date → model-visible error listing the '
+          'valid names; nothing sunk', () async {
+        await expectLater(
+          runMoves(weekToolset(), {
+            'summary': 's',
+            'moves': [
+              {
+                'item': 'Bench top set',
+                'from_date': '2026-09-30',
+                'to_date': '2026-10-02',
+              },
+            ],
+          }),
+          throwsA(isA<StateError>().having((e) => e.message, 'message',
+              allOf(contains('"Bench heavy"'), contains('"Pull-ups"')))),
+        );
+        expect(moved, isEmpty);
+      });
+
+      test('case-insensitive match → canonical name + program period',
+          () async {
+        await runMoves(weekToolset(), {
+          'summary': 's',
+          'moves': [
+            {
+              'item': 'bench heavy',
+              'from_date': '2026-09-30',
+              'to_date': '2026-10-02',
+            },
+          ],
+        });
+        final m = moved.single.moves.single;
+        expect(m.item, 'Bench heavy');
+        expect(m.from, wed);
+        expect(m.period, 'PM');
+      });
+
+      test('week provider failure → item check skipped', () async {
+        await runMoves(weekToolset(fail: true), {
+          'summary': 's',
+          'moves': [
+            {'item': 'RDL', 'from_date': '2026-09-28', 'to_date': '2026-10-02'},
+          ],
+        });
+        expect(moved, hasLength(1));
+      });
+    });
 
     test('rejects empty moves', () async {
       final t = movesToolset();

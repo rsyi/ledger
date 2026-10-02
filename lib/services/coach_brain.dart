@@ -187,6 +187,8 @@ class CoachBrain {
       programDay: _programDayResolver,
       onMovesProposal: onMovesProposal,
       now: now,
+      // propose_moves checks each item exists on its from_date.
+      movesWeek: () async => (await weekStateLoader().load(now()))?.week,
     ).build();
     final runner = ChatRunner(model);
     final texts = <String>[];

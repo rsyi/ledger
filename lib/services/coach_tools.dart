@@ -3,6 +3,8 @@ import 'dart:convert';
 import '../models/coach_proposal.dart';
 import '../models/view_schema.dart';
 import 'chat_runner.dart';
+import 'moves_validation.dart';
+import 'program_moves.dart' show EffectiveItem;
 
 /// Receives a validated proposal. The chat screen persists it as a
 /// `kind=proposal` coach_chat row; tests just collect it.
@@ -46,12 +48,18 @@ class CoachToolset {
   /// Clock: `propose_moves` validates against this Mon–Sun week.
   final DateTime Function() now;
 
+  /// The effective (post-moves) Mon–Sun week of [now] — `propose_moves`
+  /// checks each item exists on its from_date. Null, a null result or a
+  /// throw skips the item check (dates are still validated).
+  final Future<Map<DateTime, List<EffectiveItem>>?> Function()? movesWeek;
+
   CoachToolset({
     required this.views,
     required this.onProposal,
     this.programDay,
     this.onMovesProposal,
     this.now = DateTime.now,
+    this.movesWeek,
   });
 
   List<ChatTool> build() => [
@@ -259,7 +267,11 @@ class CoachToolset {
         'required': ['summary', 'moves'],
       },
       run: (input) async {
-        final proposal = validateMovesInput(input, now());
+        Map<DateTime, List<EffectiveItem>>? week;
+        try {
+          week = await movesWeek?.call();
+        } catch (_) {/* program unavailable: dates-only validation */}
+        final proposal = validateMovesInput(input, now(), week: week);
         await onMovesProposal!(proposal);
         return 'Moves proposal presented to the user — they will confirm '
             'or decline on the card. Do not claim anything moved.';
@@ -267,25 +279,20 @@ class CoachToolset {
     );
   }
 
-  /// Validates a `propose_moves` input against [now]'s Mon–Sun week:
-  /// every move needs an item, parseable yyyy-MM-dd dates, from AND to
-  /// inside the week, to not before today, and to != from. Throws a
-  /// [StateError] naming the bad move (the tool loop reports it to the
-  /// model, which can retry).
+  /// Validates a `propose_moves` input against [now]'s Mon–Sun week
+  /// via the shared [checkProposedMove]: every move needs an item,
+  /// parseable yyyy-MM-dd dates, from AND to inside the week, to not
+  /// before today, to != from and — when [week] is given — an item that
+  /// exists on from_date (canonical name; re-keyed to its home day when
+  /// it was moved there). Throws a [StateError] naming the bad move (the
+  /// tool loop reports it to the model, which can retry).
   static MovesProposal validateMovesInput(
-      Map<String, dynamic> input, DateTime now) {
+      Map<String, dynamic> input, DateTime now,
+      {Map<DateTime, List<EffectiveItem>>? week}) {
     final rawMoves = input['moves'];
     if (rawMoves is! List || rawMoves.isEmpty) {
       throw StateError('moves must be a non-empty array of objects');
     }
-    final today = DateTime(now.year, now.month, now.day);
-    final mon =
-        DateTime(today.year, today.month, today.day - (today.weekday - 1));
-    final sun = DateTime(mon.year, mon.month, mon.day + 6);
-    bool inWeek(DateTime d) => !d.isBefore(mon) && !d.isAfter(sun);
-    String ymd(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
-        '${d.month.toString().padLeft(2, '0')}-'
-        '${d.day.toString().padLeft(2, '0')}';
     DateTime parse(Object? raw, String field, int i) {
       final s = raw?.toString().trim() ?? '';
       final d = RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(s)
@@ -303,30 +310,17 @@ class CoachToolset {
       if (raw is! Map) throw StateError('moves[$i] must be an object');
       final item = raw['item']?.toString().trim() ?? '';
       if (item.isEmpty) throw StateError('moves[$i].item is required');
-      final from = parse(raw['from_date'], 'from_date', i);
-      final to = parse(raw['to_date'], 'to_date', i);
-      final week = '${ymd(mon)}..${ymd(sun)}';
-      if (!inWeek(from)) {
-        throw StateError('moves[$i].from_date ${ymd(from)} is outside this '
-            'week ($week)');
-      }
-      if (!inWeek(to)) {
-        throw StateError('moves[$i].to_date ${ymd(to)} is outside this '
-            'week ($week) — moves stay within the week');
-      }
-      if (to.isBefore(today)) {
-        throw StateError('moves[$i].to_date ${ymd(to)} is in the past — '
-            'pick a remaining day (${ymd(today)}..${ymd(sun)})');
-      }
-      if (to == from) {
-        throw StateError('moves[$i].to_date equals from_date (${ymd(to)})');
-      }
-      moves.add(ProposedMove(
-        item: item,
-        from: from,
-        to: to,
-        period: raw['period']?.toString().trim() ?? '',
-        note: raw['note']?.toString().trim() ?? '',
+      moves.add(checkProposedMove(
+        ProposedMove(
+          item: item,
+          from: parse(raw['from_date'], 'from_date', i),
+          to: parse(raw['to_date'], 'to_date', i),
+          period: raw['period']?.toString().trim() ?? '',
+          note: raw['note']?.toString().trim() ?? '',
+        ),
+        today: now,
+        week: week,
+        label: 'moves[$i]',
       ));
     }
     return MovesProposal(

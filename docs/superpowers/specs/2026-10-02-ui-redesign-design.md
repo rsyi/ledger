@@ -35,9 +35,17 @@ bodyweight moves priced as a load ("Pull Up 161.5 lb").
    `[105×6] [105×6] [105×6]` — tap a chip = log that set (existing
    log-now flow), long-press = edit. Group header keeps n/N, Log all,
    delete. Logged rows stay compact one-line.
-3. Today: KEEP its sections (user choice) — restyle only: the recovery
-   strip as a StatStrip, AI note + macro bars + Trained + Clips +
-   Program card in the shared type/density/card style.
+3. Today (REVISED by user): the program card is the ONE training
+   surface — DROP the separate "Trained" list and "Clips" strip. Fold
+   clips into the program card: each item with attached video shows its
+   thumbnail(s) INLINE in the collapsed row (tap = play). Principle
+   (user, verbatim): "look at this and feel like I've done good work and
+   be able to know what I can review. the clips being visible at a
+   glance is important." Done items show what was achieved (e.g. top
+   set 275×6, sets done) rather than only a strikethrough. Logged work
+   that matches no program item still appears (an "Also logged" group in
+   the same card). Recovery strip as a StatStrip; AI note + macro bars
+   restyled to the shared tokens.
 4. Week: goal rows in the shared row pattern; per-lift progress as
    compact inline bars instead of wrapping chips.
 5. Log list + forms: human names + proper icons (dashboards.yaml labels

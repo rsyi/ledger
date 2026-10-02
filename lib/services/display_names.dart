@@ -169,3 +169,30 @@ String? shortDescription(String? description, {int maxChars = 48}) {
   if (first.isEmpty || first.length > maxChars) return null;
   return first;
 }
+
+/// Tokens kept upper-case when title-casing an all-lowercase exercise
+/// name (calisthenics skills arrive as `hspu`, `handstand`, …).
+const Set<String> _exerciseAcronyms = {'hspu', 'rdl', 'bss', 'ohp', 'ez'};
+
+/// Display name for an exercise. Names that already carry capitals
+/// (`Cable Face Pull`, `EZ-Bar Preacher Curl`) are shown as-is; an
+/// all-lowercase name (a calisthenics skill like `handstand`,
+/// `muscle-up`, `front lever`) is title-cased to match the strength
+/// list: `Handstand`, `Muscle Up`, `Front Lever`, `HSPU`.
+String exerciseLabel(String name) {
+  final t = name.trim();
+  if (t.isEmpty || t != t.toLowerCase()) return t;
+  return t
+      .split(RegExp(r'[_\-\s]+'))
+      .where((p) => p.isNotEmpty)
+      .map((p) => _exerciseAcronyms.contains(p)
+          ? p.toUpperCase()
+          : p[0].toUpperCase() + p.substring(1))
+      .join(' ');
+}
+
+/// Sentence case for a generated summary: first letter upper, the rest
+/// untouched (`squat heavy · bench volume` → `Squat heavy · bench
+/// volume`; `4x4 · hard climb` stays as-is).
+String sentenceCase(String s) =>
+    s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);

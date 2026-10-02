@@ -176,12 +176,17 @@ class AppCard extends StatelessWidget {
   final EdgeInsetsGeometry margin;
   final VoidCallback? onTap;
 
+  /// Accent outline (the current item in a list of cards — e.g. today's
+  /// day on the Program screen).
+  final bool highlighted;
+
   const AppCard({
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(AppSpace.gutter),
     this.margin = EdgeInsets.zero,
     this.onTap,
+    this.highlighted = false,
   });
 
   @override
@@ -192,7 +197,14 @@ class AppCard extends StatelessWidget {
       padding: margin,
       child: Material(
         color: scheme.surfaceContainer,
-        borderRadius: radius,
+        // No outline by default; [highlighted] adds the accent one.
+        borderRadius: highlighted ? null : radius,
+        shape: highlighted
+            ? RoundedRectangleBorder(
+                borderRadius: radius,
+                side: BorderSide(color: scheme.primary, width: 1.5),
+              )
+            : null,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,

@@ -85,6 +85,46 @@ void main() {
       expect(m.borderRadius, BorderRadius.circular(12));
       expect(m.shape, isNull);
     });
+
+    testWidgets('AppCard highlighted: accent outline, same radius', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(const AppCard(highlighted: true, child: Text('x'))),
+      );
+      final m = tester.widget<Material>(
+        find
+            .ancestor(of: find.text('x'), matching: find.byType(Material))
+            .first,
+      );
+      final shape = m.shape! as RoundedRectangleBorder;
+      expect(shape.borderRadius, BorderRadius.circular(12));
+      expect(shape.side.color, const ColorScheme.dark().primary);
+    });
+
+    testWidgets('RowGroupCard: one card, hairline dividers between rows', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          const RowGroupCard(
+            rows: [
+              ExerciseRow(name: 'A'),
+              ExerciseRow(name: 'B'),
+              ExerciseRow(name: 'C'),
+            ],
+          ),
+        ),
+      );
+      expect(find.byType(AppCard), findsOneWidget);
+      expect(find.byType(RowDivider), findsNWidgets(2));
+      for (final n in ['A', 'B', 'C']) {
+        expect(
+          find.descendant(of: find.byType(AppCard), matching: find.text(n)),
+          findsOneWidget,
+        );
+      }
+    });
   });
 
   group('ExerciseRow', () {

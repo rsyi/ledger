@@ -648,3 +648,53 @@ class DetailSheet extends StatelessWidget {
     );
   }
 }
+
+/// The hairline that separates rows inside a card (indented past the
+/// leading mark, like the Progress / Week tabs).
+class RowDivider extends StatelessWidget {
+  /// Left indent; defaults to the text column of an [ExerciseRow].
+  final double indent;
+
+  const RowDivider({
+    super.key,
+    this.indent = AppSpace.gutter + AppSpace.lead + AppSpace.leadGap,
+  });
+
+  @override
+  Widget build(BuildContext context) => Divider(
+    height: 1,
+    thickness: 1,
+    indent: indent,
+    color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.4),
+  );
+}
+
+/// One [AppCard] holding a group of rows separated by [RowDivider]s —
+/// the shared "rows in a card" pattern (Progress, Week, Log list, Plan
+/// blocks, Program training maxes).
+class RowGroupCard extends StatelessWidget {
+  final List<Widget> rows;
+  final EdgeInsetsGeometry margin;
+
+  const RowGroupCard({
+    super.key,
+    required this.rows,
+    this.margin = const EdgeInsets.symmetric(horizontal: AppSpace.gutter),
+  });
+
+  @override
+  Widget build(BuildContext context) => AppCard(
+    margin: margin,
+    padding: EdgeInsets.zero,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < rows.length; i++) ...[
+          if (i > 0) const RowDivider(),
+          rows[i],
+        ],
+      ],
+    ),
+  );
+}

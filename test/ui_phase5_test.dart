@@ -71,6 +71,23 @@ ViewSchema _view(String name, List<Dimension> dims) => ViewSchema(
 
 void main() {
   group('display names', () {
+    test('exercise labels: lowercase names title-cased, cased kept', () {
+      expect(exerciseLabel('handstand'), 'Handstand');
+      expect(exerciseLabel('muscle-up'), 'Muscle Up');
+      expect(exerciseLabel('front lever'), 'Front Lever');
+      expect(exerciseLabel('hspu'), 'HSPU');
+      expect(exerciseLabel('Cable Face Pull'), 'Cable Face Pull');
+      expect(exerciseLabel('EZ-Bar Preacher Curl'), 'EZ-Bar Preacher Curl');
+      expect(exerciseLabel(''), '');
+    });
+
+    test('sentence case for generated summaries', () {
+      expect(sentenceCase('squat heavy · bench volume'),
+          'Squat heavy · bench volume');
+      expect(sentenceCase('4x4 · hard climb'), '4x4 · hard climb');
+      expect(sentenceCase(''), '');
+    });
+
     test('view labels', () {
       expect(viewLabel('daily_notes'), 'Daily notes');
       expect(viewLabel('whoop_workouts'), 'Whoop workouts');

@@ -164,6 +164,22 @@ void main() {
     expect(find.text('MISSED THIS WEEK'), findsNothing);
   });
 
+  testWidgets('card allocates sets exclusively (agrees with the detector)', (
+    tester,
+  ) async {
+    if (!hasFitness) return;
+    // Fri: own bench volume (3 sets) + moved-in Bench heavy (1 set); 3
+    // bench sets logged → own item complete, moved-in still open.
+    final strength = _FakeRepo([
+      for (var i = 0; i < 3; i++)
+        {'id': 's$i', 'date': fri, 'exercise': 'Bench Press'},
+    ]);
+    await pump(tester, date: fri, moves: _FakeRepo([benchMove()]),
+        strength: strength);
+    expect(find.text('3/3'), findsOneWidget);
+    expect(find.text('1 / 6 done'), findsOneWidget);
+  });
+
   testWidgets('Move to… writes a manual program_moves row', (tester) async {
     if (!hasFitness) return;
     final moves = _FakeRepo();

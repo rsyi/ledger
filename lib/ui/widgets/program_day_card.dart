@@ -209,8 +209,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
 
     if (widget.strengthView != null && widget.strengthRepo != null) {
       if (state.strengthRows != null) _strengthRows = state.strengthRows;
-      entries =
-          mapLive((items) => markPrescribedDone(items, state.loggedOnDate));
+      // One exclusive allocation (each working set credits one item) —
+      // the same one the missed-work detector runs per day.
+      entries = mapLive((items) => allocateDay(items, state.loggedOnDate));
     }
     final day = [
       for (final a in state.whoop)

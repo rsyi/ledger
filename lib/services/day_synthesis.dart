@@ -12,7 +12,7 @@
 /// come — so the model can't call it a rest day.
 library;
 
-import 'missed_work.dart' show programItemKind;
+import 'missed_work.dart' show allocateDay, programItemKind;
 import 'prescribed_exercises.dart';
 import 'program_moves.dart' show EffectiveItem;
 import 'whoop_activity.dart';
@@ -188,6 +188,10 @@ SynthProgramDay synthProgramWithMoves(
 }) {
   final movedIn = <SynthMovedItem>[];
   final movedOut = <SynthMovedItem>[];
+  // Lift done-ness: ONE exclusive allocation of today's sets over today's
+  // live items (program order, moved-in last) — same as card + detector.
+  final live = [for (final e in today) if (!e.isGhost) e];
+  final allocated = allocateDay([for (final e in live) e.item], loggedToday);
   for (final e in today) {
     final kind = programItemKind(e.item);
     if (e.isGhost) {
@@ -201,7 +205,7 @@ SynthProgramDay synthProgramWithMoves(
       final done = switch (kind) {
         'climb' => climbed,
         'cardio' => did4x4,
-        _ => markPrescribedDone([e.item], loggedToday).first.done,
+        _ => allocated[live.indexOf(e)].done,
       };
       movedIn.add(SynthMovedItem(
         name: e.item.name,

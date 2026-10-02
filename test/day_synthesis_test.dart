@@ -417,6 +417,23 @@ void main() {
       expect(prompt, isNot(contains('(moved from Wed)')));
     });
 
+    test('moved-in done uses the shared exclusive allocation', () {
+      // Own bench volume (3 sets) claims today's 3 bench sets first; the
+      // moved-in top set is still to come (matches card + detector).
+      final out = synthProgramWithMoves(const SynthProgramDay(), [
+        EffectiveItem(
+            item: item('Bench volume', scheme: '3x8-10', sets: 3), home: fri),
+        EffectiveItem(item: item('Bench heavy'), home: wed, movedFrom: wed),
+      ], loggedToday: ['Bench Press', 'Bench Press', 'Bench Press']);
+      expect(out.movedIn.single.done, isFalse);
+      final out2 = synthProgramWithMoves(const SynthProgramDay(), [
+        EffectiveItem(
+            item: item('Bench volume', scheme: '3x8-10', sets: 3), home: fri),
+        EffectiveItem(item: item('Bench heavy'), home: wed, movedFrom: wed),
+      ], loggedToday: List.filled(4, 'Bench Press'));
+      expect(out2.movedIn.single.done, isTrue);
+    });
+
     test('climb / 4x4 moves flip climbCall + wants4x4', () {
       final tue = DateTime(2026, 9, 29);
       final out = synthProgramWithMoves(

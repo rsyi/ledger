@@ -604,6 +604,10 @@ class _FormScreenState extends State<FormScreen> {
 
   Future<void> _save() async {
     if (_saving) return;
+    // Close the keyboard NOW, while the form is still on screen, so its
+    // hide animation completes before the pop (a route popped mid-IME
+    // animation is one path to a stale keyboard inset on return).
+    FocusManager.instance.primaryFocus?.unfocus();
     final rg = _rg;
 
     // Drop hidden shared values (show_when stale state).

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'services/engine.dart';
 import 'services/notification_service.dart';
 import 'ui/home_screen.dart';
+import 'ui/widgets/keyboard_inset_guard.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -65,6 +66,10 @@ class LedgerApp extends StatelessWidget {
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
       home: const HomeScreen(),
+      // Zeroes a stale keyboard inset left over from another app / a
+      // popped form (see KeyboardInsetGuard) — the "cut off" screen.
+      builder: (context, child) =>
+          KeyboardInsetGuard(child: child ?? const SizedBox.shrink()),
     );
   }
 

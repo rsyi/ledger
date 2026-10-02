@@ -55,6 +55,31 @@ void main() {
       ]);
     });
 
+    test('REAL Mon 9/28 bench: 175@8, 175@7 + unrated 155/135/95 → only '
+        'the two rated sets work', () {
+      // 155 and 135 are >= 75% of 175, but lighter than every RPE-rated
+      // set that day: an unrated lighter set is a ramp.
+      final out = workingSetRecords([
+        for (final (w, rpe) in [(175, 8), (175, 7), (155, null), (135, null),
+            (95, null)])
+          {'date': '2026-09-28', 'exercise': 'Flat Barbell Bench Press',
+              'weight': '$w', 'rpe': rpe == null ? null : '$rpe'},
+      ]);
+      expect([for (final r in out) r['weight']], ['175', '175']);
+    });
+
+    test('unrated sets at/above the lightest rated set still work (squat '
+        'back-offs without RPE)', () {
+      final out = workingSetRecords([
+        {'date': '2026-09-28', 'exercise': 'Squat', 'weight': 305, 'rpe': 9},
+        {'date': '2026-09-28', 'exercise': 'Squat', 'weight': 255, 'rpe': 8},
+        {'date': '2026-09-28', 'exercise': 'Squat', 'weight': 285},
+        {'date': '2026-09-28', 'exercise': 'Squat', 'weight': 255},
+        {'date': '2026-09-28', 'exercise': 'Squat', 'weight': 225},
+      ]);
+      expect([for (final r in out) r['weight']], [305, 255, 285, 255]);
+    });
+
     test('DateTime dates + case-insensitive exercise grouping', () {
       final d = DateTime(2026, 9, 28, 18);
       final out = workingSetRecords([

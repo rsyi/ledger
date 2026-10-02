@@ -119,6 +119,9 @@ class CoachChatScreen extends StatefulWidget {
   final ViewSchema? programMovesView;
   final WarehouseConnector? programMovesRepository;
 
+  /// Clock — moves cards disable Schedule once stale (tests pin it).
+  final DateTime Function() now;
+
   const CoachChatScreen({
     super.key,
     required this.view,
@@ -130,6 +133,7 @@ class CoachChatScreen extends StatefulWidget {
     this.openTimeline,
     this.programMovesView,
     this.programMovesRepository,
+    this.now = DateTime.now,
   });
 
   @override
@@ -553,8 +557,9 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
                 busy: _proposalBusy.contains(rowId),
                 canSchedule: widget.programMovesView != null &&
                     widget.programMovesRepository != null,
+                today: widget.now(),
                 onSchedule: () => _scheduleMoves(rowId, p),
-                onUndo: () => _undoMoves(rowId),
+                onUndo: () => _undoMoves(rowId, p),
                 onDismiss: () => _dismissProposal(rowId),
               ),
             ],
@@ -610,9 +615,11 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
     }
   }
 
-  /// Undo an accepted moves proposal: delete the rows it created (items
-  /// go back to their prescribed days).
-  Future<void> _undoMoves(String rowId) async {
+  /// Undo an accepted moves proposal: delete the rows it created, then —
+  /// for any item an OLDER row still moves (latest-wins would re-activate
+  /// it) — write a `to == from` "back home" row, so every item truly goes
+  /// back to its prescribed day.
+  Future<void> _undoMoves(String rowId, MovesProposal p) async {
     final view = widget.programMovesView;
     final repo = widget.programMovesRepository;
     final prior = _proposalStates[rowId];
@@ -626,6 +633,31 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
     try {
       for (final id in prior.localIds) {
         await repo.delete(view, <String, Object?>{'id': id});
+      }
+      final remaining = [
+        for (final r in await repo.list(view)) ?ProgramMove.fromRecord(r),
+      ];
+      final now = DateTime.now();
+      final sent = <String>{};
+      for (final m in p.moves) {
+        final active = activeMoves(remaining, m.from);
+        final key = ProgramMove(id: '', to: m.to, from: m.from, item: m.item)
+            .key;
+        final still = active[key];
+        if (still == null || !sent.add(key)) continue;
+        await repo.create(
+          view,
+          ProgramMove(
+            id: const Uuid().v4(),
+            to: still.from,
+            from: still.from,
+            item: still.item,
+            period: still.period,
+            source: 'coach',
+            createdAt: now,
+            note: 'back home (proposal undone)',
+          ).toRecord(),
+        );
       }
       const st = CoachProposalState(
           status: CoachProposalStatus.undone, localIds: []);

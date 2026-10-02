@@ -187,6 +187,11 @@ class MovesProposalCard extends StatelessWidget {
   final VoidCallback onUndo;
   final VoidCallback onDismiss;
 
+  /// Today (local). When set, a stale proposal — a move into a past day
+  /// or outside today's Mon–Sun week — gets Schedule disabled with
+  /// [staleReason]. Null skips the check.
+  final DateTime? today;
+
   const MovesProposalCard({
     super.key,
     required this.proposal,
@@ -196,9 +201,28 @@ class MovesProposalCard extends StatelessWidget {
     required this.onSchedule,
     required this.onUndo,
     required this.onDismiss,
+    this.today,
   });
 
   static final _day = DateFormat('EEE M/d');
+
+  /// Why [p] can no longer be scheduled on [today] (null = it can): a
+  /// move outside today's Mon–Sun week (moves never cross weeks; the
+  /// resolver would ignore it) or targeting a day before today (the item
+  /// would be missed again at once).
+  static String? staleReason(MovesProposal p, DateTime today) {
+    final t = DateTime(today.year, today.month, today.day);
+    final mon = DateTime(t.year, t.month, t.day - (t.weekday - 1));
+    final sun = DateTime(mon.year, mon.month, mon.day + 6);
+    bool inWeek(DateTime d) => !d.isBefore(mon) && !d.isAfter(sun);
+    if (p.moves.any((m) => !inWeek(m.from) || !inWeek(m.to))) {
+      return 'Expired — this proposal is for another week.';
+    }
+    if (p.moves.any((m) => m.to.isBefore(t))) {
+      return 'Expired — a move targets a past day.';
+    }
+    return null;
+  }
 
   static String moveLine(ProposedMove m) =>
       '${m.item}: ${_day.format(m.from)} → ${_day.format(m.to)}';
@@ -207,6 +231,8 @@ class MovesProposalCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
+    final day = today;
+    final stale = day == null ? null : staleReason(proposal, day);
     return Container(
       margin: const EdgeInsets.only(top: 6),
       padding: const EdgeInsets.all(10),
@@ -252,11 +278,22 @@ class MovesProposalCard extends StatelessWidget {
           _ProposalFooter(
             status: status,
             busy: busy,
-            canSchedule: canSchedule,
+            canSchedule: canSchedule && stale == null,
             onSchedule: onSchedule,
             onUndo: onUndo,
             onDismiss: onDismiss,
           ),
+          if (canSchedule &&
+              stale != null &&
+              status != CoachProposalStatus.scheduled)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                stale,
+                style: text.labelSmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ),
           if (!canSchedule && status != CoachProposalStatus.scheduled)
             Padding(
               padding: const EdgeInsets.only(top: 4),

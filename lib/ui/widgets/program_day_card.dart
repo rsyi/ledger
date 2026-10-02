@@ -7,6 +7,7 @@ import '../../models/view_schema.dart';
 import '../../services/accessory_progression.dart';
 import '../../services/day_achievement.dart';
 import '../../services/day_prescription.dart';
+import '../../services/display_names.dart' show exerciseLabel;
 import '../../services/home_synthesis.dart' show strengthRowFromRecord;
 import '../../services/log_event_bus.dart';
 import '../../services/missed_work.dart';
@@ -738,7 +739,8 @@ class ProgramDayCardState extends State<ProgramDayCard> {
         const SectionHeader(label: 'Also logged'),
         for (final x in data.extra)
           ExerciseRow(
-            name: x.exercise,
+            // Calisthenics skills arrive lowercase ("handstand").
+            name: exerciseLabel(x.exercise),
             status: x.sets.isEmpty ? ItemStatus.muted : ItemStatus.done,
             meta: achievedMeta(x.sets, target: 0) ?? 'warm-up only',
             chips: clipChips(context, x.clips, x.exercise),

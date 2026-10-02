@@ -20,7 +20,8 @@ import '../services/engine_schema_adapter.dart';
 import 'widgets/sync_status_button.dart';
 import 'widgets/today_status_card.dart';
 import 'widgets/log_list_row.dart';
-import 'design/components.dart' show SectionHeader;
+import 'design/components.dart' show RowGroupCard, SectionHeader;
+import 'design/tokens.dart' show AppSpace;
 import '../services/display_names.dart';
 import 'integrations_screen.dart';
 import '../services/heart_rate_service.dart';
@@ -75,10 +76,11 @@ import 'plan_screen.dart';
 const kCoachChatViewName = 'coach_chat';
 
 /// App entrypoint shell. Loads config + schemas, connects to the
-/// warehouse, and presents a 5-tab NavigationBar (Progress/Goals split
-/// 2026-09-29 — the output-over-input principle made literal: the old
-/// combined Home tab divided into an OUTPUT surface and an INPUT
-/// surface):
+/// warehouse, and presents a 5-tab NavigationBar — Today · Log · Week ·
+/// Progress · Plan (2026-10-02 order; indices are the `_tab*` constants).
+/// Progress/Goals split 2026-09-29 — the output-over-input principle
+/// made literal: the old combined Home tab divided into an OUTPUT
+/// surface and an INPUT surface (Goals is the Week tab):
 ///
 ///   PROGRESS outputs only — the PHASE hero (weight trajectory + the
 ///            body verdict) + the STRENGTH card (working-max / Wilks /
@@ -151,10 +153,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Reentrancy guard so overlapping ticks (slow network) don't stack.
   bool _polling = false;
 
-  /// Selected bottom-nav tab (Progress/Goals split 2026-09-29):
-  /// 0 today · 1 week · 2 progress · 3 log · 4 plan. Plain state field
-  /// so it survives the poller's setState rebuilds.
-  int _tab = 0;
+  /// Bottom-nav tab indices (2026-10-02 order: Log sits right after
+  /// Today). Every tab switch goes through these names — never a bare
+  /// index — so a reorder is a one-place change.
+  static const int _tabToday = 0;
+  static const int _tabLog = 1;
+  static const int _tabWeek = 2;
+  static const int _tabProgress = 3;
+  static const int _tabPlan = 4;
+
+  /// Selected bottom-nav tab (one of the `_tab*` constants). Plain state
+  /// field so it survives the poller's setState rebuilds.
+  int _tab = _tabToday;
 
   /// Visited-tab stack (excluding the current tab) so the system Back
   /// button returns to the previous tab instead of exiting the app.
@@ -175,7 +185,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _tabHistory.remove(i);
       _tab = i;
     });
-    if (i == 0) {
+    if (i == _tabToday) {
       _todayStatusKey.currentState?.refresh();
       _recoveryKey.currentState?.reload();
       _dailyProgressKey.currentState?.reload();
@@ -205,11 +215,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// card.
   final _dailyProgressKey = GlobalKey<DailyProgressCardState>();
 
-  /// Today tab's per-day cards + the Log tab's today-program reference
-  /// card — reloaded on their tabs' pull-to-refresh (several also
-  /// self-refresh on log events / day change via didUpdateWidget).
+  /// Today tab's per-day cards — reloaded on the tab's pull-to-refresh
+  /// (several also self-refresh on log events / day change via
+  /// didUpdateWidget).
   final _todayProgramKey = GlobalKey<ProgramDayCardState>();
-  final _logProgramKey = GlobalKey<ProgramDayCardState>();
   final _recoveryKey = GlobalKey<RecoveryCardState>();
 
   /// The day the Today tab is showing (date-only). The top-of-tab day
@@ -637,7 +646,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if (didPop || _tabHistory.isEmpty) return;
             final prev = _tabHistory.removeLast();
             setState(() => _tab = prev);
-            if (prev == 0) {
+            if (prev == _tabToday) {
               _todayStatusKey.currentState?.refresh();
               _recoveryKey.currentState?.reload();
               _dailyProgressKey.currentState?.reload();
@@ -957,9 +966,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     .addPostFrameCallback((_) => _runCarryoverCheck());
               }
               // Plan is a tab — hero taps / sheet actions select it
-              // instead of pushing a duplicate screen (index 4 in the
-              // 5-tab shell).
-              void openProgram() => _selectTab(4);
+              // instead of pushing a duplicate screen.
+              void openProgram() => _selectTab(_tabPlan);
 
               // Shared timeline opener for tracker rows. Read-only views
               // ride the direct-sheet repo with no post-log hooks; entry
@@ -1324,7 +1332,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           provider: programProvider,
                           synthesis: synthesisService,
                           registry: IntegrationRegistry.instance,
-                          onOpen: () => _selectTab(3),
+                          onOpen: () => _selectTab(_tabLog),
                           onOpenCoachThread: openTodayCoachThread,
                         ),
                       // 3. Macro progress.
@@ -1590,54 +1598,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                   ],
                 ),
+                // The Log tab is just the LOG / CONNECTED domain lists —
+                // today's program lives on Today (2026-10-02: one place).
                 body: RefreshIndicator(
                   onRefresh: () async {
-                    _logProgramKey.currentState?.reload();
                     await _domainsKey.currentState?.reload();
                   },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
-                      // TODAY'S PROGRAM as a live reference: the prescribed
-                      // session + what's been logged so far (ticks off as
-                      // you log from the domains below). The program stays
-                      // coupled to logging without any template apparatus.
-                      if (programProvider != null)
-                        ProgramDayCard(
-                          key: _logProgramKey,
-                          provider: programProvider,
-                          label: 'Today',
-                          date: _dateOnly(DateTime.now()),
-                          strengthView: dashStrengthView,
-                          strengthRepo: dashStrengthView == null
-                              ? null
-                              : data.registry.forView(dashStrengthView),
-                          workoutsView: dashWorkoutsView,
-                        calisthenicsView: dashCalisthenicsView,
-                        calisthenicsRepo: dashCalisthenicsView == null
-                            ? null
-                            : data.registry.forView(dashCalisthenicsView),
-                          workoutsRepo: dashboardRepoFor(
-                            dashWorkoutsView,
-                            readOnlyRepo: data.readOnlyRepo,
-                            forView: data.registry.forView,
-                          ),
-                          programMovesView: programMovesView,
-                          programMovesRepo: programMovesRepo,
-                          wmSnapshot: data.wmStore?.snapshot,
-                          cardioView: dashCardioView,
-                          cardioRepo: dashboardRepoFor(
-                            dashCardioView,
-                            readOnlyRepo: data.readOnlyRepo,
-                            forView: data.registry.forView,
-                          ),
-                          climbingView: dashClimbingView,
-                          climbingRepo: dashboardRepoFor(
-                            dashClimbingView,
-                            readOnlyRepo: data.readOnlyRepo,
-                            forView: data.registry.forView,
-                          ),
-                        ),
                       _DomainSections(
                         key: _domainsKey,
                         provider: domainProvider,
@@ -1705,7 +1674,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               // IndexedStack keeps every tab's state (scroll positions,
               // in-flight futures) alive across switches; the bootstrap
               // swap above recreates all five together. Order matches the
-              // NavigationBar: Today · Week · Progress · Log · Plan.
+              // NavigationBar and the `_tab*` constants: Today · Log ·
+              // Week · Progress · Plan.
+              final tabsByIndex = <int, Widget>{
+                _tabToday: todayTab,
+                _tabLog: logTab,
+                _tabWeek: goalsTab,
+                _tabProgress: progressTab,
+                _tabPlan: planTab,
+              };
               return IndexedStack(
                 index: _tab,
                 // Fill the body between app bar and nav bar. Without this
@@ -1714,21 +1691,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 // change — the "cut off halfway, only a restart fixes it"
                 // bug (2026-10-01).
                 sizing: StackFit.expand,
-                children: [todayTab, goalsTab, progressTab, logTab, planTab],
+                // Placed by the `_tab*` constants (one source of order).
+                children: [
+                  for (var i = 0; i < tabsByIndex.length; i++) tabsByIndex[i]!,
+                ],
               );
             },
           ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _tab,
             onDestinationSelected: _selectTab,
-            // Timescale-ordered, zooming out: Today (day inputs + AI
-            // synthesis) · Week (week inputs) · Progress (outputs) · Log ·
-            // Plan. Coach left the bar 2026-09-30 (top of Today instead).
+            // Today (day inputs + AI synthesis) · Log (right beside it —
+            // the two daily surfaces, 2026-10-02) · then zooming out:
+            // Week (week inputs) · Progress (outputs) · Plan. Coach left
+            // the bar 2026-09-30 (top of Today instead). Indices = the
+            // `_tab*` constants.
             destinations: const [
               NavigationDestination(
                 icon: Icon(Icons.today_outlined),
                 selectedIcon: Icon(Icons.today),
                 label: 'Today',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.edit_note_outlined),
+                selectedIcon: Icon(Icons.edit_note),
+                label: 'Log',
               ),
               NavigationDestination(
                 icon: Icon(Icons.calendar_view_week_outlined),
@@ -1739,11 +1726,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 icon: Icon(Icons.insights_outlined),
                 selectedIcon: Icon(Icons.insights),
                 label: 'Progress',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.edit_note_outlined),
-                selectedIcon: Icon(Icons.edit_note),
-                label: 'Log',
               ),
               NavigationDestination(
                 icon: Icon(Icons.track_changes_outlined),
@@ -1987,11 +1969,17 @@ class _DomainSectionsState extends State<_DomainSections> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (log.isNotEmpty) ...[const SectionHeader(label: 'Log'), ...log],
+        // Each section's rows grouped in one card, hairline-divided —
+        // the same rows-in-a-card pattern as Progress / Week.
+        if (log.isNotEmpty) ...[
+          const SectionHeader(label: 'Log'),
+          RowGroupCard(rows: log),
+        ],
         if (connected.isNotEmpty) ...[
           const SectionHeader(label: 'Connected'),
-          ...connected,
+          RowGroupCard(rows: connected),
         ],
+        const SizedBox(height: AppSpace.sectionGap),
       ],
     );
   }

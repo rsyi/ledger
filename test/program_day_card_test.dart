@@ -605,6 +605,9 @@ void main() {
       for (var i = 0; i < 3; i++) set('p$i', 'Bench Press', 160, 8),
       // Matches no Fri item → Also logged, with its clip.
       set('f1', 'Cable Face Pull', 17.5, 19, clip: 'face'),
+      // A lowercase exercise name (calisthenics skills arrive this way)
+      // reads title-cased in Also logged.
+      set('h1', 'handstand', 0, 1),
     ]);
     await pump(tester,
         date: fri, moves: _FakeRepo(), strength: strength, wm: tms());
@@ -644,6 +647,9 @@ void main() {
                 find.descendant(of: face, matching: find.byType(VideoThumb)))
             .mediaId,
         'face');
+    expect(find.textContaining('Handstand', findRichText: true),
+        findsOneWidget);
+    expect(find.textContaining('handstand', findRichText: true), findsNothing);
   });
 
   testWidgets('more than three clips: two thumbs + "+N" opens them all',

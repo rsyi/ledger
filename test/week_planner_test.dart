@@ -41,6 +41,8 @@ ViewSchema _strengthView() => ViewSchema(
         Dimension(name: 'weight', type: DimensionType.number, expr: 'Weight'),
         Dimension(name: 'reps', type: DimensionType.number, expr: 'Reps'),
         Dimension(name: 'rpe', type: DimensionType.number, expr: 'RPE'),
+        Dimension(
+            name: 'set_type', type: DimensionType.string, expr: 'Set Type'),
       ],
     );
 
@@ -510,7 +512,8 @@ void main() {
         'reps, weight, top, reps_hi, pct, warmup} — never rpe/notes', () {
       // Block-0 cut weeks + a post-cut (v10) week with wave-top markers.
       // top/reps_hi/pct/warmup are DISPLAY markers for the routine
-      // screen; regenerateWeek persists only exercise/reps/weight.
+      // screen; plannedValuesOf persists only exercise/reps/weight
+      // (+ set_type warmup on ramp rows).
       for (final monday in [preMonday, w1Monday,
           DateTime.utc(2026, 12, 14)]) {
         final entries = buildWeekPlannedEntries(program, monday,
@@ -786,106 +789,269 @@ void main() {
     });
   });
 
-  group('regenerateWeek (plan upgrade semantics)', () {
+  group('plannedValuesOf / planDaySignature / remainingAfterLogged', () {
+    test('ramp rows persist set_type warmup; working rows carry no tag '
+        'and never rpe/notes/display markers', () {
+      final d = DateTime.utc(2026, 10, 2);
+      expect(
+        plannedValuesOf({'date': d, 'exercise': 'Barbell Deadlift',
+            'reps': 5, 'weight': 135, 'warmup': true}),
+        {'exercise': 'Barbell Deadlift', 'reps': 5, 'weight': 135,
+            'set_type': 'warmup'},
+      );
+      expect(
+        plannedValuesOf({'date': d, 'exercise': 'Barbell Deadlift',
+            'reps': 5, 'weight': 270, 'top': true, 'pct': 0.811}),
+        {'exercise': 'Barbell Deadlift', 'reps': 5, 'weight': 270},
+      );
+      expect(
+        plannedValuesOf({'date': d, 'exercise': 'Romanian Deadlift',
+            'reps': 8, 'reps_hi': 12}),
+        {'exercise': 'Romanian Deadlift', 'reps': 8},
+      );
+    });
+
+    test('signature: equal for equal content, moves with any persisted '
+        'change (weight, reps, warm-up flag, row count)', () {
+      final d = DateTime.utc(2026, 10, 2);
+      Map<String, Object?> row(num w, {bool warm = false, int reps = 5}) => {
+            'date': d, 'exercise': 'Barbell Squat', 'reps': reps,
+            'weight': w, if (warm) 'warmup': true,
+          };
+      final base = planDaySignature([row(135, warm: true), row(260)]);
+      expect(planDaySignature([row(135, warm: true), row(260)]), base);
+      // Display-only markers don't move it.
+      expect(
+          planDaySignature([row(135, warm: true), {...row(260), 'top': true}]),
+          base);
+      expect(planDaySignature([row(135, warm: true), row(265)]),
+          isNot(base));
+      expect(planDaySignature([row(135), row(260)]), isNot(base));
+      expect(planDaySignature([row(135, warm: true), row(260, reps: 4)]),
+          isNot(base));
+      expect(planDaySignature([row(260)]), isNot(base));
+      expect(planDaySignature(const []), isNot(base));
+    });
+
+    test('logged sets consume the matching planned rows by exercise + '
+        'kind (warm-up vs working, shared working_sets rule)', () {
+      final d = DateTime.utc(2026, 10, 2);
+      final built = [
+        for (final w in [135, 160, 215])
+          {'date': d, 'exercise': 'Barbell Deadlift', 'reps': 3,
+              'weight': w, 'warmup': true},
+        {'date': d, 'exercise': 'Barbell Deadlift', 'reps': 5,
+            'weight': 270, 'top': true},
+        for (var i = 0; i < 2; i++)
+          {'date': d, 'exercise': 'Barbell Deadlift', 'reps': 4,
+              'weight': 250},
+        {'date': d, 'exercise': 'Romanian Deadlift', 'reps': 8},
+      ];
+      final logged = [
+        // A tagged warm-up + an UNTAGGED ramp (rule: unrated, < 75% top).
+        {'date': '2026-10-02', 'exercise': 'barbell deadlift',
+            'weight': 135, 'set_type': 'warmup'},
+        {'date': '2026-10-02', 'exercise': 'Barbell Deadlift',
+            'weight': 160},
+        {'date': '2026-10-02', 'exercise': 'Barbell Deadlift',
+            'weight': 270, 'rpe': 8},
+        // Off-plan work consumes nothing.
+        {'date': '2026-10-02', 'exercise': 'Leg Press', 'weight': 300},
+      ];
+      final left = remainingAfterLogged(built, logged);
+      expect([for (final e in left) '${e['weight'] ?? '-'}'
+          '${e['warmup'] == true ? 'w' : ''}'],
+          ['215w', '250', '250', '-']);
+      expect(remainingAfterLogged(built, const []), built);
+    });
+  });
+
+  group('syncPlannedDays (planned rows track the CURRENT program)', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
-    test('replaces only this week\'s still-planned week-plan rows, '
-        'today-forward', () async {
+    const wms = {
+      'squat': 320.0,
+      'bench': 240.0,
+      'deadlift': 330.0,
+      'press': 140.0,
+    };
+    final friday = DateTime(2026, 10, 2);
+
+    List<String> stored(List<PlannedEntry> es) => [
+          for (final e in es)
+            '${e.values['exercise']} ${e.values['weight'] ?? '-'}'
+                'x${e.values['reps']}'
+                '${e.values['set_type'] == 'warmup' ? ' (warm-up)' : ''}',
+        ];
+
+    test('rewrites stale program rows over the rolling 7 days exactly as '
+        'the Program screen prices them (incl. Sat/Sun past the Sat–Fri '
+        'accounting week); coach/user/past rows untouched', () async {
       final view = _strengthView();
-      // Stale leftovers for the target week (Mon + Fri), a user
-      // template entry, and next week's plan — only the first two may go.
-      final monEntry = PlannedEntry.create(
+      final staleFri = PlannedEntry.create(
+        view: view,
+        date: DateTime(2026, 10, 2),
+        values: {'exercise': 'Barbell Deadlift', 'reps': 5, 'weight': 300},
+        templateName: WeekPlanner.templateLabel,
+      );
+      final pastMon = PlannedEntry.create(
         view: view,
         date: DateTime(2026, 9, 28),
         values: {'exercise': 'Barbell Squat', 'reps': 5},
         templateName: WeekPlanner.templateLabel,
       );
-      final friEntry = PlannedEntry.create(
+      final coachFri = PlannedEntry.create(
         view: view,
         date: DateTime(2026, 10, 2),
-        values: {'exercise': 'Barbell Deadlift', 'reps': 5},
-        templateName: WeekPlanner.templateLabel,
-      );
-      final userEntry = PlannedEntry.create(
-        view: view,
-        date: DateTime(2026, 9, 28),
         values: {'exercise': 'Face Pull', 'reps': 15},
-        templateName: 'my template',
+        templateName: 'coach: friday extras',
       );
-      final nextWeekEntry = PlannedEntry.create(
-        view: view,
-        date: DateTime(2026, 10, 5),
-        values: {'exercise': 'Barbell Squat', 'reps': 4},
-        templateName: WeekPlanner.templateLabel,
-      );
-      await PlanStore.addAll(
-          view, [monEntry, friEntry, userEntry, nextWeekEntry]);
-      // Simulate "Monday's top was already logged": Log-now removed it
-      // from PlanStore before the upgrade ran.
-      await PlanStore.remove(view, monEntry.localId);
+      await PlanStore.addAll(view, [staleFri, pastMon, coachFri]);
 
-      final added = await WeekPlanner.regenerateWeek(
+      final sigs = await WeekPlanner.syncPlannedDays(
         strengthView: view,
         program: program,
-        references: refs,
-        targetMonday: DateTime.utc(2026, 9, 28),
-        today: DateTime(2026, 9, 30), // Wednesday
+        today: friday,
+        workingMaxes: wms,
       );
+      expect(sigs.keys, [
+        '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05',
+        '2026-10-06', '2026-10-07', '2026-10-08',
+      ]);
 
-      // Today-forward only: Sat/Sun/Mon/Tue are past — the logged
-      // Monday squat is NOT re-created. Wed 13 + Thu 22 + Fri 8 rows
-      // (skeleton — references only, %TM rows never price off e1rm).
-      // Thu = 6 muscle-up + 2 banded + 3 handstand + 2 front-lever +
-      // 3 HLR + 3 dip + 3 EZ-curl (muscle-up progression, 2026-10-01).
-      expect(added, hasLength(43));
-      final wed = added
-          .where((e) => e.date == DateTime(2026, 9, 30))
-          .toList();
-      expect(
-        [for (final e in wed) '${e.values['exercise']} '
-            '${e.values['weight'] ?? '-'}x${e.values['reps']}'],
-        containsAll([
-          'Flat Barbell Bench Press -x5', // wave wk1 top
-          'Barbell Squat -x8', // 65% volume slot (weightless w/o wm)
-          'Overhead Press -x8',
-          'Pull Up -x6',
-        ]),
-      );
-      for (final e in added) {
-        expect(e.templateName, WeekPlanner.templateLabel);
-        expect(e.values.containsKey('rpe'), isFalse);
-        expect(e.values.containsKey('notes'), isFalse);
+      // Each window day == the Program screen's non-snapped pricing.
+      final screenThis = buildWeekPlannedEntries(program, w1Monday,
+          workingMaxes: wms, snapToWeekStart: false);
+      final screenNext = buildWeekPlannedEntries(
+          program, w1Monday.add(const Duration(days: 7)),
+          workingMaxes: wms, snapToWeekStart: false);
+      for (var i = 0; i < 7; i++) {
+        final d = DateTime(2026, 10, 2 + i);
+        final utc = DateTime.utc(d.year, d.month, d.day);
+        final want = [
+          for (final e in [...screenThis, ...screenNext])
+            if (e['date'] == utc) plannedValuesOf(e),
+        ];
+        final got = [
+          for (final e in await PlanStore.loadForDate(view, d))
+            if (e.templateName == WeekPlanner.templateLabel) e.values,
+        ];
+        expect(got, want, reason: '$d');
       }
 
-      // Store state: old week-plan rows for THIS week gone; the user's
-      // template entry and next week's plan untouched.
-      final friday = await PlanStore.loadForDate(view, DateTime(2026, 10, 2));
-      expect(friday.map((e) => e.localId), isNot(contains(friEntry.localId)));
-      expect(friday, hasLength(8));
-      final monday = await PlanStore.loadForDate(view, DateTime(2026, 9, 28));
-      expect(monday.map((e) => e.localId), [userEntry.localId]);
-      final nextMon =
-          await PlanStore.loadForDate(view, DateTime(2026, 10, 5));
-      expect(nextMon.map((e) => e.localId), [nextWeekEntry.localId]);
+      final fri = await PlanStore.loadForDate(view, friday);
+      expect(fri.map((e) => e.localId), isNot(contains(staleFri.localId)));
+      expect(fri.map((e) => e.localId), contains(coachFri.localId));
+      // Friday = deadlift ramp (stamped warm-up) + top + back-offs, then
+      // RDL, then the bench ramp + 65% bench.
+      expect(stored(fri.where((e) => e.templateName != 'coach: friday '
+          'extras').toList()).take(5), [
+        'Barbell Deadlift 135x5 (warm-up)',
+        'Barbell Deadlift 160x3 (warm-up)',
+        'Barbell Deadlift 215x1 (warm-up)',
+        'Barbell Deadlift 270x5',
+        'Barbell Deadlift 250x4',
+      ]);
+      // Saturday (the OHP day) is planned on Friday already.
+      final sat = await PlanStore.loadForDate(view, DateTime(2026, 10, 3));
+      expect(sat.map((e) => e.values['exercise']),
+          contains('Overhead Press'));
+      // Past days are never touched.
+      final mon = await PlanStore.loadForDate(view, DateTime(2026, 9, 28));
+      expect(mon.map((e) => e.localId), [pastMon.localId]);
     });
 
-    test('planned weights survive the PlanStore JSON round-trip', () async {
+    test('unchanged program → no writes: user deletions stand, ids stable',
+        () async {
       final view = _strengthView();
-      await WeekPlanner.regenerateWeek(
+      final sigs = await WeekPlanner.syncPlannedDays(
+          strengthView: view, program: program, today: friday,
+          workingMaxes: wms);
+      final sat0 = await PlanStore.loadForDate(view, DateTime(2026, 10, 3));
+      await PlanStore.remove(view, sat0.last.localId); // user skips one
+      final again = await WeekPlanner.syncPlannedDays(
+          strengthView: view, program: program, today: friday,
+          workingMaxes: wms, storedSignatures: sigs);
+      expect(again, sigs);
+      final sat1 = await PlanStore.loadForDate(view, DateTime(2026, 10, 3));
+      expect(sat1.map((e) => e.localId),
+          sat0.take(sat0.length - 1).map((e) => e.localId));
+    });
+
+    test('a TM change rewrites only the days it reprices', () async {
+      final view = _strengthView();
+      final sigs = await WeekPlanner.syncPlannedDays(
+          strengthView: view, program: program, today: friday,
+          workingMaxes: wms);
+      final idsBefore = {
+        for (var i = 0; i < 7; i++)
+          i: (await PlanStore.loadForDate(view, DateTime(2026, 10, 2 + i)))
+              .map((e) => e.localId)
+              .toList(),
+      };
+      final sigs2 = await WeekPlanner.syncPlannedDays(
+          strengthView: view, program: program, today: friday,
+          workingMaxes: {...wms, 'press': 160.0}, storedSignatures: sigs);
+      // Sat Oct 3 = OHP top day; Wed Oct 7 = OHP 62% slot.
+      for (var i = 0; i < 7; i++) {
+        final d = DateTime(2026, 10, 2 + i);
+        final ids = (await PlanStore.loadForDate(view, d))
+            .map((e) => e.localId)
+            .toList();
+        final k = '2026-10-0${2 + i}';
+        if (sigs2[k] == sigs[k]) {
+          expect(ids, idsBefore[i], reason: '$k untouched');
+        } else {
+          expect(ids.toSet().intersection(idsBefore[i]!.toSet()), isEmpty,
+              reason: '$k rewritten');
+        }
+      }
+      expect(sigs2['2026-10-03'], isNot(sigs['2026-10-03']));
+      expect(sigs2['2026-10-07'], isNot(sigs['2026-10-07']));
+      expect(sigs2['2026-10-02'], sigs['2026-10-02']); // Fri: no press
+      final sat = await PlanStore.loadForDate(view, DateTime(2026, 10, 3));
+      expect(
+          sat.where((e) =>
+              e.values['exercise'] == 'Overhead Press' &&
+              e.values['set_type'] == null).first.values['weight'],
+          130); // 160 × 0.811 = 129.8 → 130 (was 115 at TM 140)
+    });
+
+    test('a partly-trained TODAY is rewritten minus what is already '
+        'logged (no re-planning done sets)', () async {
+      final view = _strengthView();
+      final sigs = await WeekPlanner.syncPlannedDays(
         strengthView: view,
         program: program,
-        references: refs,
-        targetMonday: DateTime.utc(2026, 9, 28),
-        today: DateTime(2026, 9, 28),
-        workingMaxes: const {'squat': 320.0},
+        today: friday,
+        storedSignatures: const {},
+        workingMaxes: wms,
+        loggedRows: [
+          {'date': DateTime(2026, 10, 2), 'exercise': 'Barbell Deadlift',
+              'weight': 135, 'reps': 5, 'set_type': 'warmup'},
+          {'date': DateTime(2026, 10, 2), 'exercise': 'Barbell Deadlift',
+              'weight': 270, 'reps': 5, 'rpe': 8},
+          // Yesterday's log doesn't consume today's plan.
+          {'date': DateTime(2026, 10, 1), 'exercise': 'Barbell Deadlift',
+              'weight': 160, 'reps': 3, 'set_type': 'warmup'},
+        ],
       );
-      final monday = await PlanStore.loadForDate(view, DateTime(2026, 9, 28));
-      // Squat ramp + wave top: 45x10, 105x5, 155x3, 210x1, 260x5.
-      expect(
-        [for (final e in monday.take(5)) e.values['weight']],
-        [45, 105, 155, 210, 260],
-      );
-      expect(monday.first.values['weight'], isA<num>());
+      expect(sigs, isNotEmpty);
+      final fri = await PlanStore.loadForDate(view, friday);
+      expect(stored(fri).take(4), [
+        'Barbell Deadlift 160x3 (warm-up)',
+        'Barbell Deadlift 215x1 (warm-up)',
+        'Barbell Deadlift 250x4',
+        'Barbell Deadlift 250x4',
+      ]);
+    });
+
+    test('decodeDaySignatures tolerates junk', () {
+      expect(WeekPlanner.decodeDaySignatures(null), isEmpty);
+      expect(WeekPlanner.decodeDaySignatures('nope'), isEmpty);
+      expect(WeekPlanner.decodeDaySignatures('[1]'), isEmpty);
+      expect(WeekPlanner.decodeDaySignatures('{"2026-10-02":"ab","x":1}'),
+          {'2026-10-02': 'ab'});
     });
   });
 
@@ -893,7 +1059,7 @@ void main() {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
     test('copies the source day\'s session onto the target date, warm-ups '
-        'dropped', () async {
+        'included (stamped set_type warmup)', () async {
       final view = _strengthView();
       // Wednesday 2026-09-30 (bench heavy day) → schedule onto Sunday.
       final source = DateTime.utc(2026, 9, 30);
@@ -906,18 +1072,26 @@ void main() {
         workingMaxes: const {'bench': 245.0, 'squat': 320.0, 'press': 150.0},
       );
       expect(added, isNotEmpty);
-      // All land on the TARGET date, tagged as program rows, no warm-ups.
+      // All land on the TARGET date, tagged as program rows.
       for (final e in added) {
         expect(e.date, DateTime(2026, 10, 4));
         expect(e.templateName, WeekPlanner.templateLabel);
       }
       final onTarget = await PlanStore.loadForDate(view, target);
       expect(onTarget, hasLength(added.length));
-      // Bench top set present (a working set, warm-ups excluded).
+      // Bench top set present, preceded by its stamped warm-up ramp.
       expect(
         onTarget.map((e) => e.values['exercise']),
         contains('Flat Barbell Bench Press'),
       );
+      final firstBench = onTarget.indexWhere(
+          (e) => e.values['exercise'] == 'Flat Barbell Bench Press');
+      expect(onTarget[firstBench].values['set_type'], 'warmup');
+      expect(
+          onTarget.where((e) =>
+              e.values['set_type'] == 'warmup' &&
+              e.values['exercise'] == 'Flat Barbell Bench Press'),
+          isNotEmpty);
     });
 
     test('rest day schedules nothing', () async {

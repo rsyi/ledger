@@ -12,13 +12,18 @@
 ///    `exercise` + `reps` + (when computable) `weight` — NEVER rpe or
 ///    notes (planned rows must not fabricate performance data), and
 ///    weight is absent rather than guessed when no reference exists.
-///  - [WeekPlanner.ensureCurrentWeek]: thin runner — weekly idempotence
-///    via the `week_planner_generated_monday` ledger meta key (stamped
-///    `<monday>|plan_v2`; a mismatch regenerates the week today-forward,
-///    replacing only still-planned rows); writes through the same
-///    PlanStore path coach proposals use.
+///  - [WeekPlanner.ensureCurrentWeek]: thin runner — keeps the ROLLING
+///    next 7 days (today-forward) of planner-owned PlanStore rows equal
+///    to what the Program screen shows, via per-day content signatures
+///    ([planDaySignature], meta `week_planner_day_signatures`): a day is
+///    rewritten only when what the program prescribes for it changed
+///    (program version, TMs/caps, references, accessory progression,
+///    planner version) — otherwise user deletions/logs stand. Writes
+///    through the same PlanStore path coach proposals use; only rows
+///    tagged [WeekPlanner.templateLabel] are ever touched.
 library;
 
+import 'dart:convert' show jsonDecode, jsonEncode, utf8;
 import 'dart:math' show max;
 
 import 'package:airledger_engine/airledger_engine.dart';
@@ -42,9 +47,9 @@ import 'program_metrics.dart'
 import 'program_provider.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
-import 'week_plan.dart' show defaultWeekStart;
 import 'wm_tabs.dart'
     show WmSnapshot, activeCapsByLift, currentWorkingMaxesByLift;
+import 'working_sets.dart' show warmupIndices;
 import 'working_max.dart'
     show LoadPolicy, loadPolicies, policyForDate, rpePct, warmupRamp;
 
@@ -438,7 +443,7 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
         // persisted. Never rpe/notes — those describe what happened,
         // and nothing has happened yet. Weight is filled only from a
         // real reference. top/reps_hi/pct are display markers for the
-        // routine screen (WeekPlanner.regenerateWeek drops them).
+        // routine screen (plannedValuesOf drops them).
         working.add({
           'date': day,
           'exercise': exercise,
@@ -479,26 +484,86 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
   return entries;
 }
 
+/// The persisted values for one [buildWeekPlannedEntries] entry: ONLY
+/// exercise + reps + (when computable) weight — never rpe/notes — plus
+/// `set_type: warmup` on warm-up ramp rows, so logging a planned ramp
+/// row records it as a warm-up (and the timeline renders it muted).
+/// Display markers (top/reps_hi/pct/warmup) are dropped.
+Map<String, Object?> plannedValuesOf(Map<String, Object?> e) => {
+      'exercise': e['exercise'],
+      'reps': e['reps'],
+      'weight': ?e['weight'],
+      if (e['warmup'] == true) 'set_type': 'warmup',
+    };
+
+/// Stable content signature of one day's built entries (FNV-1a 32 over
+/// the persisted shape + [WeekPlanner.planVersion]). Equal signatures ⇒
+/// the program prescribes the same rows for that day, so the planner
+/// leaves the day's PlanStore rows (and the user's deletions) alone.
+String planDaySignature(List<Map<String, Object?>> dayEntries) {
+  final b = StringBuffer(WeekPlanner.planVersion);
+  for (final e in dayEntries) {
+    final v = plannedValuesOf(e);
+    b.write('\n${v['exercise']}|${v['reps']}|${v['weight'] ?? ''}|'
+        '${v['set_type'] ?? ''}');
+  }
+  var h = 0x811c9dc5;
+  for (final byte in utf8.encode(b.toString())) {
+    h ^= byte;
+    h = (h * 0x01000193) & 0xffffffff;
+  }
+  return h.toRadixString(16).padLeft(8, '0');
+}
+
+/// [built] (one day's entries) minus the sets already LOGGED that day,
+/// so regenerating a partly-trained day never re-plans done work. Each
+/// logged set consumes the first still-unconsumed built row of the same
+/// exercise (case-insensitive) and the same kind — warm-up vs working,
+/// per the shared working_sets rule ([warmupIndices]: set_type warmup or
+/// an untagged ramp set). Extra logged sets beyond the plan consume
+/// nothing further.
+List<Map<String, Object?>> remainingAfterLogged(
+  List<Map<String, Object?>> built,
+  List<Map<String, Object?>> loggedThatDay,
+) {
+  final warm = warmupIndices(loggedThatDay);
+  final budget = <String, int>{};
+  String key(Object? exercise, bool warmup) =>
+      '${exercise?.toString().trim().toLowerCase() ?? ''}|$warmup';
+  for (var i = 0; i < loggedThatDay.length; i++) {
+    final k = key(loggedThatDay[i]['exercise'], warm.contains(i));
+    budget[k] = (budget[k] ?? 0) + 1;
+  }
+  final out = <Map<String, Object?>>[];
+  for (final e in built) {
+    final k = key(e['exercise'], e['warmup'] == true);
+    final left = budget[k] ?? 0;
+    if (left > 0) {
+      budget[k] = left - 1;
+      continue;
+    }
+    out.add(e);
+  }
+  return out;
+}
+
 /// Thin runner around [buildWeekPlannedEntries]. Call fire-and-forget from
 /// the home-screen bootstrap after SyncScheduler.init; never throws.
 class WeekPlanner {
-  /// Ledger meta key holding the generation stamp of the last week we
-  /// generated: `<yyyy-MM-dd monday>|plan_v2`. Matching stamp = this week
-  /// is done, do nothing (so logged or user-deleted rows are never touched
-  /// or re-created). A mismatched stamp for the same Monday (e.g. the
-  /// pre-weight `plan_v1` bare-monday value) triggers [regenerateWeek].
-  static const metaGeneratedKey = 'week_planner_generated_monday';
+  /// Ledger meta key holding the per-day content signatures of the last
+  /// sync: JSON `{yyyy-MM-dd: signature}` over the rolling window. A day
+  /// whose freshly built signature matches is left untouched (so logged
+  /// or user-deleted rows are never re-created); a mismatch (or no
+  /// stored signature) rewrites that day's planner-owned rows.
+  static const metaDaySignaturesKey = 'week_planner_day_signatures';
 
-  /// Planner generation suffix in the meta stamp. Bump when the generated
-  /// row shape changes and existing weeks should be upgraded in place
-  /// (v3: working-max weight math replaced the reference-e1rm fill;
-  /// v4: strength-wave top reps + planned accessories + volume
-  /// multipliers, program.yaml v10; v5: cut wave `strength_wave_cut` +
-  /// %TM `pct` rows + cut deload halving, program.yaml v11; v6: v12
-  /// routine merge + accessory double-progression weights; v7: v13
-  /// two-loop TM — regenerate the week's loads off the slow-loop
-  /// recomputed training maxes).
-  static const planVersion = 'plan_v7';
+  /// Planner generation tag, folded into every day signature — bumping
+  /// it rewrites the whole window once (v3: working-max weight math;
+  /// v4: strength-wave tops + accessories + volume multipliers; v5: cut
+  /// wave + %TM rows; v6: v12 routine merge + accessory double
+  /// progression; v7: v13 two-loop TM; v8: rolling Mon–Sun-priced
+  /// window, per-day signatures, warm-up rows stamped set_type warmup).
+  static const planVersion = 'plan_v8';
 
   /// Ledger meta key the runner writes the last swallowed error into.
   static const metaErrorKey = 'week_planner_error';
@@ -507,102 +572,127 @@ class WeekPlanner {
   /// / coach-proposal grouping: PlannedEntry.templateName).
   static const templateLabel = 'program: week plan';
 
-  /// Replaces the target week's remaining (still-planned) week-plan rows
-  /// with freshly generated ones, today-forward. Returns the entries it
-  /// added (already written to PlanStore).
+  /// How many days (today-forward) the planner keeps in sync.
+  static const horizonDays = 7;
+
+  /// Brings the planner-owned PlanStore rows for [today] .. today +
+  /// [horizon] − 1 in line with the CURRENT program, and returns the new
+  /// per-day signature map to persist (window days only — older days
+  /// drop out).
   ///
-  /// "Remaining" = entries still in PlanStore with our [templateLabel] and
-  /// a date inside the target week. Rows the user already logged were
-  /// removed from PlanStore at log time and live in the ledger — they are
-  /// never touched or re-created for past days (past = before [today]).
-  /// Planned entries from other templates/weeks are left alone.
-  ///
-  /// Split out from [ensureCurrentWeek] (which adds the meta stamping and
-  /// error swallowing) so the replace semantics are unit-testable without
-  /// an FFI-backed ledger repo.
-  static Future<List<PlannedEntry>> regenerateWeek({
+  /// Each day is priced exactly as the Program screen prices it:
+  /// [buildWeekPlannedEntries] over the day's own Mon–Sun week with
+  /// `snapToWeekStart: false` (the accounting-week snap is what used to
+  /// leave the displayed Saturday/Sunday unplanned). A day is rewritten
+  /// only when its [planDaySignature] differs from [storedSignatures]:
+  /// its rows tagged [templateLabel] are removed and replaced by the
+  /// built rows minus the sets already logged that day
+  /// ([remainingAfterLogged] over [loggedRows]). Coach proposals, user
+  /// entries (any other templateName) and days outside the window are
+  /// never touched.
+  static Future<Map<String, String>> syncPlannedDays({
     required ViewSchema strengthView,
     required Map<Object?, Object?> program,
-    required Map<String, double> references,
-    required DateTime targetMonday,
     required DateTime today,
+    Map<String, String> storedSignatures = const {},
+    List<Map<String, Object?>> loggedRows = const [],
+    Map<String, double> references = const {},
     Map<String, double> workingMaxes = const {},
     Map<String, double> capRpeByLift = const {},
     List<StrengthRow> accessoryHistory = const [],
+    int horizon = horizonDays,
   }) async {
     final fmt = DateFormat('yyyy-MM-dd');
-    final monday = DateTime.utc(
-      targetMonday.year,
-      targetMonday.month,
-      targetMonday.day,
-    );
-    final weekDays = {
-      for (var i = 0; i < 7; i++) fmt.format(monday.add(Duration(days: i))),
-    };
-    await PlanStore.removeWhere(
-      strengthView,
-      (e) =>
-          e.templateName == templateLabel &&
-          weekDays.contains(fmt.format(e.date)),
-    );
+    final day0 = DateTime.utc(today.year, today.month, today.day);
+    final days = [
+      for (var i = 0; i < horizon; i++) day0.add(Duration(days: i)),
+    ];
 
-    final todayDay = DateTime.utc(today.year, today.month, today.day);
-    final entries = <PlannedEntry>[];
-    final built = buildWeekPlannedEntries(
-      program,
-      monday,
-      references: references,
-      workingMaxes: workingMaxes,
-      capRpeByLift: capRpeByLift,
-      accessoryHistory: accessoryHistory,
-    );
-    for (final e in built) {
-      final date = e['date'] as DateTime;
-      if (date.isBefore(todayDay)) continue; // today-forward only
-      entries.add(PlannedEntry.create(
-        view: strengthView,
-        date: DateTime(date.year, date.month, date.day),
-        values: {
-          'exercise': e['exercise'],
-          'reps': e['reps'],
-          'weight': ?e['weight'],
-        },
-        templateName: templateLabel,
-      ));
+    // Price each Mon–Sun week touching the window once.
+    final byDay = <String, List<Map<String, Object?>>>{
+      for (final d in days) fmt.format(d): <Map<String, Object?>>[],
+    };
+    final mondays = {
+      for (final d in days) d.subtract(Duration(days: d.weekday - 1)),
+    };
+    for (final monday in mondays) {
+      final built = buildWeekPlannedEntries(
+        program,
+        monday,
+        references: references,
+        workingMaxes: workingMaxes,
+        capRpeByLift: capRpeByLift,
+        accessoryHistory: accessoryHistory,
+        snapToWeekStart: false,
+      );
+      for (final e in built) {
+        byDay[fmt.format(e['date'] as DateTime)]?.add(e);
+      }
     }
-    if (entries.isNotEmpty) {
-      await PlanStore.addAll(strengthView, entries);
+
+    // Logged sets per window day (for remainingAfterLogged).
+    final loggedByDay = <String, List<Map<String, Object?>>>{};
+    for (final r in loggedRows) {
+      final raw = r['date'];
+      final d = raw is DateTime
+          ? raw
+          : DateTime.tryParse(raw?.toString() ?? '');
+      if (d == null) continue;
+      final k = fmt.format(d);
+      if (byDay.containsKey(k)) (loggedByDay[k] ??= []).add(r);
     }
-    return entries;
+
+    final signatures = <String, String>{};
+    final rewrite = <String>{};
+    final added = <PlannedEntry>[];
+    for (final d in days) {
+      final k = fmt.format(d);
+      final sig = planDaySignature(byDay[k]!);
+      signatures[k] = sig;
+      if (storedSignatures[k] == sig) continue;
+      rewrite.add(k);
+      for (final e in remainingAfterLogged(
+          byDay[k]!, loggedByDay[k] ?? const [])) {
+        added.add(PlannedEntry.create(
+          view: strengthView,
+          date: DateTime(d.year, d.month, d.day),
+          values: plannedValuesOf(e),
+          templateName: templateLabel,
+        ));
+      }
+    }
+    if (rewrite.isNotEmpty) {
+      await PlanStore.removeWhere(
+        strengthView,
+        (e) =>
+            e.templateName == templateLabel &&
+            rewrite.contains(fmt.format(e.date)),
+      );
+      if (added.isNotEmpty) await PlanStore.addAll(strengthView, added);
+    }
+    return signatures;
   }
 
   /// Converts one program-built entry map (from [buildWeekPlannedEntries])
-  /// into a persistable [PlannedEntry] on [date], carrying only the fields
-  /// that get logged (exercise / reps / weight). Warm-up rows are dropped
-  /// — the routine's "add to log" mirrors the working sets, not the ramp
-  /// (warm-ups are done by feel). Returns null for a warm-up row.
-  static PlannedEntry? _plannedFrom(
+  /// into a persistable [PlannedEntry] on [date] ([plannedValuesOf]:
+  /// exercise / reps / weight, plus set_type warmup on ramp rows —
+  /// warm-ups are part of the session, so they're planned too).
+  static PlannedEntry _plannedFrom(
     ViewSchema view,
     Map<String, Object?> e,
     DateTime date,
-  ) {
-    if (e['warmup'] == true) return null;
-    return PlannedEntry.create(
-      view: view,
-      date: DateTime(date.year, date.month, date.day),
-      values: {
-        'exercise': e['exercise'],
-        'reps': e['reps'],
-        'weight': ?e['weight'],
-      },
-      templateName: templateLabel,
-    );
-  }
+  ) =>
+      PlannedEntry.create(
+        view: view,
+        date: DateTime(date.year, date.month, date.day),
+        values: plannedValuesOf(e),
+        templateName: templateLabel,
+      );
 
   /// Manual "Schedule this week" (Program screen): writes the whole
   /// displayed [weekStart] Mon–Sun week's planned strength rows into
   /// PlanStore, replacing any still-planned program rows already in that
-  /// window (same replace semantics as [regenerateWeek] but user-invoked,
+  /// window (same replace semantics as [syncPlannedDays] but user-invoked,
   /// with NO today-forward cutoff — a user scheduling a week wants every
   /// day, including earlier ones). Returns the entries it added.
   ///
@@ -639,7 +729,7 @@ class WeekPlanner {
     );
     final entries = <PlannedEntry>[
       for (final e in built)
-        ?_plannedFrom(strengthView, e, e['date'] as DateTime),
+        _plannedFrom(strengthView, e, e['date'] as DateTime),
     ];
     if (entries.isNotEmpty) await PlanStore.addAll(strengthView, entries);
     return entries;
@@ -683,33 +773,33 @@ class WeekPlanner {
           fmt.format(e.date) == fmt.format(target),
     );
     final entries = <PlannedEntry>[
-      for (final e in built) ?_plannedFrom(strengthView, e, target),
+      for (final e in built) _plannedFrom(strengthView, e, target),
     ];
     if (entries.isNotEmpty) await PlanStore.addAll(strengthView, entries);
     return entries;
   }
 
-  /// Ensures the current week's planned rows exist (once per week per
-  /// [planVersion]).
+  /// Keeps the rolling next [horizonDays] of planner-owned PlanStore rows
+  /// in sync with the CURRENT program ([syncPlannedDays]). Runs on every
+  /// home bootstrap/reload (fire-and-forget); cheap and idempotent — an
+  /// unchanged day's signature means no writes. Concurrent calls share
+  /// one in-flight run (two overlapping runs would double-add rows).
   ///
-  /// Week selection follows [defaultWeekStart]: the Monday of this ISO
-  /// week — except on Sundays, when it targets the UPCOMING week (the
-  /// app-wide "on Sunday you plan next week" convention).
+  /// Root cause this replaces (2026-10-02): the old runner stamped
+  /// `<week start>|plan_vN` once per ACCOUNTING week (Sat–Fri) and never
+  /// looked again, so program.yaml edits (v14/v15 Thursday work), TM
+  /// recomputes and accessory progressions after the week's first launch
+  /// never reached the timeline — and the snapped Sat–Fri window left the
+  /// Program screen's Saturday/Sunday unplanned until the next week.
   ///
   /// Working maxes come from [wmSnapshotOf] (the app passes
-  /// `WmStore.snapshot` — a direct read of the append-only tabs); a null/
-  /// failed snapshot silently falls back to the reference-e1rm path, so
-  /// the planner still fills weights before the tabs exist. Per-lift
-  /// references come from the local strength history read through
-  /// [connector] (the same list path every screen uses); a failed
-  /// read aborts the run (error meta, retried next launch) rather than
-  /// generating a weightless week. First run mid-week only adds entries
-  /// dated today or later — no backfilling of already-past days. A stamp
-  /// mismatch for an already-generated week (planner upgrade, e.g.
-  /// plan_v2 → plan_v3) replaces only the week's still-planned rows via
-  /// [regenerateWeek]. Skips silently (without stamping) when
-  /// program.yaml is missing or unparseable. Any error is swallowed into
-  /// the [metaErrorKey] meta.
+  /// `WmStore.snapshot`). When it's given but yields nothing (offline
+  /// before the first successful read) the run is SKIPPED — pricing
+  /// without TMs would rewrite every main-lift day weightless and then
+  /// back again. Per-lift references + accessory history + the day's
+  /// logged sets come from the local strength rows via [connector].
+  /// Skips silently when program.yaml is missing or unparseable. Any
+  /// error is swallowed into the [metaErrorKey] meta.
   static Future<void> ensureCurrentWeek({
     required EngineLedgerRepository repo,
     required WarehouseConnector connector,
@@ -717,76 +807,104 @@ class WeekPlanner {
     required ViewSchema strengthView,
     Future<WmSnapshot?> Function()? wmSnapshotOf,
     DateTime Function() now = DateTime.now,
+  }) {
+    final running = _inFlight;
+    if (running != null) return running;
+    final run = _ensure(
+      repo: repo,
+      connector: connector,
+      provider: provider,
+      strengthView: strengthView,
+      wmSnapshotOf: wmSnapshotOf,
+      now: now,
+    ).whenComplete(() => _inFlight = null);
+    return _inFlight = run;
+  }
+
+  static Future<void>? _inFlight;
+
+  static Future<void> _ensure({
+    required EngineLedgerRepository repo,
+    required WarehouseConnector connector,
+    required ProgramProvider provider,
+    required ViewSchema strengthView,
+    Future<WmSnapshot?> Function()? wmSnapshotOf,
+    required DateTime Function() now,
   }) async {
     try {
       final today = now();
-      // Program first: the target week's START depends on the program's
-      // week_start (v7 — saturday windows run Sat–Fri). The 1 h doc
-      // cache makes the always-load cheap.
       final docs = await provider.load();
       final program = docs.program;
-      if (program == null) return; // no/bad program.yaml: retry next launch
-      final targetMonday = defaultWeekStart(
-        today,
-        weekStartDay: weekStartDayOf(currentVersion(program)),
-      );
-      final mondayStr = DateFormat('yyyy-MM-dd').format(targetMonday);
-      final stamp = '$mondayStr|$planVersion';
-      if (await repo.metaGet(metaGeneratedKey) == stamp) return;
+      if (program == null) return; // no/bad program.yaml: retry next run
 
       final rows = await connector.list(strengthView);
       final history = [for (final r in rows) ?_strengthRow(r)];
       final references = liftReferencesAsOf(history, today);
 
-      // v3 inputs — best-effort: any failure leaves both maps empty and
-      // the reference fallback carries the week.
       var workingMaxes = const <String, double>{};
       var capRpeByLift = const <String, double>{};
       if (wmSnapshotOf != null) {
+        WmSnapshot? snap;
         try {
-          final snap = await wmSnapshotOf();
-          if (snap != null) {
-            workingMaxes = currentWorkingMaxesByLift(snap.workingMax);
-            final version = currentVersion(program);
-            final policies =
-                version == null ? const <LoadPolicy>[] : loadPolicies(version);
-            capRpeByLift = activeCapsByLift(
-              snap,
-              (d) => policies.isEmpty
-                  ? null
-                  : policyForDate(
-                      policies,
-                      date: d,
-                      block: programCurrent(program, null, d)
-                          ?.block['number'] as int?,
-                      weekType: programCurrent(program, null, d)?.weekType,
-                    ),
-            );
-          }
+          snap = await wmSnapshotOf();
         } catch (_) {
-          // Tabs unreadable — reference fallback.
+          snap = null;
         }
+        if (snap == null) return; // TMs unreadable: keep the current plan
+        workingMaxes = currentWorkingMaxesByLift(snap.workingMax);
+        final version = currentVersion(program);
+        final policies =
+            version == null ? const <LoadPolicy>[] : loadPolicies(version);
+        capRpeByLift = activeCapsByLift(
+          snap,
+          (d) => policies.isEmpty
+              ? null
+              : policyForDate(
+                  policies,
+                  date: d,
+                  block: programCurrent(program, null, d)
+                      ?.block['number'] as int?,
+                  weekType: programCurrent(program, null, d)?.weekType,
+                ),
+        );
       }
 
-      await regenerateWeek(
+      final stored = decodeDaySignatures(
+          await repo.metaGet(metaDaySignaturesKey));
+      final signatures = await syncPlannedDays(
         strengthView: strengthView,
         program: program,
-        references: references,
-        targetMonday: targetMonday,
         today: today,
+        storedSignatures: stored,
+        loggedRows: rows,
+        references: references,
         workingMaxes: workingMaxes,
         capRpeByLift: capRpeByLift,
         accessoryHistory: history,
       );
-      // Mark the week done even when empty (e.g. pre-program week) so we
-      // don't re-evaluate on every launch.
-      await repo.metaSet(metaGeneratedKey, stamp);
+      await repo.metaSet(metaDaySignaturesKey, jsonEncode(signatures));
     } catch (e) {
       try {
         await repo.metaSet(metaErrorKey, e.toString());
       } catch (_) {
         // Meta write failed too — nothing left to do; stay silent.
       }
+    }
+  }
+
+  /// Parses the [metaDaySignaturesKey] JSON; anything malformed → empty
+  /// (= rewrite the window once).
+  static Map<String, String> decodeDaySignatures(String? raw) {
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      final m = jsonDecode(raw);
+      if (m is! Map) return const {};
+      return {
+        for (final e in m.entries)
+          if (e.value is String) e.key.toString(): e.value as String,
+      };
+    } catch (_) {
+      return const {};
     }
   }
 
@@ -804,12 +922,16 @@ class WeekPlanner {
     if (date == null || exercise == null || exercise.isEmpty) return null;
     if (weight == null || reps == null) return null;
     final rpe = _num(r['rpe']);
+    // notes carry variant keywords (paused / beltless …) the reference
+    // math reads — the Program screen passes them, so must we, or the
+    // two price the same day differently.
     return StrengthRow(
       date: date,
       exercise: exercise,
       weight: weight.toDouble(),
       reps: reps.round(),
       rpe: rpe?.toDouble(),
+      notes: r['notes']?.toString(),
     );
   }
 

@@ -137,6 +137,7 @@ import '../services/recomp_review.dart';
 import '../services/warehouse_connector.dart';
 import '../services/week_drivers.dart';
 import '../services/weight_series.dart';
+import '../services/whoop_activity.dart';
 import '../services/working_max.dart' show extractReadings;
 import '../services/wilks.dart'
     show
@@ -558,26 +559,32 @@ class HomeDashboardState extends State<HomeDashboard> {
     }
   }
 
-  /// Climbing ledger → ascent dates. Errors / missing plumbing degrade
-  /// to an empty list (the strip's climb count falls back to the row).
+  /// Climbing ledger → ascent dates, plus Whoop climb days. Errors /
+  /// missing plumbing degrade to an empty list (the strip's climb count
+  /// falls back to the row).
   Future<List<DateTime>> _loadClimbDates() async {
-    if (widget.climbingRepo == null || widget.climbingView == null) {
-      return const [];
-    }
+    final out = <DateTime>[];
     try {
-      final recs = await widget.climbingRepo!.list(widget.climbingView!);
-      final out = <DateTime>[];
-      for (final r in recs) {
-        final raw = r['date'];
-        final d = raw is DateTime
-            ? raw
-            : DateTime.tryParse(raw?.toString() ?? '');
-        if (d != null) out.add(d);
+      if (widget.climbingRepo != null && widget.climbingView != null) {
+        for (final r
+            in await widget.climbingRepo!.list(widget.climbingView!)) {
+          final raw = r['date'];
+          final d = raw is DateTime
+              ? raw
+              : DateTime.tryParse(raw?.toString() ?? '');
+          if (d != null) out.add(d);
+        }
       }
-      return out;
-    } catch (_) {
-      return const [];
+    } catch (_) {/* honest: Whoop-only */}
+    // Whoop climbs (Kaya exports lag ~weekly) — distinct-day counting
+    // downstream dedups a day present in both.
+    if (widget.workoutsRepo != null && widget.workoutsView != null) {
+      try {
+        out.addAll(whoopClimbDays(whoopActivitiesFromRecords(
+            await widget.workoutsRepo!.list(widget.workoutsView!))));
+      } catch (_) {/* honest: Kaya-only */}
     }
+    return out;
   }
 
   /// Accounting-week start day (program.yaml v7 `week_start` —

@@ -1416,6 +1416,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       readOnlyRepo: data.readOnlyRepo,
                       forView: data.registry.forView,
                     ),
+                    workoutsView: dashWorkoutsView,
+                    workoutsRepo: dashboardRepoFor(
+                      dashWorkoutsView,
+                      readOnlyRepo: data.readOnlyRepo,
+                      forView: data.registry.forView,
+                    ),
                   ),
                 ),
               );

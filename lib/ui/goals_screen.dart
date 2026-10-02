@@ -20,6 +20,7 @@ import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
 import '../services/domain_config.dart' show DomainConfigProvider;
 import '../services/goals_service.dart';
+import '../services/heart_rate_service.dart';
 import '../services/home_synthesis.dart' show asNum, strengthRowFromRecord;
 import '../services/nutrition_model.dart'
     show buildNutritionForecast, mealRowsFromRecords;
@@ -32,6 +33,7 @@ import '../services/program_observed.dart' show observedWeightStats;
 import '../services/program_provider.dart' show IntentDocs, ProgramProvider;
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart' show loadDailyWeighIns;
+import '../services/whoop_activity.dart';
 import '../services/wilks.dart' show contemporaneousBodyweightLbs;
 import 'app_text.dart';
 
@@ -59,6 +61,10 @@ class GoalsScreen extends StatefulWidget {
   final ViewSchema? cardioView;
   final WarehouseConnector? cardioRepo;
 
+  /// Whoop workouts — climbing credit + the zone-2 run goal.
+  final ViewSchema? workoutsView;
+  final WarehouseConnector? workoutsRepo;
+
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -77,6 +83,8 @@ class GoalsScreen extends StatefulWidget {
     this.mealsRepo,
     this.cardioView,
     this.cardioRepo,
+    this.workoutsView,
+    this.workoutsRepo,
     this.today,
   });
 
@@ -208,6 +216,11 @@ class GoalsScreenState extends State<GoalsScreen> {
       if (d != null) cardioDates.add(d);
     }
 
+    // Whoop workouts → activities (climb credit + zone-2 runs).
+    final activities = whoopActivitiesFromRecords(
+        await _rows(widget.workoutsRepo, widget.workoutsView));
+    final maxHr = HeartRateService.instance?.maxHr.value?.toDouble();
+
     final goals = evaluateGoals(
       configs: configs,
       inputs: GoalInputs(
@@ -221,6 +234,8 @@ class GoalsScreenState extends State<GoalsScreen> {
         maintenanceKcal: forecast.effectiveMaintenanceKcal,
         climbingDates: climbingDates,
         cardioDates: cardioDates,
+        activities: activities,
+        maxHr: maxHr,
       ),
       today: _today,
       weekStartDay: weekStartDay,

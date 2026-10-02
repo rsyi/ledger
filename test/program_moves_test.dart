@@ -67,6 +67,31 @@ void main() {
       expect(m.note, 'missed Wed');
     });
 
+    test('fromRecord accepts a one-digit Sheets hour (live render)', () {
+      // Live Sheets renders datetimes as "2026-10-01 9:00:00", which
+      // DateTime.tryParse rejects — createdAt must still parse so
+      // latest-wins orders correctly.
+      final base = {
+        'id': 'a',
+        'date': '2026-10-02',
+        'from_date': '2026-09-30',
+        'item': 'Bench',
+      };
+      final a =
+          ProgramMove.fromRecord({...base, 'created_at': '2026-10-01 9:00:00'})!;
+      expect(a.createdAt, DateTime(2026, 10, 1, 9));
+      final b = ProgramMove.fromRecord({...base, 'created_at': '2026-10-01 9:05'})!;
+      expect(b.createdAt, DateTime(2026, 10, 1, 9, 5));
+      // Latest-wins: a 9:00 move then a 13:00 move back home → no move.
+      final later = ProgramMove.fromRecord({
+        ...base,
+        'id': 'b',
+        'date': '2026-09-30',
+        'created_at': '2026-10-01 13:00:00',
+      })!;
+      expect(activeMoves([later, a], mon), isEmpty);
+    });
+
     test('fromRecord accepts DateTime values + ISO strings, normalises to '
         'local midnight', () {
       final m = ProgramMove.fromRecord({

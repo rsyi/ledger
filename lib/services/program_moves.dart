@@ -25,9 +25,15 @@ String _str(Object? v) {
   return s == 'null' ? '' : s;
 }
 
+/// Tolerant datetime parse. Live Sheets renders datetimes with a
+/// one-digit hour ("2026-10-01 9:00:00", "2026-10-01 9:05"), which
+/// DateTime.tryParse rejects — zero-pad the hour first.
 DateTime? _dateTime(Object? v) {
   if (v is DateTime) return v;
-  final s = _str(v);
+  final s = _str(v).replaceFirstMapped(
+    RegExp(r'^(\d{4}-\d{2}-\d{2})[ T](\d):'),
+    (m) => '${m[1]} 0${m[2]}:',
+  );
   return s.isEmpty ? null : DateTime.tryParse(s);
 }
 

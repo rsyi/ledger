@@ -1,14 +1,19 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../models/view_schema.dart';
 import '../../services/day_prescription.dart';
 import '../../services/log_event_bus.dart';
+import '../../services/missed_work.dart';
 import '../../services/prescribed_exercises.dart';
+import '../../services/program_moves.dart';
 import '../../services/program_provider.dart' show IntentDocs, ProgramProvider;
-import '../../services/program_week.dart' show prescribedDay;
+import '../../services/program_week.dart'
+    show dayOnly, mondayOf, prescribedDay, prescribedWeek;
 import '../../services/set_recommendation.dart';
+import '../../services/sync_scheduler.dart';
 import '../../services/warehouse_connector.dart';
 import '../../services/whoop_activity.dart';
 
@@ -39,6 +44,22 @@ class ProgramDayCard extends StatefulWidget {
   final ViewSchema? workoutsView;
   final WarehouseConnector? workoutsRepo;
 
+  /// `program_moves` — relocations within the Mon–Sun week. Null → the
+  /// card shows the plain prescription (no Move to… / Undo).
+  final ViewSchema? programMovesView;
+  final WarehouseConnector? programMovesRepo;
+
+  /// Cardio (4x4 sessions) + climbing (Kaya ascents) — inputs to the
+  /// "Missed this week" section on today's card. Null → those kinds
+  /// count as not logged.
+  final ViewSchema? cardioView;
+  final WarehouseConnector? cardioRepo;
+  final ViewSchema? climbingView;
+  final WarehouseConnector? climbingRepo;
+
+  /// Clock for "is this today's card" — tests pin it.
+  final DateTime Function() now;
+
   const ProgramDayCard({
     super.key,
     required this.provider,
@@ -48,6 +69,13 @@ class ProgramDayCard extends StatefulWidget {
     this.strengthRepo,
     this.workoutsView,
     this.workoutsRepo,
+    this.programMovesView,
+    this.programMovesRepo,
+    this.cardioView,
+    this.cardioRepo,
+    this.climbingView,
+    this.climbingRepo,
+    this.now = DateTime.now,
   });
 
   @override
@@ -56,9 +84,33 @@ class ProgramDayCard extends StatefulWidget {
 
 class _DayData {
   final DayPrescription prescription;
-  final List<PrescribedItem> items;
-  const _DayData(this.prescription, this.items);
+
+  /// The card day's effective items (ghosts of moved-out items included,
+  /// moved-in items appended), done-marked + Whoop-credited.
+  final List<EffectiveItem> items;
+
+  /// The whole effective Mon–Sun week — feeds the Move to… sheet's
+  /// per-day load summary.
+  final Map<DateTime, List<EffectiveItem>> week;
+
+  /// Today's card only; null elsewhere.
+  final MissedWork? missed;
+
+  const _DayData(this.prescription, this.items, this.week, this.missed);
+
+  List<EffectiveItem> get live => [
+        for (final e in items)
+          if (!e.isGhost) e,
+      ];
 }
+
+const _wdNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+String _wd(DateTime d) => _wdNames[d.weekday - 1];
+String _dayLabel(DateTime d) => '${_wd(d)} ${d.month}/${d.day}';
+
+/// "Bench heavy — Wed, 0/1 sets" / "Climb — Tue, not logged".
+String missedLine(MissedItem m) => '${m.item.name} — ${_wd(m.day)}, '
+    '${m.isSession ? 'not logged' : '${m.item.loggedSets}/${m.item.targetSets} sets'}';
 
 class ProgramDayCardState extends State<ProgramDayCard> {
   late Future<_DayData?> _future;
@@ -81,7 +133,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   @override
   void didUpdateWidget(ProgramDayCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!_sameDay(oldWidget.date, widget.date) || oldWidget.label != widget.label) reload();
+    if (!_sameDay(oldWidget.date, widget.date) || oldWidget.label != widget.label) {
+      _future = _load(); // build follows didUpdateWidget — no setState
+    }
   }
 
   @override
@@ -91,7 +145,12 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   }
 
   void reload() {
-    if (mounted) setState(() => _future = _load());
+    // Block body: an arrow would return the Future to setState (asserts).
+    if (mounted) {
+      setState(() {
+        _future = _load();
+      });
+    }
   }
 
   static bool _sameDay(DateTime a, DateTime b) =>
@@ -112,43 +171,224 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     } catch (_) {
       return null;
     }
-    final date =
-        DateTime(widget.date.year, widget.date.month, widget.date.day);
+    final date = dayOnly(widget.date);
+    final isToday = date == dayOnly(widget.now());
     // Shared with prescribedWeek so the card and the week can't drift.
-    final (prescription, dayItems) =
-        prescribedDay(docs, date, label: widget.label);
+    final (prescription, _) = prescribedDay(docs, date, label: widget.label);
     if (prescription == null) return null;
-    var items = dayItems;
+
+    // The effective week: the prescription with this week's moves applied.
+    // Each source is read ONCE per load (no per-row reads).
+    var moves = const <String, ProgramMove>{};
+    final mv = widget.programMovesView;
+    final mr = widget.programMovesRepo;
+    if (mv != null && mr != null) {
+      try {
+        moves = activeMoves([
+          for (final r in await mr.list(mv)) ?ProgramMove.fromRecord(r),
+        ], mondayOf(date));
+      } catch (_) {/* honest: unmoved week */}
+    }
+    final week = effectiveWeek(
+        prescribedWeek(docs, date, label: widget.label), moves);
+    var entries = week[date] ?? const <EffectiveItem>[];
+
+    // Done-marking + Whoop credit apply to the items that live here
+    // (ghosts are shown, never counted).
+    List<EffectiveItem> mapLive(
+        List<PrescribedItem> Function(List<PrescribedItem>) f) {
+      final live = [for (final e in entries) if (!e.isGhost) e];
+      if (live.isEmpty) return entries;
+      final marked = f([for (final e in live) e.item]);
+      var i = 0;
+      return [
+        for (final e in entries)
+          e.isGhost
+              ? e
+              : EffectiveItem(
+                  item: marked[i++],
+                  home: e.home,
+                  movedFrom: e.movedFrom,
+                  movedTo: e.movedTo,
+                  move: e.move,
+                ),
+      ];
+    }
 
     final sv = widget.strengthView;
     final sr = widget.strengthRepo;
-    if (sv != null && sr != null && items.isNotEmpty) {
+    final strengthWeek = <({DateTime date, String exercise})>[];
+    if (sv != null && sr != null) {
       final logged = <String>[];
+      final mon = mondayOf(date);
       try {
         final rows = await sr.list(sv);
         _strengthRows = rows;
         for (final r in rows) {
           final d = _date(r['date']);
-          if (d == null || !_sameDay(d, date)) continue;
           final ex = r['exercise']?.toString().trim();
-          if (ex != null && ex.isNotEmpty) logged.add(ex);
+          if (d == null || ex == null || ex.isEmpty) continue;
+          if (_sameDay(d, date)) logged.add(ex);
+          if (mondayOf(d) == mon) {
+            strengthWeek.add((date: dayOnly(d), exercise: ex));
+          }
         }
       } catch (_) {/* honest empty */}
-      items = markPrescribedDone(items, logged);
+      entries = mapLive((items) => markPrescribedDone(items, logged));
     }
 
+    var whoop = const <WhoopActivity>[];
     final wv = widget.workoutsView;
     final wr = widget.workoutsRepo;
-    if (wv != null && wr != null && items.isNotEmpty) {
+    if (wv != null && wr != null) {
       try {
+        whoop = whoopActivitiesFromRecords(await wr.list(wv));
         final day = [
-          for (final a in whoopActivitiesFromRecords(await wr.list(wv)))
+          for (final a in whoop)
             if (_sameDay(a.date, date)) a,
         ];
-        items = creditClimbItems(items, day);
+        entries = mapLive((items) => creditClimbItems(items, day));
       } catch (_) {/* honest: logged-only */}
     }
-    return _DayData(prescription, items);
+
+    MissedWork? missed;
+    if (isToday && sv != null && sr != null) {
+      final kaya = <DateTime>[];
+      final cv = widget.climbingView;
+      final cr = widget.climbingRepo;
+      if (cv != null && cr != null) {
+        try {
+          for (final r in await cr.list(cv)) {
+            final d = _date(r['date']);
+            if (d != null) kaya.add(d);
+          }
+        } catch (_) {/* honest: Whoop-only */}
+      }
+      // 4x4 days — same type filter as the Goals tab (blank type counts).
+      const fourByFourTypes = {'treadmill', 'bike', 'stairmaster'};
+      final cardioDays = <DateTime>{};
+      final kv = widget.cardioView;
+      final kr = widget.cardioRepo;
+      if (kv != null && kr != null) {
+        try {
+          for (final r in await kr.list(kv)) {
+            final type = r['type']?.toString().trim().toLowerCase() ?? '';
+            if (type.isNotEmpty && !fourByFourTypes.contains(type)) continue;
+            final d = _date(r['date']);
+            if (d != null) cardioDays.add(dayOnly(d));
+          }
+        } catch (_) {/* honest empty */}
+      }
+      missed = detectMissedWork(
+        week: week,
+        strengthRows: strengthWeek,
+        climbDays: climbDaysUnion(kaya, whoopClimbDays(whoop)),
+        cardio4x4Days: cardioDays,
+        today: date,
+      );
+    }
+    return _DayData(prescription, entries, week, missed);
+  }
+
+  bool get _canMove =>
+      widget.programMovesView != null && widget.programMovesRepo != null;
+
+  /// Bottom sheet of the week's days (Mon–Sun of [anyDay]); the
+  /// [current] day is disabled. Returns the picked day or null.
+  Future<DateTime?> _pickDay(BuildContext context, String itemName,
+      DateTime anyDay, DateTime current, _DayData data) {
+    final mon = mondayOf(anyDay);
+    final today = dayOnly(widget.now());
+    return showModalBottomSheet<DateTime>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final muted = theme.colorScheme.onSurfaceVariant;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text('Move $itemName to…',
+                    style: theme.textTheme.titleMedium),
+              ),
+              for (var i = 0; i < 7; i++)
+                () {
+                  final d = DateTime(mon.year, mon.month, mon.day + i);
+                  final live = (data.week[d] ?? const <EffectiveItem>[])
+                      .where((e) => !e.isGhost)
+                      .length;
+                  final isCurrent = d == current;
+                  return ListTile(
+                    dense: true,
+                    enabled: !isCurrent,
+                    title: Text(
+                        '${_dayLabel(d)}${d == today ? ' · today' : ''}',
+                        style: d == today
+                            ? const TextStyle(fontWeight: FontWeight.w700)
+                            : null),
+                    subtitle: Text(
+                      isCurrent
+                          ? 'current day'
+                          : live == 0
+                              ? 'rest'
+                              : '$live item${live == 1 ? '' : 's'}',
+                      style: TextStyle(color: muted),
+                    ),
+                    onTap: isCurrent ? null : () => Navigator.pop(ctx, d),
+                  );
+                }(),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Writes a manual move (latest row per from+item wins; to == from is
+  /// "back home"), then syncs + reloads.
+  Future<void> _moveItem(BuildContext context, _DayData data,
+      {required PrescribedItem item,
+      required DateTime home,
+      required DateTime current}) async {
+    final view = widget.programMovesView;
+    final repo = widget.programMovesRepo;
+    if (view == null || repo == null) return;
+    final to = await _pickDay(context, item.name, home, current, data);
+    if (to == null) return;
+    final move = ProgramMove(
+      id: const Uuid().v4(),
+      to: to,
+      from: home,
+      item: item.name,
+      period: item.period,
+      source: 'manual',
+      createdAt: DateTime.now(),
+    );
+    await _write(() => repo.create(view, move.toRecord()));
+  }
+
+  Future<void> _undoMove(ProgramMove move) async {
+    final view = widget.programMovesView;
+    final repo = widget.programMovesRepo;
+    if (view == null || repo == null) return;
+    await _write(() => repo.delete(view, <String, Object?>{'id': move.id}));
+  }
+
+  Future<void> _write(Future<Object?> Function() op) async {
+    try {
+      await op();
+      unawaited(SyncScheduler.instance?.maybeSync(manual: true));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text('Move failed: $e')));
+      }
+    }
+    reload();
   }
 
   @override
@@ -171,7 +411,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
         final muted = theme.colorScheme.onSurfaceVariant;
         final p = data.prescription;
         final showChecks = widget.strengthView != null;
-        final doneCount = data.items.where((e) => e.done).length;
+        final live = data.live;
+        final doneCount = live.where((e) => e.item.done).length;
+        final missed = data.missed;
 
         return Card(
           margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -192,14 +434,14 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                         style:
                             theme.textTheme.bodySmall?.copyWith(color: muted)),
                     const Spacer(),
-                    if (p.isRest)
+                    if (p.isRest && live.isEmpty)
                       Text('Rest day',
                           style: theme.textTheme.bodyMedium
                               ?.copyWith(color: muted))
-                    else if (showChecks && data.items.isNotEmpty)
-                      Text('$doneCount / ${data.items.length} done',
+                    else if (showChecks && live.isNotEmpty)
+                      Text('$doneCount / ${live.length} done',
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: doneCount == data.items.length
+                            color: doneCount == live.length
                                 ? theme.colorScheme.primary
                                 : muted,
                           )),
@@ -215,7 +457,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                   )
                 else
                   for (final period in const ['AM', 'PM'])
-                    ..._periodBlock(context, data.items, period, showChecks),
+                    ..._periodBlock(context, data, period, showChecks),
+                if (missed != null && !missed.isEmpty)
+                  ..._missedBlock(context, data, missed),
               ],
             ),
           ),
@@ -224,14 +468,15 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     );
   }
 
-  List<Widget> _periodBlock(BuildContext context, List<PrescribedItem> items,
-      String period, bool showChecks) {
-    final group = items.where((e) => e.period == period).toList();
+  List<Widget> _periodBlock(
+      BuildContext context, _DayData data, String period, bool showChecks) {
+    final items = data.items;
+    final group = items.where((e) => e.item.period == period).toList();
     if (group.isEmpty) return const [];
     final theme = Theme.of(context);
     final muted = theme.colorScheme.onSurfaceVariant;
-    final bothPeriods = items.any((e) => e.period == 'AM') &&
-        items.any((e) => e.period == 'PM');
+    final bothPeriods = items.any((e) => e.item.period == 'AM') &&
+        items.any((e) => e.item.period == 'PM');
     return [
       if (bothPeriods)
         Padding(
@@ -240,13 +485,66 @@ class ProgramDayCardState extends State<ProgramDayCard> {
               style: theme.textTheme.labelSmall
                   ?.copyWith(letterSpacing: 0.8, color: muted)),
         ),
-      for (final it in group)
+      for (final e in group)
         _ExerciseRow(
-          item: it,
+          item: e.item,
           showCheck: showChecks,
+          movedTo: e.movedTo,
+          movedFrom: e.movedFrom,
           onTap: widget.strengthView == null
               ? null
-              : () => _showExerciseInfo(context, it),
+              : () => _showExerciseInfo(context, e.item),
+          menu: e.isGhost || !_canMove
+              ? null
+              : _RowMenu(
+                  onMove: () => _moveItem(context, data,
+                      item: e.item,
+                      home: e.home,
+                      current: dayOnly(widget.date)),
+                  onUndo: e.movedFrom == null || e.move == null
+                      ? null
+                      : () => _undoMove(e.move!),
+                ),
+        ),
+    ];
+  }
+
+  /// MISSED THIS WEEK (today's card only): due before today, not covered
+  /// by the week's logged work — each with a one-tap Move to….
+  List<Widget> _missedBlock(
+      BuildContext context, _DayData data, MissedWork missed) {
+    final theme = Theme.of(context);
+    final muted = theme.colorScheme.onSurfaceVariant;
+    return [
+      const SizedBox(height: 8),
+      Text('MISSED THIS WEEK',
+          style: theme.textTheme.labelSmall
+              ?.copyWith(letterSpacing: 0.8, color: muted)),
+      for (final m in missed.missed)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Row(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Icon(Icons.error_outline,
+                    size: 16, color: theme.colorScheme.tertiary),
+              ),
+              Expanded(
+                child: Text(missedLine(m), style: theme.textTheme.bodyMedium),
+              ),
+              if (_canMove)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: () => _moveItem(context, data,
+                      item: m.item, home: m.home, current: m.day),
+                  child: const Text('Move to…'),
+                ),
+            ],
+          ),
         ),
     ];
   }
@@ -351,19 +649,43 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   }
 }
 
+class _RowMenu {
+  final VoidCallback onMove;
+  final VoidCallback? onUndo;
+  const _RowMenu({required this.onMove, this.onUndo});
+}
+
 class _ExerciseRow extends StatelessWidget {
   final PrescribedItem item;
   final bool showCheck;
   final VoidCallback? onTap;
-  const _ExerciseRow({required this.item, required this.showCheck, this.onTap});
+
+  /// Ghost (moved-out origin): muted, "→ Fri", no checkbox, no menu.
+  final DateTime? movedTo;
+
+  /// Moved-in: a small "from Wed" chip.
+  final DateTime? movedFrom;
+
+  /// Trailing overflow menu (Move to… / Undo move); null → none.
+  final _RowMenu? menu;
+
+  const _ExerciseRow({
+    required this.item,
+    required this.showCheck,
+    this.onTap,
+    this.movedTo,
+    this.movedFrom,
+    this.menu,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final muted = scheme.onSurfaceVariant;
-    final done = item.done;
-    final partial = !done && item.loggedSets > 0;
+    final ghost = movedTo != null;
+    final done = !ghost && item.done;
+    final partial = !ghost && !done && item.loggedSets > 0;
     final (icon, markColor) = !showCheck
         ? (Icons.fitness_center, muted)
         : done
@@ -372,10 +694,12 @@ class _ExerciseRow extends StatelessWidget {
                 ? (Icons.pie_chart_outline, scheme.tertiary)
                 : (Icons.circle_outlined, muted);
     // Whoop credit note ("strain 14.8") wins over the set counter.
-    final counter = item.creditNote ??
-        (showCheck && (item.loggedSets > 0 || item.targetSets > 1)
-            ? '${item.loggedSets}/${item.targetSets}'
-            : null);
+    final counter = ghost
+        ? '→ ${_wd(movedTo!)}'
+        : item.creditNote ??
+            (showCheck && (item.loggedSets > 0 || item.targetSets > 1)
+                ? '${item.loggedSets}/${item.targetSets}'
+                : null);
 
     return InkWell(
       onTap: onTap,
@@ -386,7 +710,9 @@ class _ExerciseRow extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.only(top: 1, right: 8),
-              child: Icon(icon, size: 16, color: markColor),
+              child: ghost
+                  ? const SizedBox(width: 16, height: 16)
+                  : Icon(icon, size: 16, color: markColor),
             ),
             Expanded(
               child: Column(
@@ -395,8 +721,8 @@ class _ExerciseRow extends StatelessWidget {
                   Text(
                     item.name,
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: done ? muted : scheme.onSurface,
+                      fontWeight: ghost ? FontWeight.w400 : FontWeight.w600,
+                      color: done || ghost ? muted : scheme.onSurface,
                       decoration: done ? TextDecoration.lineThrough : null,
                     ),
                   ),
@@ -404,6 +730,19 @@ class _ExerciseRow extends StatelessWidget {
                     Text(item.scheme,
                         style:
                             theme.textTheme.bodySmall?.copyWith(color: muted)),
+                  if (movedFrom != null)
+                    Container(
+                      margin: const EdgeInsets.only(top: 3),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: scheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text('from ${_wd(movedFrom!)}',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                              color: scheme.onSecondaryContainer)),
+                    ),
                 ],
               ),
             ),
@@ -420,6 +759,27 @@ class _ExerciseRow extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 4, top: 1),
                 child: Icon(Icons.info_outline, size: 14, color: muted),
+              ),
+            if (menu != null)
+              SizedBox(
+                width: 28,
+                height: 20,
+                child: PopupMenuButton<String>(
+                  tooltip: 'Move',
+                  padding: EdgeInsets.zero,
+                  iconSize: 18,
+                  icon: Icon(Icons.more_vert, size: 18, color: muted),
+                  onSelected: (v) {
+                    if (v == 'move') menu!.onMove();
+                    if (v == 'undo') menu!.onUndo?.call();
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(value: 'move', child: Text('Move to…')),
+                    if (menu!.onUndo != null)
+                      const PopupMenuItem(
+                          value: 'undo', child: Text('Undo move')),
+                  ],
+                ),
               ),
           ],
         ),

@@ -343,4 +343,19 @@ void main() {
       '- Dips — due Mon 9/28, 0/1 sets',
     );
   });
+
+  test('climb item whose prose mentions 4x4 is a CLIMB (name decides)', () {
+    // Live Tue: "Climb — HARD session" scheme cites "Tue AM-4x4 + PM-climb".
+    final week = effectiveWeek({
+      d(1): [
+        it('Norwegian', scheme: '4x4 VO2 (warmup, 4x4 min hard)', sets: 4),
+        it('Climb — HARD session',
+            scheme: '(partner day). The Tue AM-4x4 + PM-climb double',
+            sets: 4, period: 'PM'),
+      ],
+    }, const {});
+    final m = run(week: week, climb: {d(1)}, cardio: {}, today: d(2));
+    expect([for (final x in m.missed) '${x.item.name}|${x.kind}'],
+        ['Norwegian|cardio']);
+  });
 }

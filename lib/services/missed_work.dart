@@ -91,11 +91,16 @@ String _schemePart(String scheme) {
   return ' ($s)';
 }
 
-bool _is4x4(PrescribedItem i) =>
-    '${i.name} ${i.scheme}'.toLowerCase().contains('4x4');
+bool _has4x4(String s) => s.toLowerCase().contains('4x4');
+bool _hasClimb(String s) =>
+    RegExp(r'climb', caseSensitive: false).hasMatch(s);
 
+/// The NAME decides first: the live Tue "Climb — HARD session" scheme
+/// mentions "AM-4x4" in its prose, which must not make it a 4x4 item.
 String _kindOf(PrescribedItem i) {
-  if (_is4x4(i)) return 'cardio';
+  if (_has4x4(i.name)) return 'cardio';
+  if (_hasClimb(i.name)) return 'climb';
+  if (_has4x4(i.scheme)) return 'cardio';
   if (isClimbItem(i)) return 'climb';
   return 'lift';
 }

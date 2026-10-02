@@ -516,6 +516,44 @@ phases:
     expect(find.text('THIS WEEK'), findsOneWidget);
   });
 
+  testWidgets('M4: live climb count surfaces from Whoop workouts alone — '
+      'no Kaya climbing view required', (tester) async {
+    ProgramProvider.clearCache();
+    HomeDashboardState.clearBestWeightCache();
+    final strengthRepo = _FakeStatusRepo(const []);
+    final workoutsRepo = _FakeStatusRepo([
+      {'date': DateTime(2026, 9, 22), 'sport': 'rock-climbing'},
+    ]);
+    final workoutsView = ViewSchema(
+      name: 'whoop_workouts',
+      datasource: 'gsheets',
+      table: 'whoop_workouts',
+      entities: const [],
+      measures: const [],
+      dimensions: [
+        Dimension(name: 'date', type: DimensionType.date, expr: 'date'),
+        Dimension(name: 'sport', type: DimensionType.string, expr: 'sport'),
+      ],
+    );
+    await tester.pumpWidget(_wrap(HomeDashboard(
+      provider: ProgramProvider(fetcher),
+      dashboards: DomainConfigProvider(fetcher),
+      strengthView: _strengthView,
+      strengthRepo: strengthRepo,
+      workoutsView: workoutsView,
+      workoutsRepo: workoutsRepo,
+      today: DateTime(2026, 9, 23),
+    )));
+    await tester.pumpAndSettle();
+
+    // No climbingRepo/climbingView plumbed at all — before the M4 fix,
+    // the climb quota was gated solely on climbingRepo != null, so a
+    // Whoop-only climb day was ignored and rendered as a dash.
+    expect(find.text('climb'), findsOneWidget);
+    expect(find.text('1/—'), findsOneWidget);
+    expect(find.text('—/—'), findsNothing);
+  });
+
   testWidgets('hero weight row taps through to the Program screen',
       (tester) async {
     ProgramProvider.clearCache();

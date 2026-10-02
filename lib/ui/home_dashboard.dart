@@ -1940,9 +1940,14 @@ class HomeDashboardState extends State<HomeDashboard> {
         '${v == null ? '—' : fmtLb(v.toDouble())}/${targetText(target)}';
     String done(String key, Object? target) =>
         fmt(row == null ? null : asNum(row[key]), target);
-    final liveClimb = widget.climbingRepo == null
-        ? null
-        : live?.climbingSessions;
+    // M4: a Whoop-only setup (no Kaya climbing view) still plumbs real
+    // climb days through workoutsRepo/workoutsView — don't gate on
+    // climbingRepo alone.
+    final liveClimb =
+        (widget.climbingRepo == null &&
+                (widget.workoutsRepo == null || widget.workoutsView == null))
+            ? null
+            : live?.climbingSessions;
     // Live counts (current accounting week, computed from local rows
     // at open) with the nightly row as fallback — matches the strip.
     const liveSource =
@@ -2218,9 +2223,12 @@ class HomeDashboardState extends State<HomeDashboard> {
           // status row keeps owning completed weeks + the flags chip.
           final row = week?.row;
           final t = d?.targets ?? const <String, Object?>{};
-          // Live climb count only when the climbing view is actually
-          // plumbed — an unplumbed 0 would lie; fall back to the row.
-          final liveClimb = widget.climbingRepo == null
+          // Live climb count only when a climb source is actually
+          // plumbed (Kaya OR Whoop workouts, M4) — an unplumbed 0 would
+          // lie; fall back to the row.
+          final liveClimb = (widget.climbingRepo == null &&
+                  (widget.workoutsRepo == null ||
+                      widget.workoutsView == null))
               ? null
               : live?.climbingSessions;
           double? fromRow(String key) => row == null ? null : asNum(row[key]);

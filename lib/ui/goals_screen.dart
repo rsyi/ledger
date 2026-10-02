@@ -15,6 +15,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart' show DateFormat;
 
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
@@ -41,14 +42,23 @@ import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart' show loadDailyWeighIns;
 import '../services/whoop_activity.dart';
 import '../services/wilks.dart' show contemporaneousBodyweightLbs;
-import 'app_text.dart';
+import 'design/design.dart';
 
 /// Everything the goal rows render from — one evaluation over the
 /// current accounting week.
 class _GoalsData {
   final String phaseTitle;
   final List<GoalEval> goals;
-  const _GoalsData({required this.phaseTitle, required this.goals});
+
+  /// The accounting week's first weekday (program.yaml `week_start`) —
+  /// climbing / cardio / zone-2 count over it; program sets + muscle
+  /// groups count over the Mon–Sun program week the header shows.
+  final int weekStartDay;
+  const _GoalsData({
+    required this.phaseTitle,
+    required this.goals,
+    required this.weekStartDay,
+  });
 }
 
 class GoalsScreen extends StatefulWidget {
@@ -314,7 +324,11 @@ class GoalsScreenState extends State<GoalsScreen> {
     const dayScale = {'macros', 'calorie_band'};
     final weekGoals =
         goals.where((g) => !dayScale.contains(g.config.id)).toList();
-    return _GoalsData(phaseTitle: title, goals: weekGoals);
+    return _GoalsData(
+      phaseTitle: title,
+      goals: weekGoals,
+      weekStartDay: weekStartDay,
+    );
   }
 
   static DateTime? _date(Object? raw) => raw is DateTime
@@ -336,270 +350,417 @@ class GoalsScreenState extends State<GoalsScreen> {
         }
         return ListView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+          padding: const EdgeInsets.only(bottom: 24),
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
-              child: Text(
-                'This week — ${data.phaseTitle}',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
+            SectionHeader(
+              label: 'This week — ${data.phaseTitle}',
+              count: programWeekRange(_today),
             ),
-            for (final g in data.goals)
-              GoalCard(goal: g, onTap: () => _openSheet(g)),
+            GoalList(
+              goals: data.goals,
+              onTap: (g) => _openSheet(g, data.weekStartDay),
+            ),
           ],
         );
       },
     );
   }
 
-  Future<void> _openSheet(GoalEval g) async {
+  Future<void> _openSheet(GoalEval g, int weekStartDay) async {
     if (!mounted) return;
-    await showModalBottomSheet<void>(
+    await showDetailSheet(
       context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
-          ),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-            child: GoalDetail(goal: g),
-          ),
-        ),
+      title: g.label,
+      subtitle: '${goalStatusWord(g.status)} · ${g.value}',
+      body: GoalDetail(
+        goal: g,
+        windowNote: goalWindowNote(g, _today, weekStartDay),
       ),
     );
   }
 }
 
-/// The tap-through detail for one goal (bottom-sheet body).
-class GoalDetail extends StatelessWidget {
-  final GoalEval goal;
-  const GoalDetail({super.key, required this.goal});
+// ---------------------------------------------------------------------------
+// Display helpers (pure — pinned by test/goals_screen_test.dart)
+// ---------------------------------------------------------------------------
 
-  @override
-  Widget build(BuildContext context) {
-    final g = goal;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            _StatusDot(status: g.status),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                g.label,
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Text(g.value, style: Theme.of(context).textTheme.titleSmall),
-        if (g.detail.isNotEmpty) ...[
-          const SizedBox(height: 2),
-          Text(g.detail, style: AppText.tag(context)),
-        ],
-        if (g.config.description != null) ...[
-          const SizedBox(height: 12),
-          Text(g.config.description!),
-        ],
-        if (g.ticks.isNotEmpty) ...[
-          const SizedBox(height: 14),
-          for (final t in g.ticks) _LiftDetailLine(tick: t),
-        ],
-        if (g.muscles.isNotEmpty) ...[
-          const SizedBox(height: 14),
-          for (final m in g.muscles) _MuscleDetail(row: m),
-        ],
-        const SizedBox(height: 8),
-      ],
-    );
-  }
+/// 'Mon Sep 28 – Sun Oct 4' — the Mon–Sun program week holding [today].
+String programWeekRange(DateTime today) {
+  final monday = DateTime(
+    today.year,
+    today.month,
+    today.day,
+  ).subtract(Duration(days: today.weekday - DateTime.monday));
+  final sunday = monday.add(const Duration(days: 6));
+  final f = DateFormat('EEE MMM d');
+  return '${f.format(monday)} – ${f.format(sunday)}';
 }
+
+/// The counting window for goals evaluated over the ACCOUNTING week
+/// (climbing, cardio, zone-2, legacy hard sets) when it isn't the Mon–Sun
+/// week the header shows — e.g. 'Counted Sat Sep 26 – Fri Oct 2 (your
+/// accounting week).' Null when the windows agree.
+String? goalWindowNote(GoalEval g, DateTime today, int weekStartDay) {
+  if (weekStartDay == DateTime.monday) return null;
+  final programWeek =
+      g.muscles.isNotEmpty ||
+      (g.ticks.isNotEmpty && g.ticks.any((t) => t.fromProgram)) ||
+      g.config.id == 'muscle_stimulus';
+  if (programWeek) return null;
+  final day = DateTime(today.year, today.month, today.day);
+  final start = day.subtract(
+    Duration(days: (day.weekday - weekStartDay + 7) % 7),
+  );
+  final end = start.add(const Duration(days: 6));
+  final f = DateFormat('EEE MMM d');
+  return 'Counted ${f.format(start)} – ${f.format(end)} '
+      '(your accounting week).';
+}
+
+/// The row's one meta line. Program sets read 'done of prescribed sets'
+/// (+ who is behind) — the per-lift bars carry the rest; other goals
+/// show their value plus any short result detail ('1/1 run · 43 min ·
+/// avg HR 122').
+String goalMeta(GoalEval g) {
+  if (g.ticks.isNotEmpty && g.ticks.any((t) => t.fromProgram)) {
+    final done = g.ticks.fold<int>(0, (n, t) => n + t.done.clamp(0, t.target));
+    final target = g.ticks.fold<int>(0, (n, t) => n + t.target);
+    final behind = [
+      for (final t in g.ticks)
+        if (t.behind) liftDisplayName(t.lift),
+    ];
+    return '$done of $target sets'
+        '${behind.isEmpty ? '' : ' · behind on ${behind.join(', ')}'}';
+  }
+  if (g.muscles.isNotEmpty ||
+      g.status == GoalStatus.unknown ||
+      g.detail.isEmpty ||
+      g.detail == 'nice to have') {
+    return g.value;
+  }
+  return '${g.value} · ${g.detail}';
+}
+
+ItemStatus goalItemStatus(GoalStatus s) => switch (s) {
+  GoalStatus.met => ItemStatus.done,
+  GoalStatus.partial => ItemStatus.partial,
+  GoalStatus.unmet => ItemStatus.problem,
+  GoalStatus.unknown => ItemStatus.pending,
+  GoalStatus.optional => ItemStatus.pending,
+};
+
+String goalStatusWord(GoalStatus s) => switch (s) {
+  GoalStatus.met => 'On track',
+  GoalStatus.partial => 'Getting there',
+  GoalStatus.unmet => 'Off track',
+  GoalStatus.unknown => 'No data',
+  GoalStatus.optional => 'Nice to have',
+};
+
+ItemStatus _liftStatus(GoalLiftTick t) => t.complete
+    ? ItemStatus.done
+    : t.behind
+    ? ItemStatus.problem
+    : t.done > 0
+    ? ItemStatus.partial
+    : ItemStatus.pending;
+
+/// '4/4', '3/7 · Sat', '0/3 · Wed/Fri'.
+String liftProgressText(GoalLiftTick t) {
+  final due = t.dueAhead
+      ? ' · ${t.remainingDays.map(weekdayShort).join('/')}'
+      : '';
+  return '${t.done}/${t.target}$due';
+}
+
+ItemStatus _muscleStatus(GoalMuscleRow m) => m.over
+    ? ItemStatus.problem
+    : m.inBand
+    ? ItemStatus.done
+    : m.behindPace
+    ? ItemStatus.partial
+    : ItemStatus.pending;
+
+String _sets1(double v) => v.toStringAsFixed(1);
+
+String _bandText(GoalMuscleRow m) =>
+    '${m.lo.toStringAsFixed(m.lo % 1 == 0 ? 0 : 1)}–'
+    '${m.hi.toStringAsFixed(m.hi % 1 == 0 ? 0 : 1)}';
 
 // ---------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------
 
-Color _statusColor(BuildContext context, GoalStatus s) {
-  final scheme = Theme.of(context).colorScheme;
-  return switch (s) {
-    GoalStatus.met => Colors.green.shade600,
-    GoalStatus.partial => Colors.amber.shade700,
-    GoalStatus.unmet => scheme.error,
-    GoalStatus.unknown => scheme.outline,
-    GoalStatus.optional => scheme.outline,
-  };
-}
-
-String _statusWord(GoalStatus s) => switch (s) {
-      GoalStatus.met => 'On track',
-      GoalStatus.partial => 'Getting there',
-      GoalStatus.unmet => 'Off track',
-      GoalStatus.unknown => 'No data',
-      GoalStatus.optional => 'Nice to have',
-    };
-
-class _StatusDot extends StatelessWidget {
-  final GoalStatus status;
-  const _StatusDot({required this.status});
+/// All goal rows in the one card style, hairline-separated.
+class GoalList extends StatelessWidget {
+  final List<GoalEval> goals;
+  final void Function(GoalEval) onTap;
+  const GoalList({super.key, required this.goals, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final icon = switch (status) {
-      GoalStatus.met => Icons.check_circle,
-      GoalStatus.partial => Icons.timelapse,
-      GoalStatus.unmet => Icons.cancel,
-      GoalStatus.unknown => Icons.help_outline,
-      GoalStatus.optional => Icons.radio_button_unchecked,
-    };
-    return Icon(icon, size: 20, color: _statusColor(context, status));
-  }
-}
-
-/// One goal row on the Week tab.
-class GoalCard extends StatelessWidget {
-  final GoalEval goal;
-  final VoidCallback onTap;
-  const GoalCard({super.key, required this.goal, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = _statusColor(context, goal.status);
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  _StatusDot(status: goal.status),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      goal.label,
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleSmall
-                          ?.copyWith(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  Text(
-                    _statusWord(goal.status),
-                    style: AppText.tag(context)?.copyWith(color: color),
-                  ),
-                  const Icon(Icons.chevron_right, size: 18),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(goal.value),
-              if (goal.detail.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(goal.detail, style: AppText.tag(context)),
-              ],
-              if (goal.ticks.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [for (final t in goal.ticks) _LiftChip(tick: t)],
-                ),
-              ],
-              if (goal.muscles.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    for (final m in goal.muscles) _MuscleChip(row: m),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
+    final divider = Divider(
+      height: 1,
+      thickness: 1,
+      indent: AppSpace.gutter + AppSpace.lead + AppSpace.leadGap,
+      color: Theme.of(
+        context,
+      ).colorScheme.outlineVariant.withValues(alpha: 0.4),
     );
-  }
-}
-
-class _Pill extends StatelessWidget {
-  final String text;
-  final Color color;
-  final Widget? trailing;
-  const _Pill({required this.text, required this.color, this.trailing});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
+    return AppCard(
+      margin: const EdgeInsets.symmetric(horizontal: AppSpace.gutter),
+      padding: EdgeInsets.zero,
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            text,
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: color, fontWeight: FontWeight.w600),
-          ),
-          if (trailing != null) ...[const SizedBox(width: 6), trailing!],
+          for (var i = 0; i < goals.length; i++) ...[
+            if (i > 0) divider,
+            GoalRow(goal: goals[i], onTap: () => onTap(goals[i])),
+          ],
         ],
       ),
     );
   }
 }
 
-/// One lift's chip: program sets done / prescribed (legacy: hard sets /
-/// ~10), plus the days still carrying its work ("· Fri") so a short lift
-/// whose day is ahead reads "not trained yet", not "missed".
-class _LiftChip extends StatelessWidget {
-  final GoalLiftTick tick;
-  const _LiftChip({required this.tick});
+/// One goal on the Week tab, on the shared row pattern: status mark ·
+/// label · meta · chevron, with compact per-lift / per-muscle bars below
+/// when the goal has them. Optional goals that aren't met read a neutral
+/// "Nice to have" instead of a failure.
+class GoalRow extends StatelessWidget {
+  final GoalEval goal;
+  final VoidCallback onTap;
+  const GoalRow({super.key, required this.goal, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final due = tick.dueAhead
-        ? ' · ${tick.remainingDays.map(weekdayShort).join('/')}'
-        : '';
-    final color = tick.complete
-        ? Colors.green.shade600
-        : tick.behind
-            ? Theme.of(context).colorScheme.error
-            : tick.done > 0
-                ? Colors.amber.shade700
-                : Theme.of(context).colorScheme.outline;
-    final acc = tick.accessoriesDone;
-    return _Pill(
-      text: '${liftDisplayName(tick.lift)} ${tick.done}/${tick.target}$due',
-      color: color,
-      trailing: acc == null
-          ? null
-          : Icon(
-              acc ? Icons.done : Icons.remove,
-              size: 13,
-              color: acc ? Colors.green.shade600 : color,
+    final g = goal;
+    final Widget? bars = g.ticks.isNotEmpty
+        ? GoalBars(lines: [for (final t in g.ticks) GoalBarLine.lift(t)])
+        : g.muscles.isNotEmpty
+        ? GoalBars(lines: [for (final m in g.muscles) GoalBarLine.muscle(m)])
+        : null;
+    return ExerciseRow(
+      name: g.label,
+      meta: goalMeta(g),
+      status: goalItemStatus(g.status),
+      onTap: onTap,
+      chips: [if (bars != null) SizedBox(width: double.infinity, child: bars)],
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (g.status == GoalStatus.optional)
+            StatusChip(
+              label: goalStatusWord(g.status),
+              status: ItemStatus.pending,
             ),
+          Icon(
+            Icons.chevron_right,
+            size: 20,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One line of a [GoalBars] table: name · thin bar · trailing figure.
+class GoalBarLine {
+  final String name;
+  final double value;
+  final double scale;
+
+  /// Shaded target band (muscle groups' 8–12), null for none.
+  final double? bandLo;
+  final double? bandHi;
+
+  final String trailing;
+  final ItemStatus status;
+
+  const GoalBarLine({
+    required this.name,
+    required this.value,
+    required this.scale,
+    required this.trailing,
+    required this.status,
+    this.bandLo,
+    this.bandHi,
+  });
+
+  /// Program sets done / prescribed for one lift.
+  factory GoalBarLine.lift(GoalLiftTick t) => GoalBarLine(
+    name: liftDisplayName(t.lift),
+    value: t.done.toDouble(),
+    scale: (t.target > t.done ? t.target : t.done).toDouble(),
+    trailing: liftProgressText(t),
+    status: _liftStatus(t),
+  );
+
+  /// Sets for one muscle group against the band.
+  factory GoalBarLine.muscle(GoalMuscleRow m) => GoalBarLine(
+    name: muscleDisplayName(m.group),
+    value: m.sets,
+    scale: m.hi * 1.25 > m.sets ? m.hi * 1.25 : m.sets,
+    bandLo: m.lo,
+    bandHi: m.hi,
+    trailing: _sets1(m.sets),
+    status: _muscleStatus(m),
+  );
+}
+
+/// Compact aligned bars — one dense line per lift / muscle group.
+class GoalBars extends StatelessWidget {
+  final List<GoalBarLine> lines;
+  const GoalBars({super.key, required this.lines});
+
+  @override
+  Widget build(BuildContext context) {
+    final meta = AppText.meta(context);
+    final name = meta.copyWith(color: Theme.of(context).colorScheme.onSurface);
+    return Table(
+      // Name + figure columns size to content but are capped so the bar
+      // always keeps a readable share of a phone-width row.
+      columnWidths: const {
+        0: MinColumnWidth(IntrinsicColumnWidth(), FractionColumnWidth(0.46)),
+        1: FlexColumnWidth(),
+        2: MinColumnWidth(IntrinsicColumnWidth(), FractionColumnWidth(0.3)),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        for (final l in lines)
+          TableRow(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 10, top: 3, bottom: 3),
+                child: Text(
+                  l.name,
+                  style: name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              _MiniBar(line: l),
+              Padding(
+                padding: const EdgeInsets.only(left: 10),
+                child: Text(
+                  l.trailing,
+                  style: meta.copyWith(
+                    color: l.status == ItemStatus.pending
+                        ? null
+                        : StatusColors.of(context).forStatus(context, l.status),
+                  ),
+                  textAlign: TextAlign.end,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _MiniBar extends StatelessWidget {
+  final GoalBarLine line;
+  final double height;
+  const _MiniBar({required this.line, this.height = 4});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final colors = StatusColors.of(context);
+    final fill = line.status == ItemStatus.pending
+        ? scheme.onSurfaceVariant
+        : colors.forStatus(context, line.status);
+    return LayoutBuilder(
+      builder: (context, c) {
+        final w = c.maxWidth;
+        double x(double v) =>
+            line.scale <= 0 ? 0 : (v / line.scale).clamp(0.0, 1.0) * w;
+        final radius = BorderRadius.circular(height / 2);
+        return SizedBox(
+          height: height + 4,
+          width: w,
+          child: Stack(
+            alignment: Alignment.centerLeft,
+            children: [
+              Container(
+                height: height,
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: radius,
+                ),
+              ),
+              if (line.bandLo != null && line.bandHi != null)
+                Positioned(
+                  left: x(line.bandLo!),
+                  width: x(line.bandHi!) - x(line.bandLo!),
+                  top: 0,
+                  bottom: 0,
+                  child: Container(color: colors.done.withValues(alpha: 0.22)),
+                ),
+              Container(
+                height: height,
+                width: x(line.value),
+                decoration: BoxDecoration(color: fill, borderRadius: radius),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Detail sheet body
+// ---------------------------------------------------------------------------
+
+/// The tap-through detail for one goal (the [showDetailSheet] body; the
+/// sheet itself carries the label + status · value).
+class GoalDetail extends StatelessWidget {
+  final GoalEval goal;
+
+  /// Counting-window note for accounting-week goals (see
+  /// [goalWindowNote]).
+  final String? windowNote;
+
+  const GoalDetail({super.key, required this.goal, this.windowNote});
+
+  @override
+  Widget build(BuildContext context) {
+    final g = goal;
+    final meta = AppText.meta(context);
+    final body = AppText.row(context).copyWith(fontWeight: FontWeight.w400);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (g.detail.isNotEmpty) Text(g.detail, style: meta),
+          if (windowNote != null) ...[
+            const SizedBox(height: 4),
+            Text(windowNote!, style: meta),
+          ],
+          if (g.config.description != null) ...[
+            const SizedBox(height: 10),
+            Text(g.config.description!, style: body),
+          ],
+          if (g.ticks.isNotEmpty) ...[
+            const SizedBox(height: AppSpace.sectionGap),
+            GoalBars(lines: [for (final t in g.ticks) GoalBarLine.lift(t)]),
+            const SizedBox(height: 8),
+            for (final t in g.ticks) _LiftDetailLine(tick: t),
+          ],
+          if (g.muscles.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            for (final m in g.muscles) _MuscleDetail(row: m),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -615,8 +776,8 @@ class _LiftDetailLine extends StatelessWidget {
     final accText = acc == null
         ? ''
         : acc
-            ? ' · accessories done'
-            : ' · accessories not yet';
+        ? ' · accessories done'
+        : ' · accessories not yet';
     final String when;
     if (tick.dueAhead) {
       when = ' · still due ${tick.remainingDays.map(weekdayShort).join('/')}';
@@ -628,45 +789,23 @@ class _LiftDetailLine extends StatelessWidget {
     final behind = tick.behind ? ' · behind (earlier sets not logged)' : '';
     final String head;
     if (tick.fromProgram) {
-      head = '${liftDisplayName(tick.lift)}: ${tick.done} of ${tick.target} '
+      head =
+          '${liftDisplayName(tick.lift)}: ${tick.done} of ${tick.target} '
           'program sets (${tick.hardSets} at RPE 7 or higher)';
     } else if (tick.done != tick.hardSets) {
-      head = '${liftDisplayName(tick.lift)}: ${tick.done} of ${tick.target} '
+      head =
+          '${liftDisplayName(tick.lift)}: ${tick.done} of ${tick.target} '
           'sets (your target; ${tick.hardSets} at RPE 7 or higher)';
     } else {
-      head = '${liftDisplayName(tick.lift)}: ${tick.hardSets} of '
+      head =
+          '${liftDisplayName(tick.lift)}: ${tick.hardSets} of '
           '${tick.target} hard sets';
     }
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Text('$head$when$behind$accText'),
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Text('$head$when$behind$accText', style: AppText.meta(context)),
     );
   }
-}
-
-String _sets1(double v) => v.toStringAsFixed(1);
-
-String _bandText(GoalMuscleRow m) =>
-    '${m.lo.toStringAsFixed(m.lo % 1 == 0 ? 0 : 1)}–'
-    '${m.hi.toStringAsFixed(m.hi % 1 == 0 ? 0 : 1)}';
-
-Color _muscleColor(BuildContext context, GoalMuscleRow m) => m.over
-    ? Theme.of(context).colorScheme.error
-    : m.inBand
-        ? Colors.green.shade600
-        : m.behindPace
-            ? Colors.amber.shade700
-            : Theme.of(context).colorScheme.outline;
-
-class _MuscleChip extends StatelessWidget {
-  final GoalMuscleRow row;
-  const _MuscleChip({required this.row});
-
-  @override
-  Widget build(BuildContext context) => _Pill(
-        text: '${muscleDisplayName(row.group)} ${_sets1(row.sets)}',
-        color: _muscleColor(context, row),
-      );
 }
 
 /// One muscle group in the sheet: sets vs the band (bar with the band
@@ -677,15 +816,16 @@ class _MuscleDetail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = _muscleColor(context, row);
-    final scheme = Theme.of(context).colorScheme;
-    final scale = [row.hi * 1.25, row.sets].reduce((a, b) => a > b ? a : b);
+    final status = _muscleStatus(row);
+    final color = status == ItemStatus.pending
+        ? Theme.of(context).colorScheme.onSurface
+        : StatusColors.of(context).forStatus(context, status);
     final pace = row.behindPace ? ' · behind pace' : '';
     final from = row.contributors.isEmpty
         ? 'nothing logged yet'
         : row.contributors
-            .map((e) => '${e.key} ${_sets1(e.value)}')
-            .join(' · ');
+              .map((e) => '${e.key} ${_sets1(e.value)}')
+              .join(' · ');
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Column(
@@ -694,53 +834,12 @@ class _MuscleDetail extends StatelessWidget {
           Text(
             '${muscleDisplayName(row.group)}: ${_sets1(row.sets)} sets · '
             '${row.state} (${_bandText(row)})$pace',
-            style: TextStyle(color: color, fontWeight: FontWeight.w600),
+            style: AppText.row(context).copyWith(color: color),
           ),
           const SizedBox(height: 4),
-          LayoutBuilder(
-            builder: (context, c) {
-              final w = c.maxWidth;
-              double x(double v) => (v / scale).clamp(0.0, 1.0) * w;
-              return SizedBox(
-                height: 8,
-                width: w,
-                child: Stack(
-                  children: [
-                    Container(
-                      decoration: BoxDecoration(
-                        color: scheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                    // The band.
-                    Positioned(
-                      left: x(row.lo),
-                      width: x(row.hi) - x(row.lo),
-                      top: 0,
-                      bottom: 0,
-                      child: Container(
-                        color: Colors.green.shade600.withValues(alpha: 0.25),
-                      ),
-                    ),
-                    Positioned(
-                      left: 0,
-                      width: x(row.sets),
-                      top: 2,
-                      bottom: 2,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: color,
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 4),
-          Text('from: $from', style: AppText.tag(context)),
+          _MiniBar(line: GoalBarLine.muscle(row), height: 6),
+          const SizedBox(height: 2),
+          Text('from: $from', style: AppText.meta(context)),
         ],
       ),
     );
@@ -754,14 +853,15 @@ class _Placeholder extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      children: const [
-        SizedBox(height: 120),
+      children: [
+        const SizedBox(height: 120),
         Padding(
-          padding: EdgeInsets.all(24),
+          padding: const EdgeInsets.all(24),
           child: Text(
             'No goals for the current phase yet.\n'
             'They appear after the next schema sync.',
             textAlign: TextAlign.center,
+            style: AppText.meta(context),
           ),
         ),
       ],

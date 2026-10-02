@@ -6,8 +6,8 @@ import '../../models/view_schema.dart';
 import '../../services/day_prescription.dart';
 import '../../services/log_event_bus.dart';
 import '../../services/prescribed_exercises.dart';
-import '../../services/program_current.dart' show programCurrent;
 import '../../services/program_provider.dart' show IntentDocs, ProgramProvider;
+import '../../services/program_week.dart' show prescribedDay;
 import '../../services/set_recommendation.dart';
 import '../../services/warehouse_connector.dart';
 import '../../services/whoop_activity.dart';
@@ -112,19 +112,13 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     } catch (_) {
       return null;
     }
-    final program = docs.program;
-    if (program == null) return null;
-
     final date =
         DateTime(widget.date.year, widget.date.month, widget.date.day);
-    final slice = programCurrent(program, docs.phase, date);
-    final prescription = dayPrescription(
-      label: widget.label,
-      weekday: weekdayAbbr(date),
-      template: slice?.todayTemplate,
-    );
-
-    var items = parsePrescribedProse(prescription.morning, prescription.afternoon);
+    // Shared with prescribedWeek so the card and the week can't drift.
+    final (prescription, dayItems) =
+        prescribedDay(docs, date, label: widget.label);
+    if (prescription == null) return null;
+    var items = dayItems;
 
     final sv = widget.strengthView;
     final sr = widget.strengthRepo;

@@ -29,6 +29,15 @@ void main() {
     expect(activityKindOf('activity'), ActivityKind.other);
   });
 
+  test('activityKindOf (I3): "climb" substring is not enough — a stair '
+      'climber / stairmaster machine is NOT climbing', () {
+    expect(activityKindOf('stair-climber'), ActivityKind.other);
+    expect(activityKindOf('stairmaster'), ActivityKind.other);
+    expect(activityKindOf('climbing'), ActivityKind.climb);
+    expect(activityKindOf('bouldering'), ActivityKind.climb);
+    expect(activityKindOf('rock-climbing'), ActivityKind.climb);
+  });
+
   test('whoopActivitiesFromRecords parses strings + DateTimes, sorts', () {
     final acts = whoopActivitiesFromRecords([
       _row('running', '2026-09-27', start: '13:45:00'),

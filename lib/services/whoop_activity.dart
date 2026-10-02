@@ -39,9 +39,18 @@ class WhoopActivity {
 
 /// Sport label → kind. Normalized (lowercase, spaces/underscores → '-').
 /// MIRRORED by ledger-mcp src/tools.ts `kindOf` — edit both.
+///
+/// I3 (2026-10-01): a bare "climb" substring is too broad — it matched
+/// "stair climber" / "stairmaster"-style cardio machines. Climb requires
+/// 'rock-climb' or 'bouldering' or an exact 'climbing', and is explicitly
+/// vetoed by 'stair' or 'machine' in the sport label.
 ActivityKind activityKindOf(String sport) {
   final s = sport.trim().toLowerCase().replaceAll(RegExp(r'[\s_]+'), '-');
-  if (s.contains('climb') || s.contains('boulder')) return ActivityKind.climb;
+  final climbMatch =
+      s.contains('rock-climb') || s.contains('bouldering') || s == 'climbing';
+  if (climbMatch && !s.contains('stair') && !s.contains('machine')) {
+    return ActivityKind.climb;
+  }
   if (s == 'run' || s.contains('running')) return ActivityKind.run;
   if (s == 'weightlifting' ||
       s.contains('powerlifting') ||

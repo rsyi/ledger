@@ -1,7 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/services/program_metrics.dart'
     show GradedSet, SetTier;
 import 'package:airledger/services/goals_service.dart';
+import 'package:airledger/services/muscle_volume.dart';
+import 'package:airledger/services/prescribed_exercises.dart';
+import 'package:airledger/services/program_item_pricing.dart'
+    show itemLiftKey;
+import 'package:airledger/services/program_moves.dart';
 import 'package:airledger/services/whoop_activity.dart';
 
 // ---------------------------------------------------------------------------
@@ -638,5 +645,308 @@ phases:
       expect(t.scheduledDays, isEmpty);
       expect(t.pending, isFalse);
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Program progress (hard_sets with a program week) — Mon–Sun week.
+  // Week of Mon 2026-09-28; the cut routine's main-lift slots.
+  // -------------------------------------------------------------------------
+  group('hard_sets — program progress', () {
+    DateTime d(int i) => DateTime(2026, 9, 28 + i);
+    PrescribedItem pi(String name, int sets) =>
+        PrescribedItem(name: name, scheme: '', period: 'AM', targetSets: sets);
+    Map<DateTime, List<EffectiveItem>> week() => effectiveWeek({
+          d(0): [
+            pi('Squat heavy', 1),
+            pi('Bulgarian split squat', 3),
+            pi('Bench volume', 4),
+          ],
+          d(1): const [],
+          d(2): [
+            pi('Bench heavy', 1),
+            pi('Bench back-offs', 3),
+            pi('Squat volume', 3),
+            pi('OHP volume', 3),
+          ],
+          d(3): const [],
+          d(4): [
+            pi('Deadlift heavy', 1),
+            pi('Deadlift back-offs', 2),
+            pi('Bench volume', 3),
+          ],
+          d(5): [pi('OHP heavy', 1), pi('OHP back-offs', 3)],
+          d(6): const [],
+        }, const {});
+    List<({DateTime date, String exercise})> sets(
+            DateTime day, String ex, int n) =>
+        [for (var i = 0; i < n; i++) (date: day, exercise: ex)];
+    const cfg = GoalConfig(
+      id: 'hard_sets',
+      lifts: ['squat', 'bench', 'deadlift', 'press'],
+      hardSetTarget: 10,
+    );
+    GoalEval eval(
+      DateTime today,
+      List<({DateTime date, String exercise})> rows, {
+      GoalConfig config = cfg,
+      Set<String> skips = const {},
+      List<GradedSet> graded = const [],
+    }) =>
+        evaluateGoals(
+          configs: [config],
+          inputs: GoalInputs(
+            programWeek: week(),
+            programSkips: skips,
+            weekWorkingSets: rows,
+            graded: graded,
+          ),
+          today: today,
+          weekStartDay: satStart,
+        ).single;
+    GoalLiftTick tick(GoalEval e, String lift) =>
+        e.ticks.firstWhere((t) => t.lift == lift);
+
+    test('targets are derived from the program week, not the flat 10', () {
+      final e = eval(d(0), const []);
+      expect(tick(e, 'squat').target, 4);
+      expect(tick(e, 'bench').target, 11);
+      expect(tick(e, 'deadlift').target, 3);
+      expect(tick(e, 'press').target, 7);
+      expect(e.ticks.every((t) => t.fromProgram), isTrue);
+      expect(e.value, '0 of 25 program sets · 0/4 lifts done');
+      // Monday morning, nothing due yet → on schedule, never red.
+      expect(e.status, GoalStatus.partial);
+      expect(e.detail, contains('Mon–Sun'));
+    });
+
+    test('progress = allocated working sets, RPE-blind; Mon–Sun window', () {
+      final rows = [
+        // Saturday BEFORE this Mon–Sun week (same accounting week): ignored.
+        ...sets(DateTime(2026, 9, 26), 'Barbell Squat', 5),
+        ...sets(d(0), 'Barbell Squat', 1),
+        ...sets(d(0), 'Flat Barbell Bench Press', 4),
+        ...sets(d(0), 'Bulgarian Split Squat', 3), // accessory, not squat
+      ];
+      final e = eval(d(1), rows);
+      expect(tick(e, 'squat').done, 1);
+      expect(tick(e, 'bench').done, 4);
+      expect(tick(e, 'squat').remainingDays, [DateTime.wednesday]);
+      expect(tick(e, 'deadlift').remainingDays, [DateTime.friday]);
+      expect(tick(e, 'deadlift').pending, isTrue);
+      expect(tick(e, 'bench').dueAhead, isTrue);
+      expect(e.status, GoalStatus.partial);
+      expect(e.detail, startsWith('on schedule'));
+    });
+
+    test("a past-due shortfall (the card's missed work) → unmet", () {
+      final rows = sets(d(0), 'Barbell Squat', 1); // Mon bench not done
+      final e = eval(d(1), rows);
+      expect(tick(e, 'bench').behind, isTrue);
+      expect(tick(e, 'squat').behind, isFalse);
+      expect(e.status, GoalStatus.unmet);
+      expect(e.detail, startsWith('behind on bench'));
+    });
+
+    test('a skip removes the item from the target and from "behind"', () {
+      final e = eval(d(1), sets(d(0), 'Barbell Squat', 1),
+          skips: {skipKey(d(0), 'Bench volume')});
+      expect(tick(e, 'bench').target, 7);
+      expect(tick(e, 'bench').behind, isFalse);
+      expect(e.status, GoalStatus.partial);
+    });
+
+    test('everything logged → met', () {
+      final rows = [
+        ...sets(d(0), 'Barbell Squat', 1),
+        ...sets(d(0), 'Flat Barbell Bench Press', 4),
+        ...sets(d(2), 'Flat Barbell Bench Press', 4),
+        ...sets(d(2), 'Barbell Squat', 3),
+        ...sets(d(2), 'Overhead Press', 3),
+        ...sets(d(4), 'Barbell Deadlift', 3),
+        ...sets(d(4), 'Flat Barbell Bench Press', 3),
+        ...sets(d(5), 'Overhead Press', 4),
+      ];
+      final e = eval(d(6), rows);
+      expect(e.status, GoalStatus.met);
+      expect(e.value, '25 of 25 program sets · 4/4 lifts done');
+    });
+
+    test('hard-set (RPE ≥ 7) count rides along as secondary info', () {
+      final e = eval(d(1), sets(d(0), 'Barbell Squat', 1), graded: [
+        hard('squat', d(0), rpe: 8),
+        hard('squat', d(0), rpe: 6),
+      ]);
+      expect(tick(e, 'squat').hardSets, 1);
+      expect(tick(e, 'squat').done, 1);
+    });
+
+    test('hard_set_targets is an override: typed target, all lift sets', () {
+      const over = GoalConfig(
+        id: 'hard_sets',
+        lifts: ['squat'],
+        hardSetTargetByLift: {'squat': 6},
+      );
+      final e = eval(
+        d(2),
+        [
+          ...sets(d(0), 'Barbell Squat', 2),
+          ...sets(d(2), 'Barbell Squat', 3),
+        ],
+        config: over,
+      );
+      final t = tick(e, 'squat');
+      expect(t.target, 6);
+      expect(t.fromProgram, isFalse);
+      expect(t.done, 5); // uncapped: 2 Mon + 3 Wed
+    });
+
+    test('itemLifts mapping wins over the name fallback', () {
+      final e = evaluateGoals(
+        configs: [cfg],
+        inputs: GoalInputs(
+          programWeek: effectiveWeek({
+            d(0): [pi('Heavy day lift', 2)],
+          }, const {}),
+          itemLifts: {itemLiftKey(d(0), 'Heavy day lift'): 'squat'},
+          weekWorkingSets: sets(d(0), 'Heavy day lift', 2),
+        ),
+        today: d(0),
+      ).single;
+      expect(tick(e, 'squat').target, 2);
+      expect(tick(e, 'squat').done, 2);
+    });
+
+    test('no program week → legacy hard-set mode unchanged', () {
+      final e = evaluateGoals(
+        configs: [cfg],
+        inputs: GoalInputs(graded: [hard('squat', inWeek)]),
+        today: today,
+        weekStartDay: satStart,
+      ).single;
+      expect(tick(e, 'squat').target, 10);
+      expect(tick(e, 'squat').done, 1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // muscle_stimulus
+  // -------------------------------------------------------------------------
+  group('muscle_stimulus', () {
+    DateTime d(int i) => DateTime(2026, 9, 28 + i);
+    const map = MuscleMap(
+      exercises: {
+        'Barbell Squat': {'quads': 1.0},
+        'Pull Up': {'back': 1.0, 'biceps': 0.5},
+        'Flat Barbell Bench Press': {'chest': 1.0},
+      },
+      climbingSession: {'back': 3.0, 'biceps': 1.5},
+    );
+    List<({DateTime date, String exercise})> sets(
+            DateTime day, String ex, int n) =>
+        [for (var i = 0; i < n; i++) (date: day, exercise: ex)];
+    GoalEval eval(
+      DateTime today,
+      List<({DateTime date, String exercise})> rows, {
+      GoalConfig config = const GoalConfig(id: 'muscle_stimulus'),
+      List<DateTime> climbs = const [],
+      MuscleMap? m = map,
+    }) =>
+        evaluateGoals(
+          configs: [config],
+          inputs: GoalInputs(
+            muscleMap: m,
+            muscleGroups: const ['quads', 'back', 'chest'],
+            weekWorkingSets: rows,
+            climbingDates: climbs,
+          ),
+          today: today,
+          weekStartDay: satStart,
+        ).single;
+
+    test('parses band + muscle_groups', () {
+      final g = parseGoals('phases:\n'
+          '  cut:\n'
+          '    goals:\n'
+          '      - id: muscle_stimulus\n'
+          '        band: [8, 12]\n'
+          '        muscle_groups: [quads, back]\n')!['cut']!.single;
+      expect(g.band, [8.0, 12.0]);
+      expect(g.muscleGroups, ['quads', 'back']);
+    });
+
+    test('counts Mon–Sun working sets + climbing sessions per group', () {
+      final e = eval(
+        d(3),
+        [
+          ...sets(DateTime(2026, 9, 27), 'Barbell Squat', 9), // last Sun
+          ...sets(d(0), 'Barbell Squat', 8),
+          ...sets(d(2), 'Pull Up', 3),
+        ],
+        climbs: [d(1), d(1), d(3)],
+      );
+      final rows = {for (final r in e.muscles) r.group: r};
+      expect(rows['quads']!.sets, 8);
+      expect(rows['back']!.sets, 3 + 2 * 3.0);
+      expect(rows['back']!.contributors.first.key, climbingLabel);
+      expect(rows['chest']!.sets, 0);
+      expect(e.value, '2 of 3 groups in 8–12');
+      // Thu: pace = 8 × 4/7 ≈ 4.6 → chest (0) behind pace; under is
+      // amber, never red.
+      expect(rows['chest']!.behindPace, isTrue);
+      expect(e.status, GoalStatus.partial);
+      expect(e.detail, contains('1 behind pace'));
+    });
+
+    test('a group over the band is flagged, but the row is never red', () {
+      final e = eval(d(4), [
+        ...sets(d(0), 'Barbell Squat', 13),
+        ...sets(d(0), 'Pull Up', 8),
+        ...sets(d(0), 'Flat Barbell Bench Press', 8),
+      ]);
+      expect(e.muscles.first.state, 'over');
+      expect(e.status, GoalStatus.partial);
+      expect(e.detail, contains('1 over the range'));
+    });
+
+    test('all in band → met; configurable band', () {
+      final e = eval(
+        d(6),
+        [
+          ...sets(d(0), 'Barbell Squat', 6),
+          ...sets(d(0), 'Pull Up', 6),
+          ...sets(d(0), 'Flat Barbell Bench Press', 6),
+        ],
+        config: const GoalConfig(id: 'muscle_stimulus', band: [6, 10]),
+      );
+      expect(e.status, GoalStatus.met);
+      expect(e.value, '3 of 3 groups in 6–10');
+    });
+
+    test('no muscle map → unknown, never throws', () {
+      final e = eval(d(0), const [], m: null);
+      expect(e.status, GoalStatus.unknown);
+    });
+
+    test('muscleDisplayName spells groups out', () {
+      expect(muscleDisplayName('hamstrings_glutes'), 'hamstrings and glutes');
+      expect(muscleDisplayName('back'), 'back');
+    });
+  });
+
+  test('real dashboards.yaml: cut + recomp declare program sets + muscles',
+      () {
+    final file = File('../airledger-fitness/app/dashboards.yaml');
+    if (!file.existsSync()) {
+      markTestSkipped('no airledger-fitness checkout');
+      return;
+    }
+    final byPhase = parseGoals(file.readAsStringSync())!;
+    for (final phase in ['cut', 'recomp']) {
+      final goals = {for (final g in byPhase[phase]!) g.id: g};
+      expect(goals['hard_sets']!.label, 'Program sets per lift');
+      // Derived from the program now — no typed per-lift override.
+      expect(goals['hard_sets']!.hardSetTargetByLift, isEmpty);
+      expect(goals['muscle_stimulus']!.band, [8.0, 12.0]);
+    }
   });
 }

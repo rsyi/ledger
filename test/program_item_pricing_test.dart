@@ -186,4 +186,52 @@ void main() {
       expect(lineContext(ln('Pull Up', 3, 6, hi: 10)), isNull);
     });
   });
+
+  group('mainLiftByItem (program sets per lift)', () {
+    test('lift comes from the matched priced line; accessories absent', () {
+      final fri = DateTime(2026, 10, 2);
+      final prescribed = {
+        fri: [
+          it('Deadlift heavy', 'top set'),
+          it('Deadlift back-offs', '2x4-6 @ 75% TM'),
+          it('RDL or leg curl', '2-3x8-12'),
+          it('Bench volume', '3x8-10 @ 65% TM.'),
+          it('Climb — LIGHT session', '(technique)'),
+        ],
+      };
+      final priced = PricedWeek(lines: {
+        fri: [
+          ln('Barbell Deadlift', 1, 5, top: true),
+          ln('Barbell Deadlift', 2, 4, pct: 0.75),
+          ln('Romanian Deadlift', 2, 8, hi: 12),
+          ln('Flat Barbell Bench Press', 3, 8, pct: 0.65),
+        ],
+      });
+      final m = mainLiftByItem(prescribed, priced);
+      expect(m[itemLiftKey(fri, 'Deadlift heavy')], 'deadlift');
+      expect(m[itemLiftKey(fri, 'deadlift BACK-OFFS ')], 'deadlift');
+      expect(m[itemLiftKey(fri, 'Bench volume')], 'bench');
+      expect(m.containsKey(itemLiftKey(fri, 'RDL or leg curl')), isFalse);
+      expect(m.containsKey(itemLiftKey(fri, 'Climb — LIGHT session')),
+          isFalse);
+    });
+
+    test('no priced lines → name fallback', () {
+      final sat = DateTime(2026, 10, 3);
+      final m = mainLiftByItem({
+        sat: [it('OHP heavy'), it('Seated cable row')],
+      }, PricedWeek.empty);
+      expect(m, {itemLiftKey(sat, 'OHP heavy'): 'press'});
+    });
+
+    test('mainLiftOfItemName', () {
+      expect(mainLiftOfItemName('Squat volume'), 'squat');
+      expect(mainLiftOfItemName('Bench back-offs'), 'bench');
+      expect(mainLiftOfItemName('OHP heavy'), 'press');
+      expect(mainLiftOfItemName('Overhead press 3x8'), 'press');
+      expect(mainLiftOfItemName('Deadlift heavy'), 'deadlift');
+      expect(mainLiftOfItemName('Bulgarian split squat'), isNull);
+      expect(mainLiftOfItemName('RDL or leg curl'), isNull);
+    });
+  });
 }

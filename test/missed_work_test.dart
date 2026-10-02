@@ -547,4 +547,59 @@ void main() {
       expect(mw.isEmpty, isTrue);
     });
   });
+
+  group('weekLiftCredits (program progress)', () {
+    test('whole week: future items present with 0 credit, sessions dropped',
+        () {
+      final c = weekLiftCredits(
+        week: eff(),
+        strengthRows: monTueDone(),
+        today: d(1),
+      );
+      expect([for (final x in c) x.item.name], [
+        'Squat top set',
+        'Bench',
+        'Bench top set',
+        'Deadlift top set',
+        'Press top set',
+      ]);
+      expect(c[0].credited, 1);
+      expect(c[1].credited, 4);
+      expect(c[2].credited, 0);
+      expect(c[3].day, d(4));
+    });
+
+    test('agrees with the detector on past-due shortfalls', () {
+      final rows = sets(d(0), 'Bench Press', 2);
+      final c = weekLiftCredits(week: eff(), strengthRows: rows, today: d(2));
+      final missed = run(rows: rows, today: d(2));
+      final shortPast = [
+        for (final x in c)
+          if (x.day.isBefore(d(2)) && x.short) x.item.name,
+      ];
+      expect(shortPast, [
+        for (final m in missed.missed)
+          if (m.kind == 'lift') m.item.name,
+      ]);
+      expect(c[1].credited, 2);
+    });
+
+    test('work done early (no move) credits the later item', () {
+      // Deadlift on Tue for Friday's item.
+      final rows = [...monTueDone(), ...sets(d(1), 'Deadlift', 1)];
+      final c = weekLiftCredits(week: eff(), strengthRows: rows, today: d(1));
+      expect(c.firstWhere((x) => x.item.name == 'Deadlift top set').credited,
+          1);
+    });
+
+    test('skipped and ghost items take no slot', () {
+      final c = weekLiftCredits(
+        week: eff(),
+        strengthRows: const [],
+        today: d(1),
+        skipped: {skipKey(d(4), 'Deadlift top set')},
+      );
+      expect(c.any((x) => x.item.name == 'Deadlift top set'), isFalse);
+    });
+  });
 }

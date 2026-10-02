@@ -218,11 +218,106 @@ MissedWork detectMissedWork({
     for (var i = t.weekday - 1; i < 7; i++)
       DateTime(mon.year, mon.month, mon.day + i),
   ];
-  bool inWeekToDate(DateTime d) => !d.isBefore(mon) && !d.isAfter(t);
+  final slots = _allocateWeek(
+    week: week,
+    strengthRows: strengthRows,
+    climbDays: climbDays,
+    cardio4x4Days: cardio4x4Days,
+    today: t,
+    skipped: skipped,
+    wholeWeek: false,
+  );
+  return MissedWork(
+    missed: [
+      for (final s in slots)
+        if (s.day.isBefore(t) && s.short)
+          MissedItem(
+            item: s.e.item.withLogged(s.kind == 'lift' ? s.got : 0),
+            day: s.day,
+            home: s.e.home,
+            setsShort: s.need - s.got,
+            kind: s.kind,
+          ),
+    ],
+    remainingDays: remaining,
+  );
+}
 
-  // Slots for today and every earlier day of the week, day order then
-  // program order. Ghosts never count.
-  final days = week.keys.map(dayOnly).where(inWeekToDate).toSet().toList()
+/// One prescribed LIFT item's week-to-date credit (program progress).
+class ItemCredit {
+  /// As prescribed; `loggedSets` = the working sets credited to it.
+  final PrescribedItem item;
+
+  /// The day it lives on this week (after moves).
+  final DateTime day;
+
+  /// The program's original day for it.
+  final DateTime home;
+
+  const ItemCredit({required this.item, required this.day, required this.home});
+
+  int get target => item.targetSets;
+  int get credited => item.loggedSets;
+  bool get short => credited < target;
+}
+
+/// Every live (non-ghost, non-skipped) LIFT item of [today]'s Mon–Sun
+/// week, Mon..Sun, with the working sets credited to it — the Week tab's
+/// "program sets per lift" source. The SAME allocation as
+/// [detectMissedWork] (per-day exclusive [allocateDay], then past-due
+/// shortfalls draw on the week's spare strong matches), so an item this
+/// says is short before today is exactly a missed item; one extra pass
+/// then lets today's and later items take the week's still-spare strong
+/// matches (work done EARLY, without a move, counts for the program — it
+/// can't change what was missed). Credit is RPE-blind: a logged working
+/// set did the program's work whatever its effort.
+List<ItemCredit> weekLiftCredits({
+  required Map<DateTime, List<EffectiveItem>> week,
+  required List<({DateTime date, String exercise})> strengthRows,
+  required DateTime today,
+  Set<String> skipped = const {},
+}) {
+  final slots = _allocateWeek(
+    week: week,
+    strengthRows: strengthRows,
+    climbDays: const {},
+    cardio4x4Days: const {},
+    today: dayOnly(today),
+    skipped: skipped,
+    wholeWeek: true,
+  );
+  return [
+    for (final s in slots)
+      if (s.kind == 'lift')
+        ItemCredit(
+          item: s.e.item.withLogged(s.got),
+          day: s.day,
+          home: s.e.home,
+        ),
+  ];
+}
+
+/// The shared week allocation. [wholeWeek] false = slots for Mon..today
+/// only (the detector); true = every day of the week plus the early-work
+/// pass (program progress). Slots come back in day then program order.
+List<_Slot> _allocateWeek({
+  required Map<DateTime, List<EffectiveItem>> week,
+  required List<({DateTime date, String exercise})> strengthRows,
+  required Set<DateTime> climbDays,
+  required Set<DateTime> cardio4x4Days,
+  required DateTime today,
+  required Set<String> skipped,
+  required bool wholeWeek,
+}) {
+  final t = today;
+  final mon = mondayOf(t);
+  final sun = DateTime(mon.year, mon.month, mon.day + 6);
+  bool inWeekToDate(DateTime d) => !d.isBefore(mon) && !d.isAfter(t);
+  bool slotDay(DateTime d) =>
+      !d.isBefore(mon) && !d.isAfter(wholeWeek ? sun : t);
+  // Slots for Mon..today (or the whole week), day order then program
+  // order. Ghosts never count.
+  final days = week.keys.map(dayOnly).where(slotDay).toSet().toList()
     ..sort();
   final slots = <_Slot>[];
   for (final day in days) {
@@ -235,9 +330,7 @@ MissedWork detectMissedWork({
       }
     }
   }
-  if (slots.isEmpty) {
-    return MissedWork(missed: const [], remainingDays: remaining);
-  }
+  if (slots.isEmpty) return slots;
 
   // Allocation order: today's slots, then the rest in day order.
   final ordered = [
@@ -315,7 +408,7 @@ MissedWork detectMissedWork({
   // Pass 2: past-due shortfalls draw on the week's spare work, in day
   // order. Today's slots aren't due, so they don't compete here.
   for (final s in slots) {
-    if (s.day == t) continue;
+    if (!s.day.isBefore(t)) continue;
     if (s.kind == 'lift') {
       claimSpareLift(s);
     } else {
@@ -323,18 +416,13 @@ MissedWork detectMissedWork({
     }
   }
 
-  return MissedWork(
-    missed: [
-      for (final s in slots)
-        if (s.day.isBefore(t) && s.short)
-          MissedItem(
-            item: s.e.item.withLogged(s.kind == 'lift' ? s.got : 0),
-            day: s.day,
-            home: s.e.home,
-            setsShort: s.need - s.got,
-            kind: s.kind,
-          ),
-    ],
-    remainingDays: remaining,
-  );
+  // Pass 3 (program progress only): today's and later lift items take
+  // the week's still-spare strong matches — work done early.
+  if (wholeWeek) {
+    for (final s in slots) {
+      if (s.day.isBefore(t) || s.kind != 'lift') continue;
+      claimSpareLift(s);
+    }
+  }
+  return slots;
 }

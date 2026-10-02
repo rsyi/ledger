@@ -36,6 +36,7 @@
 ///     uses; the two answer different questions.
 library;
 
+import 'muscle_volume.dart' show weeklyMuscleVolume;
 import 'program_metrics.dart' show mainLiftByExercise;
 import 'week_drivers.dart' show MuscleMap, TopSetReading;
 
@@ -404,23 +405,16 @@ Map<String, double> productiveSetsByMuscle({
   required int climbingSessionCount,
   required List<String> groups,
 }) {
-  final counts = {for (final g in groups) g: 0.0};
-  for (final s in sets) {
-    if (!countsAsProductive(s)) continue;
-    final credits = map.creditsFor(s.exercise);
-    if (credits == null) continue;
-    for (final e in credits.entries) {
-      if (counts.containsKey(e.key)) {
-        counts[e.key] = counts[e.key]! + e.value;
-      }
-    }
-  }
-  for (final e in map.climbingSession.entries) {
-    if (counts.containsKey(e.key)) {
-      counts[e.key] = counts[e.key]! + climbingSessionCount * e.value;
-    }
-  }
-  return counts;
+  final volume = weeklyMuscleVolume(
+    map: map,
+    groups: groups,
+    setNames: [
+      for (final s in sets)
+        if (countsAsProductive(s)) s.exercise,
+    ],
+    climbSessions: climbingSessionCount,
+  );
+  return {for (final g in groups) g: volume[g]!.sets};
 }
 
 /// Mean RIR (10 − RPE) over PRODUCTIVE sets that carry an RPE. Null

@@ -20,13 +20,24 @@
 ///                    maintenance → maintenance .. +band_kcal. Maintenance
 ///                    is the adaptive estimate (nutrition_model); no
 ///                    estimate yet → honest "no data".
-///   3. hard_sets     per main lift, sets close to failure (RPE at/above
-///                    the declared minimum, default 7) this accounting week
-///                    toward ~10 — the common ~10-hard-sets/muscle/week
-///                    hypertrophy landmark (Schoenfeld et al.). Plus a
-///                    per-lift "accessories done" check: did that lift's
-///                    associated accessories (declared in the config,
-///                    derived from the routine) get hit this week.
+///   3. hard_sets     PROGRAM PROGRESS per main lift (2026-10-02): working
+///                    sets logged / sets this week's EFFECTIVE program
+///                    prescribes for the lift (top sets + back-offs + %TM
+///                    volume slots; program_moves applied, skips
+///                    excluded), over the program's MON–SUN week — the
+///                    same exclusive allocation as the program day card
+///                    and the missed-work detector (weekLiftCredits), so
+///                    the Week tab and the Today card agree. RPE-blind;
+///                    the RPE ≥ 7 hard-set count rides along as secondary
+///                    info. `hard_set_targets` is an override only. With
+///                    no program week supplied it falls back to the
+///                    legacy hard-sets-vs-~10 count over the accounting
+///                    week. Plus a per-lift "accessories done" check.
+///   3b. muscle_stimulus  per-muscle-group working sets this Mon–Sun week
+///                    vs a band (8–12) via the program's
+///                    exercise_muscle_map (muscle_volume.dart — the same
+///                    counter as the hypertrophy_volume driver), climbing
+///                    sessions credited per session. Pacing-aware.
 ///   4. climbing      distinct climb-session days (Whoop ∪ Kaya, counted
 ///                    once) vs a weekly target.
 ///   5. cardio_4x4    distinct 4x4 cardio days vs a weekly target.
@@ -39,8 +50,13 @@ library;
 
 import 'package:yaml/yaml.dart';
 
+import 'missed_work.dart' show ItemCredit, weekLiftCredits;
+import 'muscle_volume.dart';
+import 'program_item_pricing.dart' show itemLiftKey, mainLiftOfItemName;
 import 'program_metrics.dart'
     show GradedSet, mainLiftByExercise, weekStartOf;
+import 'program_moves.dart' show EffectiveItem;
+import 'program_week.dart' show mondayOf;
 import 'whoop_activity.dart';
 
 // ---------------------------------------------------------------------------
@@ -101,6 +117,14 @@ class GoalConfig {
   /// listed accessory has ≥ 1 logged set this week.
   final Map<String, List<String>> accessories;
 
+  // --- muscle_stimulus ---
+  /// Weekly working-set band per muscle group ([8, 12]).
+  final List<double>? band;
+
+  /// Groups evaluated. Empty → the program's
+  /// hypertrophy_targets.muscle_groups (GoalInputs.muscleGroups).
+  final List<String> muscleGroups;
+
   // --- climbing / cardio_4x4 / zone2_run ---
   final double? target;
 
@@ -129,6 +153,8 @@ class GoalConfig {
     this.hardSetTargetByLift = const {},
     this.hardRpeMin,
     this.accessories = const {},
+    this.band,
+    this.muscleGroups = const [],
     this.target,
     this.optional = false,
     this.minMinutes,
@@ -170,6 +196,7 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
       final lifts = gg['lifts'];
       final acc = gg['accessories'];
       final perLift = gg['hard_set_targets'];
+      final groups = gg['muscle_groups'];
       parsed.add(
         GoalConfig(
           id: id,
@@ -202,6 +229,10 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
                       ],
                 }
               : const {},
+          band: _numPair(gg['band']),
+          muscleGroups: groups is List
+              ? [for (final g in groups) g.toString()]
+              : const [],
           target: (gg['target'] as num?)?.toDouble(),
           optional: gg['optional'] == true,
           minMinutes: (gg['min_minutes'] as num?)?.toDouble(),
@@ -226,42 +257,103 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
 /// optional  a nice-to-have goal not (yet) met — neutral, never red.
 enum GoalStatus { met, partial, unmet, unknown, optional }
 
-/// One per-lift tick (hard_sets: sets toward the target + accessory done).
+/// One per-lift tick (hard_sets). Program mode: [done] = working sets
+/// credited to the lift's prescribed items this Mon–Sun week, [target] =
+/// the sets the effective week prescribes (or the declared override);
+/// legacy mode: [done] = [hardSets], [target] = the flat ~10.
 class GoalLiftTick {
   final String lift;
 
-  /// Hard sets (RPE-in-band) counted this week.
+  /// Sets RPE ≥ the declared minimum (default 7) this week — the
+  /// primary number in legacy mode, secondary info in program mode.
   final int hardSets;
 
-  /// The per-lift hard-set target (~10).
+  /// The per-lift target (program prescription, override, or ~10).
   final int target;
+
+  /// The chip's primary count (program sets done; legacy = [hardSets]).
+  final int done;
+
+  /// True when [target] comes from the program (not typed / legacy).
+  final bool fromProgram;
+
+  /// A prescribed item for this lift due BEFORE today is short — the
+  /// same condition the missed-work detector reports.
+  final bool behind;
 
   /// Whether this lift's associated accessories were all hit (null when
   /// none are declared for the lift).
   final bool? accessoriesDone;
 
-  /// Weekdays (DateTime.monday..sunday) the routine trains this lift,
-  /// in accounting-week order. Empty → unknown (no routine supplied).
+  /// Weekdays (DateTime.monday..sunday) this week trains the lift, in
+  /// week order. Empty → unknown (no routine/program supplied).
   final List<int> scheduledDays;
 
-  /// The subset of [scheduledDays] still ahead this accounting week
-  /// (today inclusive). A lift with 0 hard sets but a remaining day is
-  /// "not trained yet", not behind — e.g. deadlift is Friday-only, the
-  /// LAST day of the Sat–Fri week, so it reads 0 all week until then.
+  /// Weekdays from today on that still carry unfinished work for the
+  /// lift (program mode), or the scheduled days still ahead (legacy).
+  /// Drives the "· Fri" not-yet-due hint — deadlift is Friday-only, so
+  /// it reads 0 most of the week without being missed.
   final List<int> remainingDays;
 
   const GoalLiftTick({
     required this.lift,
     required this.hardSets,
     required this.target,
+    int? done,
+    this.fromProgram = false,
+    this.behind = false,
     this.accessoriesDone,
     this.scheduledDays = const [],
     this.remainingDays = const [],
-  });
+  }) : done = done ?? hardSets;
+
+  bool get complete => done >= target;
 
   /// True when nothing is logged yet but the lift's day hasn't passed —
   /// the chip should say when it's due rather than read as missed.
-  bool get pending => hardSets == 0 && remainingDays.isNotEmpty;
+  bool get pending => done == 0 && remainingDays.isNotEmpty;
+
+  /// Short of target with work still scheduled ahead — the chip appends
+  /// the remaining days ("bench 4/11 · Fri").
+  bool get dueAhead => !complete && remainingDays.isNotEmpty;
+}
+
+/// One muscle group's row (muscle_stimulus).
+class GoalMuscleRow {
+  final String group;
+
+  /// Working sets credited this Mon–Sun week (fractional).
+  final double sets;
+
+  /// The band.
+  final double lo;
+  final double hi;
+
+  /// Expected sets by today at an even pace: lo × (days elapsed / 7).
+  final double pace;
+
+  /// Contributor → sets it credited (logged exercise names; climbing as
+  /// "Climbing sessions"), largest first.
+  final List<MapEntry<String, double>> contributors;
+
+  const GoalMuscleRow({
+    required this.group,
+    required this.sets,
+    required this.lo,
+    required this.hi,
+    required this.pace,
+    this.contributors = const [],
+  });
+
+  bool get over => sets > hi + 1e-9;
+  bool get inBand => !over && sets >= lo - 1e-9;
+  bool get under => sets < lo - 1e-9;
+
+  /// Under the band AND under the even-pace line.
+  bool get behindPace => under && sets < pace - 1e-9;
+
+  /// 'under' | 'in range' | 'over'.
+  String get state => over ? 'over' : inBand ? 'in range' : 'under';
 }
 
 /// One evaluated goal, preformatted for the row.
@@ -279,18 +371,23 @@ class GoalEval {
   /// Per-lift ticks (hard_sets only; empty otherwise).
   final List<GoalLiftTick> ticks;
 
+  /// Per-muscle rows (muscle_stimulus only; empty otherwise).
+  final List<GoalMuscleRow> muscles;
+
   const GoalEval({
     required this.config,
     required this.status,
     required this.value,
     this.detail = '',
     this.ticks = const [],
+    this.muscles = const [],
   });
 
   static const _defaultLabels = {
     'macros': 'Macros',
     'calorie_band': 'Calories',
-    'hard_sets': 'Hard sets per lift',
+    'hard_sets': 'Program sets per lift',
+    'muscle_stimulus': 'Sets per muscle group',
     'climbing': 'Climbing',
     'cardio_4x4': 'Cardio',
     'zone2_run': 'Zone-2 run',
@@ -344,8 +441,34 @@ class GoalInputs {
   final double? maxHr;
 
   /// Main lift → weekdays the routine trains it ([mainLiftWeekdays]).
-  /// Empty → the hard-set ticks carry no schedule.
+  /// Empty → the hard-set ticks carry no schedule. (Legacy mode only —
+  /// program mode reads the days off [programWeek].)
   final Map<String, Set<int>> liftDays;
+
+  /// The EFFECTIVE Mon–Sun program week (program_moves applied) —
+  /// WeekStateLoader.week. Non-null switches hard_sets to program
+  /// progress.
+  final Map<DateTime, List<EffectiveItem>>? programWeek;
+
+  /// The week's intentional skips (program_moves skip keys).
+  final Set<String> programSkips;
+
+  /// Main lift per prescribed item, keyed by itemLiftKey(home, name)
+  /// (program_item_pricing.mainLiftByItem). Items absent here fall back
+  /// to the name ([mainLiftOfItemName]).
+  final Map<String, String> itemLifts;
+
+  /// WORKING sets (warm-ups excluded — working_sets.dart) logged this
+  /// Mon–Sun week, strength + calisthenics, one entry per set — the
+  /// program-credit and muscle-stimulus source.
+  final List<({DateTime date, String exercise})> weekWorkingSets;
+
+  /// The program's exercise → muscle credit map. Null → muscle_stimulus
+  /// reports no data.
+  final MuscleMap? muscleMap;
+
+  /// The program's hypertrophy muscle groups (hypertrophy_targets).
+  final List<String> muscleGroups;
 
   const GoalInputs({
     this.graded = const [],
@@ -361,6 +484,12 @@ class GoalInputs {
     this.activities = const [],
     this.maxHr,
     this.liftDays = const {},
+    this.programWeek,
+    this.programSkips = const {},
+    this.itemLifts = const {},
+    this.weekWorkingSets = const [],
+    this.muscleMap,
+    this.muscleGroups = const [],
   });
 }
 
@@ -431,6 +560,12 @@ List<GoalEval> evaluateGoals({
   bool inWeek(DateTime d) =>
       _daysBetween(d, today) >= 0 &&
       weekStartOf(_day(d), weekStartDay) == weekStart;
+  // The program's Mon–Sun week (to date) — program progress + muscle
+  // stimulus, consistent with the program card. The other goals keep
+  // the accounting week.
+  final monday = mondayOf(_day(today));
+  bool inProgramWeek(DateTime d) =>
+      _daysBetween(d, today) >= 0 && !_day(d).isBefore(monday);
 
   final out = <GoalEval>[];
   for (final c in configs) {
@@ -553,6 +688,12 @@ List<GoalEval> evaluateGoals({
             detail: detail,
           ));
         }
+
+      case 'hard_sets' when inputs.programWeek != null:
+        out.add(_programSets(c, inputs, today, inProgramWeek));
+
+      case 'muscle_stimulus':
+        out.add(_muscleStimulus(c, inputs, today, inProgramWeek));
 
       case 'hard_sets':
         final lifts = c.lifts.isEmpty ? _defaultLifts : c.lifts;
@@ -701,10 +842,205 @@ List<GoalEval> evaluateGoals({
               value: e.value,
               detail: e.detail.isEmpty ? 'nice to have' : e.detail,
               ticks: e.ticks,
+              muscles: e.muscles,
             )
           : e,
   ];
 }
+
+/// hard_sets in PROGRAM mode (see the library doc, goal 3).
+GoalEval _programSets(
+  GoalConfig c,
+  GoalInputs inputs,
+  DateTime today,
+  bool Function(DateTime) inWeek,
+) {
+  final t = _day(today);
+  final lifts = c.lifts.isEmpty ? _defaultLifts : c.lifts;
+  final credits = weekLiftCredits(
+    week: inputs.programWeek!,
+    strengthRows: inputs.weekWorkingSets,
+    today: t,
+    skipped: inputs.programSkips,
+  );
+  String? liftOf(ItemCredit ic) =>
+      inputs.itemLifts[itemLiftKey(ic.home, ic.item.name)] ??
+      mainLiftOfItemName(ic.item.name);
+  final rpeMin = c.hardRpeMin ?? 7.0;
+  int hardSets(String lift) => inputs.graded
+      .where((s) =>
+          s.lift == lift && inWeek(s.date) && s.rpe != null && s.rpe! >= rpeMin)
+      .length;
+  bool? accessoriesDone(String lift) {
+    final names = c.accessories[lift];
+    if (names == null || names.isEmpty) return null;
+    for (final name in names) {
+      final hit = inputs.weekWorkingSets
+              .any((r) => r.exercise == name && inWeek(r.date)) ||
+          inputs.strengthRows.any((r) => r.exercise == name && inWeek(r.date));
+      if (!hit) return false;
+    }
+    return true;
+  }
+
+  List<int> days(Iterable<ItemCredit> items) =>
+      ({for (final i in items) i.day.weekday}.toList()..sort());
+
+  final ticks = <GoalLiftTick>[];
+  for (final lift in lifts) {
+    final items = [for (final ic in credits) if (liftOf(ic) == lift) ic];
+    final prescribed = items.fold<int>(0, (n, i) => n + i.target);
+    final override = c.hardSetTargetByLift[lift];
+    // A typed override isn't program-shaped, so it counts every working
+    // set of the lift this week (uncapped); the program target counts
+    // the allocation (each set credits one item, at most its sets).
+    final done = override != null
+        ? inputs.weekWorkingSets
+            .where((r) =>
+                inWeek(r.date) && mainLiftByExercise[r.exercise] == lift)
+            .length
+        : items.fold<int>(0, (n, i) => n + i.credited);
+    ticks.add(GoalLiftTick(
+      lift: lift,
+      hardSets: hardSets(lift),
+      target: override ?? prescribed,
+      done: done,
+      fromProgram: override == null,
+      behind: override == null &&
+          items.any((i) => i.day.isBefore(t) && i.short),
+      accessoriesDone: accessoriesDone(lift),
+      scheduledDays: days(items),
+      remainingDays: days([
+        for (final i in items)
+          if (!i.day.isBefore(t) && i.short) i,
+      ]),
+    ));
+  }
+  final complete = ticks.where((k) => k.complete).length;
+  final behind = [for (final k in ticks) if (k.behind) k];
+  final doneSum = ticks.fold<int>(0, (n, k) => n + k.done.clamp(0, k.target));
+  final targetSum = ticks.fold<int>(0, (n, k) => n + k.target);
+  // Status: every lift done → met; prescribed work from an EARLIER day
+  // still short (what the Today card lists as missed) → unmet; anything
+  // else is still on schedule → partial. Never red for work not yet due.
+  final status = complete == ticks.length
+      ? GoalStatus.met
+      : behind.isNotEmpty
+          ? GoalStatus.unmet
+          : GoalStatus.partial;
+  final detail = complete == ticks.length
+      ? 'all program sets done · Mon–Sun program week'
+      : behind.isNotEmpty
+          ? 'behind on ${behind.map((k) => liftDisplayName(k.lift)).join(', ')}'
+              ' · Mon–Sun program week'
+          : 'on schedule · Mon–Sun program week';
+  return GoalEval(
+    config: c,
+    status: status,
+    value: '$doneSum of $targetSum program sets · '
+        '$complete/${ticks.length} lifts done',
+    detail: detail,
+    ticks: ticks,
+  );
+}
+
+/// muscle_stimulus (see the library doc, goal 3b).
+///
+/// Status (decided 2026-10-02): every group in the band → met; otherwise
+/// partial — the row is NEVER red. Under the band mid-week is simply not
+/// done yet (and on a cut under-dosing isn't failure); the detail says
+/// how many groups trail an even pace (lo × days elapsed / 7). OVER the
+/// band is the program's declared caution (excess overlapping volume) —
+/// flagged per group (red chip + "N over the range"), but the live cut
+/// week itself prescribes back/biceps/triceps above 12 once climbing is
+/// credited, so a red row would fire every week and mean nothing.
+GoalEval _muscleStimulus(
+  GoalConfig c,
+  GoalInputs inputs,
+  DateTime today,
+  bool Function(DateTime) inWeek,
+) {
+  final map = inputs.muscleMap;
+  if (map == null) {
+    return GoalEval(
+      config: c,
+      status: GoalStatus.unknown,
+      value: 'no data',
+      detail: 'the program declares no exercise-to-muscle map',
+    );
+  }
+  final band = c.band ?? const [8.0, 12.0];
+  final lo = band[0] <= band[1] ? band[0] : band[1];
+  final hi = band[0] <= band[1] ? band[1] : band[0];
+  final groups = c.muscleGroups.isNotEmpty
+      ? c.muscleGroups
+      : inputs.muscleGroups.isNotEmpty
+          ? inputs.muscleGroups
+          : {for (final m in map.exercises.values) ...m.keys}.toList();
+  final climbSessions = climbDaysUnion(
+    inputs.climbingDates,
+    whoopClimbDays(inputs.activities),
+  ).where(inWeek).length;
+  final volume = weeklyMuscleVolume(
+    map: map,
+    groups: groups,
+    setNames: [
+      for (final s in inputs.weekWorkingSets)
+        if (inWeek(s.date)) s.exercise,
+    ],
+    climbSessions: climbSessions,
+  );
+  final pace = lo * _day(today).weekday / 7;
+  final rows = <GoalMuscleRow>[
+    for (final g in groups)
+      GoalMuscleRow(
+        group: g,
+        sets: volume[g]!.sets,
+        lo: lo,
+        hi: hi,
+        pace: pace,
+        contributors: volume[g]!.byExercise.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value)),
+      ),
+  ];
+  final inBand = rows.where((r) => r.inBand).length;
+  final over = rows.where((r) => r.over).length;
+  final behind = rows.where((r) => r.behindPace).length;
+  final under = rows.where((r) => r.under).length;
+  final status =
+      inBand == rows.length ? GoalStatus.met : GoalStatus.partial;
+  final parts = <String>[
+    if (over > 0) '$over over the range',
+    if (behind > 0)
+      '$behind behind pace'
+    else if (under > 0)
+      '${over > 0 ? 'the rest' : 'all'} on pace',
+    'Mon–Sun',
+  ];
+  return GoalEval(
+    config: c,
+    status: status,
+    value: '$inBand of ${rows.length} groups in ${_fmtNum(lo)}–${_fmtNum(hi)}',
+    detail: parts.join(' · '),
+    muscles: rows,
+  );
+}
+
+String _fmtNum(double v) =>
+    v == v.roundToDouble() ? v.round().toString() : v.toStringAsFixed(1);
+
+/// Plain lift name for UI copy ('press' → 'overhead press').
+String liftDisplayName(String key) => switch (key) {
+      'press' => 'overhead press',
+      _ => key,
+    };
+
+/// Plain muscle-group name ('hamstrings_glutes' → 'hamstrings and
+/// glutes') — no abbreviations on the Week tab.
+String muscleDisplayName(String key) => switch (key) {
+      'hamstrings_glutes' => 'hamstrings and glutes',
+      _ => key.replaceAll('_', ' '),
+    };
 
 /// "1,850 kcal" with a thousands separator.
 String _kcal(double v) {

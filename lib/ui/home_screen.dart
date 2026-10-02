@@ -1567,6 +1567,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       readOnlyRepo: data.readOnlyRepo,
                       forView: data.registry.forView,
                     ),
+                    programMovesView: programMovesView,
+                    programMovesRepo: programMovesRepo,
+                    calisthenicsView: dashCalisthenicsView,
+                    calisthenicsRepo: dashCalisthenicsView == null
+                        ? null
+                        : data.registry.forView(dashCalisthenicsView),
                   ),
                 ),
               );

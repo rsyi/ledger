@@ -22,6 +22,8 @@ import '../services/domain_config.dart' show DomainConfigProvider;
 import '../services/goals_service.dart';
 import '../services/heart_rate_service.dart';
 import '../services/home_synthesis.dart' show asNum, strengthRowFromRecord;
+import '../services/muscle_volume.dart'
+    show hypertrophyMuscleGroups, parseExerciseMuscleMap;
 import '../services/nutrition_model.dart'
     show buildNutritionForecast, mealRowsFromRecords;
 import '../services/phase_eigenvectors.dart' show effectivePhaseKey;
@@ -30,7 +32,11 @@ import '../services/program_current.dart'
 import '../services/program_metrics.dart'
     show GradedSet, StrengthRow, WeightRow, gradeSets;
 import '../services/program_observed.dart' show observedWeightStats;
+import '../services/program_item_pricing.dart'
+    show mainLiftByItem, pricedWeek;
 import '../services/program_provider.dart' show IntentDocs, ProgramProvider;
+import '../services/program_week.dart' show mondayOf, prescribedWeek;
+import '../services/week_state_loader.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart' show loadDailyWeighIns;
 import '../services/whoop_activity.dart';
@@ -65,6 +71,15 @@ class GoalsScreen extends StatefulWidget {
   final ViewSchema? workoutsView;
   final WarehouseConnector? workoutsRepo;
 
+  /// program_moves (moves + skips) — program progress reads the
+  /// EFFECTIVE week, like the program day card.
+  final ViewSchema? programMovesView;
+  final WarehouseConnector? programMovesRepo;
+
+  /// Calisthenics log — credits skill items + muscle groups.
+  final ViewSchema? calisthenicsView;
+  final WarehouseConnector? calisthenicsRepo;
+
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -85,6 +100,10 @@ class GoalsScreen extends StatefulWidget {
     this.cardioRepo,
     this.workoutsView,
     this.workoutsRepo,
+    this.programMovesView,
+    this.programMovesRepo,
+    this.calisthenicsView,
+    this.calisthenicsRepo,
     this.today,
   });
 
@@ -160,8 +179,36 @@ class GoalsScreenState extends State<GoalsScreen> {
       routineWeekFor(version, blockN is num ? blockN.toInt() : null),
     );
 
+    // The effective Mon–Sun program week + its working sets, via the
+    // SAME loader the program day card uses (moves, skips, warm-up rule,
+    // calisthenics) so "program sets per lift" agrees with the card.
+    final provider = widget.provider;
+    final WeekState? state = provider == null
+        ? null
+        : await _guard(() => WeekStateLoader(
+              loadDocs: provider.load,
+              programMovesView: widget.programMovesView,
+              programMovesRepo: widget.programMovesRepo,
+              strengthView: widget.strengthView,
+              strengthRepo: widget.strengthRepo,
+              calisthenicsView: widget.calisthenicsView,
+              calisthenicsRepo: widget.calisthenicsRepo,
+            ).load(_today));
+    // Which main lift each prescribed item trains — the program card's
+    // own priced-line matching (sets don't depend on weights, so no TM
+    // read is needed here).
+    var itemLifts = const <String, String>{};
+    if (state != null && program != null) {
+      try {
+        itemLifts = mainLiftByItem(
+          prescribedWeek(state.docs, _today),
+          pricedWeek(program, docs?.phase, mondayOf(_today), today: _today),
+        );
+      } catch (_) {/* honest: name fallback */}
+    }
+
     // Strength (graded main-lift sets + raw rows for the accessory check).
-    final strengthRecords =
+    final strengthRecords = state?.strengthRows ??
         await _rows(widget.strengthRepo, widget.strengthView);
     final strengthRows = <StrengthRow>[
       for (final r in strengthRecords) ?strengthRowFromRecord(r),
@@ -247,6 +294,12 @@ class GoalsScreenState extends State<GoalsScreen> {
         activities: activities,
         maxHr: maxHr,
         liftDays: liftDays,
+        programWeek: state?.week,
+        programSkips: state?.skips.keys.toSet() ?? const {},
+        itemLifts: itemLifts,
+        weekWorkingSets: state?.weekSets ?? const [],
+        muscleMap: parseExerciseMuscleMap(version),
+        muscleGroups: hypertrophyMuscleGroups(version),
       ),
       today: _today,
       weekStartDay: weekStartDay,
@@ -296,7 +349,7 @@ class GoalsScreenState extends State<GoalsScreen> {
               ),
             ),
             for (final g in data.goals)
-              _GoalCard(goal: g, onTap: () => _openSheet(g)),
+              GoalCard(goal: g, onTap: () => _openSheet(g)),
           ],
         );
       },
@@ -310,45 +363,67 @@ class GoalsScreenState extends State<GoalsScreen> {
       showDragHandle: true,
       isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  _StatusDot(status: g.status),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      g.label,
-                      style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(g.value, style: Theme.of(ctx).textTheme.titleSmall),
-              if (g.detail.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(g.detail, style: AppText.tag(ctx)),
-              ],
-              if (g.config.description != null) ...[
-                const SizedBox(height: 12),
-                Text(g.config.description!),
-              ],
-              if (g.ticks.isNotEmpty) ...[
-                const SizedBox(height: 14),
-                for (final t in g.ticks) _LiftDetailLine(tick: t),
-              ],
-              const SizedBox(height: 8),
-            ],
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(ctx).size.height * 0.85,
+          ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            child: GoalDetail(goal: g),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The tap-through detail for one goal (bottom-sheet body).
+class GoalDetail extends StatelessWidget {
+  final GoalEval goal;
+  const GoalDetail({super.key, required this.goal});
+
+  @override
+  Widget build(BuildContext context) {
+    final g = goal;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _StatusDot(status: g.status),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                g.label,
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(g.value, style: Theme.of(context).textTheme.titleSmall),
+        if (g.detail.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(g.detail, style: AppText.tag(context)),
+        ],
+        if (g.config.description != null) ...[
+          const SizedBox(height: 12),
+          Text(g.config.description!),
+        ],
+        if (g.ticks.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          for (final t in g.ticks) _LiftDetailLine(tick: t),
+        ],
+        if (g.muscles.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          for (final m in g.muscles) _MuscleDetail(row: m),
+        ],
+        const SizedBox(height: 8),
+      ],
     );
   }
 }
@@ -393,10 +468,11 @@ class _StatusDot extends StatelessWidget {
   }
 }
 
-class _GoalCard extends StatelessWidget {
+/// One goal row on the Week tab.
+class GoalCard extends StatelessWidget {
   final GoalEval goal;
   final VoidCallback onTap;
-  const _GoalCard({required this.goal, required this.onTap});
+  const GoalCard({super.key, required this.goal, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -439,7 +515,21 @@ class _GoalCard extends StatelessWidget {
               ],
               if (goal.ticks.isNotEmpty) ...[
                 const SizedBox(height: 8),
-                _LiftTickRow(ticks: goal.ticks),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [for (final t in goal.ticks) _LiftChip(tick: t)],
+                ),
+              ],
+              if (goal.muscles.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    for (final m in goal.muscles) _MuscleChip(row: m),
+                  ],
+                ),
               ],
             ],
           ),
@@ -449,51 +539,14 @@ class _GoalCard extends StatelessWidget {
   }
 }
 
-/// Per-lift hard-set progress pills for the hard_sets goal — one chip
-/// per lift showing sets toward target and an accessory tick.
-class _LiftTickRow extends StatelessWidget {
-  final List<GoalLiftTick> ticks;
-  const _LiftTickRow({required this.ticks});
+class _Pill extends StatelessWidget {
+  final String text;
+  final Color color;
+  final Widget? trailing;
+  const _Pill({required this.text, required this.color, this.trailing});
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 6,
-      children: [
-        for (final t in ticks)
-          _LiftChip(tick: t),
-      ],
-    );
-  }
-}
-
-String _liftName(String key) => switch (key) {
-      'press' => 'overhead press',
-      _ => key,
-    };
-
-class _LiftChip extends StatelessWidget {
-  final GoalLiftTick tick;
-  const _LiftChip({required this.tick});
-
-  @override
-  Widget build(BuildContext context) {
-    final done = tick.hardSets >= tick.target;
-    final some = tick.hardSets > 0;
-    // Grey = nothing logged yet. When the lift's routine day is still
-    // ahead, say so ("· Fri") so grey reads "not trained yet", not
-    // "missed" — deadlift is Friday-only, the last day of the week.
-    final due = tick.pending
-        ? ' · ${tick.remainingDays.map(weekdayShort).join('/')}'
-        : '';
-    final color = done
-        ? Colors.green.shade600
-        : some
-            ? Colors.amber.shade700
-            : Theme.of(context).colorScheme.outline;
-    // Accessory tick appended when declared for the lift.
-    final acc = tick.accessoriesDone;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -504,28 +557,54 @@ class _LiftChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            '${_liftName(tick.lift)} ${tick.hardSets}/${tick.target}$due',
+            text,
             style: Theme.of(context)
                 .textTheme
                 .bodySmall
                 ?.copyWith(color: color, fontWeight: FontWeight.w600),
           ),
-          if (acc != null) ...[
-            const SizedBox(width: 6),
-            Icon(
-              acc ? Icons.done : Icons.remove,
-              size: 13,
-              color: acc ? Colors.green.shade600 : color,
-            ),
-          ],
+          if (trailing != null) ...[const SizedBox(width: 6), trailing!],
         ],
       ),
     );
   }
 }
 
-/// One lift's detail line in the sheet: hard sets vs target + accessory
-/// state, in full words.
+/// One lift's chip: program sets done / prescribed (legacy: hard sets /
+/// ~10), plus the days still carrying its work ("· Fri") so a short lift
+/// whose day is ahead reads "not trained yet", not "missed".
+class _LiftChip extends StatelessWidget {
+  final GoalLiftTick tick;
+  const _LiftChip({required this.tick});
+
+  @override
+  Widget build(BuildContext context) {
+    final due = tick.dueAhead
+        ? ' · ${tick.remainingDays.map(weekdayShort).join('/')}'
+        : '';
+    final color = tick.complete
+        ? Colors.green.shade600
+        : tick.behind
+            ? Theme.of(context).colorScheme.error
+            : tick.done > 0
+                ? Colors.amber.shade700
+                : Theme.of(context).colorScheme.outline;
+    final acc = tick.accessoriesDone;
+    return _Pill(
+      text: '${liftDisplayName(tick.lift)} ${tick.done}/${tick.target}$due',
+      color: color,
+      trailing: acc == null
+          ? null
+          : Icon(
+              acc ? Icons.done : Icons.remove,
+              size: 13,
+              color: acc ? Colors.green.shade600 : color,
+            ),
+    );
+  }
+}
+
+/// One lift's detail line in the sheet, in full words.
 class _LiftDetailLine extends StatelessWidget {
   final GoalLiftTick tick;
   const _LiftDetailLine({required this.tick});
@@ -538,17 +617,131 @@ class _LiftDetailLine extends StatelessWidget {
         : acc
             ? ' · accessories done'
             : ' · accessories not yet';
-    final days = tick.pending ? tick.remainingDays : tick.scheduledDays;
-    final when = days.isEmpty
-        ? ''
-        : tick.pending
-            ? ' · due ${days.map(weekdayShort).join('/')}'
-            : ' · trained ${days.map(weekdayShort).join('/')}';
+    final String when;
+    if (tick.dueAhead) {
+      when = ' · still due ${tick.remainingDays.map(weekdayShort).join('/')}';
+    } else if (tick.scheduledDays.isNotEmpty) {
+      when = ' · trained ${tick.scheduledDays.map(weekdayShort).join('/')}';
+    } else {
+      when = '';
+    }
+    final behind = tick.behind ? ' · behind (earlier sets not logged)' : '';
+    final String head;
+    if (tick.fromProgram) {
+      head = '${liftDisplayName(tick.lift)}: ${tick.done} of ${tick.target} '
+          'program sets (${tick.hardSets} at RPE 7 or higher)';
+    } else if (tick.done != tick.hardSets) {
+      head = '${liftDisplayName(tick.lift)}: ${tick.done} of ${tick.target} '
+          'sets (your target; ${tick.hardSets} at RPE 7 or higher)';
+    } else {
+      head = '${liftDisplayName(tick.lift)}: ${tick.hardSets} of '
+          '${tick.target} hard sets';
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Text(
-        '${_liftName(tick.lift)}: ${tick.hardSets} of ${tick.target} '
-        'hard sets$when$accText',
+      child: Text('$head$when$behind$accText'),
+    );
+  }
+}
+
+String _sets1(double v) => v.toStringAsFixed(1);
+
+String _bandText(GoalMuscleRow m) =>
+    '${m.lo.toStringAsFixed(m.lo % 1 == 0 ? 0 : 1)}–'
+    '${m.hi.toStringAsFixed(m.hi % 1 == 0 ? 0 : 1)}';
+
+Color _muscleColor(BuildContext context, GoalMuscleRow m) => m.over
+    ? Theme.of(context).colorScheme.error
+    : m.inBand
+        ? Colors.green.shade600
+        : m.behindPace
+            ? Colors.amber.shade700
+            : Theme.of(context).colorScheme.outline;
+
+class _MuscleChip extends StatelessWidget {
+  final GoalMuscleRow row;
+  const _MuscleChip({required this.row});
+
+  @override
+  Widget build(BuildContext context) => _Pill(
+        text: '${muscleDisplayName(row.group)} ${_sets1(row.sets)}',
+        color: _muscleColor(context, row),
+      );
+}
+
+/// One muscle group in the sheet: sets vs the band (bar with the band
+/// shaded), its state in words, and what contributed.
+class _MuscleDetail extends StatelessWidget {
+  final GoalMuscleRow row;
+  const _MuscleDetail({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _muscleColor(context, row);
+    final scheme = Theme.of(context).colorScheme;
+    final scale = [row.hi * 1.25, row.sets].reduce((a, b) => a > b ? a : b);
+    final pace = row.behindPace ? ' · behind pace' : '';
+    final from = row.contributors.isEmpty
+        ? 'nothing logged yet'
+        : row.contributors
+            .map((e) => '${e.key} ${_sets1(e.value)}')
+            .join(' · ');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${muscleDisplayName(row.group)}: ${_sets1(row.sets)} sets · '
+            '${row.state} (${_bandText(row)})$pace',
+            style: TextStyle(color: color, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          LayoutBuilder(
+            builder: (context, c) {
+              final w = c.maxWidth;
+              double x(double v) => (v / scale).clamp(0.0, 1.0) * w;
+              return SizedBox(
+                height: 8,
+                width: w,
+                child: Stack(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    // The band.
+                    Positioned(
+                      left: x(row.lo),
+                      width: x(row.hi) - x(row.lo),
+                      top: 0,
+                      bottom: 0,
+                      child: Container(
+                        color: Colors.green.shade600.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      width: x(row.sets),
+                      top: 2,
+                      bottom: 2,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: color,
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 4),
+          Text('from: $from', style: AppText.tag(context)),
+        ],
       ),
     );
   }

@@ -58,8 +58,11 @@
 /// Pure Dart, no Flutter, no IO — the strip UI stays layout-only.
 library;
 
+export 'muscle_volume.dart' show MuscleMap, parseExerciseMuscleMap;
+
 import 'package:yaml/yaml.dart';
 
+import 'muscle_volume.dart';
 import 'program_metrics.dart'
     show GradedSet, anchorMondayOf, mainLiftByExercise, weekStartOf;
 
@@ -359,60 +362,6 @@ class LoggedSet {
     required this.exercise,
     required this.reps,
   });
-}
-
-/// The v9 exercise → muscle-group credit map (program.yaml
-/// `exercise_muscle_map`): per-SET fractional credits per group, plus
-/// the per-SESSION climbing credits. Parsed by [parseExerciseMuscleMap].
-class MuscleMap {
-  /// Exact logged exercise name → {group: credit}. Lookup is exact
-  /// first, then longest declared PREFIX ("Muscle Up Purple Band"
-  /// counts under "Muscle Up").
-  final Map<String, Map<String, double>> exercises;
-
-  /// One climbing session's credits ({back: 3, forearms: 3, ...}).
-  final Map<String, double> climbingSession;
-
-  const MuscleMap({
-    required this.exercises,
-    this.climbingSession = const {},
-  });
-
-  /// Credits for a logged [exercise] name, or null when unmapped.
-  Map<String, double>? creditsFor(String exercise) {
-    final exact = exercises[exercise];
-    if (exact != null) return exact;
-    String? bestKey;
-    for (final key in exercises.keys) {
-      if (exercise.startsWith(key) &&
-          (bestKey == null || key.length > bestKey.length)) {
-        bestKey = key;
-      }
-    }
-    return bestKey == null ? null : exercises[bestKey];
-  }
-}
-
-/// Parses a program VERSION map's `exercise_muscle_map` (v9). Null when
-/// absent/malformed — the hypertrophy driver then reports pending.
-MuscleMap? parseExerciseMuscleMap(Map<Object?, Object?>? version) {
-  final raw = version?['exercise_muscle_map'];
-  if (raw is! Map) return null;
-  Map<String, double> credits(Object? m) => m is Map
-      ? {
-          for (final e in m.entries)
-            if (e.value is num) e.key.toString(): (e.value as num).toDouble(),
-        }
-      : const {};
-  final exercises = raw['exercises'];
-  if (exercises is! Map) return null;
-  return MuscleMap(
-    exercises: {
-      for (final e in exercises.entries)
-        e.key.toString(): credits(e.value),
-    },
-    climbingSession: credits(raw['climbing_session']),
-  );
 }
 
 /// Already-fetched observations the evaluators read. All dates may be
@@ -816,26 +765,20 @@ List<DriverEval> evaluateWeekDrivers({
             : {
                 for (final m in map.exercises.values) ...m.keys,
               }.toList();
-        final counts = {for (final g in groups) g: 0.0};
-        for (final s in inputs.strengthSets) {
-          if (!inWeek(s.date)) continue;
-          final credits = map.creditsFor(s.exercise);
-          if (credits == null) continue;
-          for (final e in credits.entries) {
-            if (counts.containsKey(e.key)) {
-              counts[e.key] = counts[e.key]! + e.value;
-            }
-          }
-        }
         final climbSessions = <DateTime>{
           for (final d in inputs.climbingDates)
             if (inWeek(d)) _day(d),
         }.length;
-        for (final e in map.climbingSession.entries) {
-          if (counts.containsKey(e.key)) {
-            counts[e.key] = counts[e.key]! + climbSessions * e.value;
-          }
-        }
+        final volume = weeklyMuscleVolume(
+          map: map,
+          groups: groups,
+          setNames: [
+            for (final s in inputs.strengthSets)
+              if (inWeek(s.date)) s.exercise,
+          ],
+          climbSessions: climbSessions,
+        );
+        final counts = {for (final g in groups) g: volume[g]!.sets};
         final ticks = <DriverTick>[
           for (final g in groups)
             DriverTick(

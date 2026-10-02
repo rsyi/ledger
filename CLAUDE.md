@@ -102,10 +102,26 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   phase-selected via effectivePhaseKey — cut vs recomp differ). Goal ids:
   `macros` (protein g/lb or absolute grams + carbs floor), `calorie_band`
   (cut→deficit / bulk|recomp→surplus band, maintenance from
-  nutrition_model's adaptive estimate), `hard_sets` (per main lift, sets
-  RPE 8-9 this week toward ~10 — the hypertrophy landmark — + per-lift
-  accessory-completion check, accessories declared from the routine),
-  `climbing` (2/wk), `cardio_4x4` (1/wk). Both tabs keep pull-to-refresh
+  nutrition_model's adaptive estimate), `hard_sets` = "Program sets per
+  lift" (2026-10-02: per main lift, WORKING sets logged / sets the
+  EFFECTIVE Mon–Sun program week prescribes — moves applied, skips out;
+  item→lift via `mainLiftByItem` (program card's matchItemLines, name
+  fallback); progress via `weekLiftCredits` in missed_work.dart = the
+  detector's exclusive allocation + an early-work pass, RPE-blind, so it
+  agrees with the Today card; red only when an EARLIER day's item is
+  short (= missed work); RPE≥7 count is secondary (sheet);
+  `hard_set_targets` = override only (counts all lift sets); no program
+  week → legacy hard-sets-vs-10 over the accounting week; per-lift
+  accessory check), `muscle_stimulus` = "Sets per muscle group" (working
+  sets Mon–Sun per hypertrophy group vs `band` [8,12] via the shared
+  muscle_volume.dart counter — also used by week_drivers
+  hypertrophy_volume + recomp_review; climbing credited per session,
+  calisthenics via case/hyphen-blind names + handstand/hspu aliases; met
+  = all in band, else amber — never red: the cut week itself prescribes
+  back/biceps/triceps > 12 once climbing counts, so over is flagged per
+  group only; pacing = lo × weekday/7), `climbing` (2/wk), `cardio_4x4`
+  (1/wk). Week tab now gets program_moves + calisthenics views and reads
+  through WeekStateLoader (WeekState.weekSets). Both tabs keep pull-to-refresh
   (own GlobalKeys). Absent/malformed `goals:` → screen placeholder,
   never crashes. Current phase = cut, so the cut goal set is live; the
   recomp set flips the calorie band to surplus + protein to absolute

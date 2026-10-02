@@ -241,3 +241,54 @@ String? lineContext(SessionLine line,
   }
   return null;
 }
+
+/// Key for [mainLiftByItem]: the item's HOME day (the program's day, so
+/// a moved item keeps its lift) + its name, case-blind.
+String itemLiftKey(DateTime home, String name) =>
+    '${home.year}-${home.month}-${home.day}|${name.trim().toLowerCase()}';
+
+/// Main lift (squat/bench/deadlift/press) of every prescribed item that
+/// IS main-lift work, keyed by [itemLiftKey] — from the same
+/// [matchItemLines] mapping the program card prices with ("Bench
+/// volume" → its Flat Barbell Bench Press line → bench; "Bulgarian split
+/// squat" → its own accessory line → absent). Items no priced line
+/// claims fall back to [mainLiftOfItemName]. Items whose lines span two
+/// lifts take the first line's.
+Map<String, String> mainLiftByItem(
+  Map<DateTime, List<PrescribedItem>> prescribed,
+  PricedWeek priced,
+) {
+  final out = <String, String>{};
+  prescribed.forEach((day, items) {
+    final matched = matchItemLines(items, priced.on(day));
+    for (var i = 0; i < items.length; i++) {
+      String? lift;
+      for (final l in matched[i]) {
+        lift = mainLiftByExercise[l.exercise];
+        if (lift != null) break;
+      }
+      if (matched[i].isEmpty) lift = mainLiftOfItemName(items[i].name);
+      if (lift != null) out[itemLiftKey(day, items[i].name)] = lift;
+    }
+  });
+  return out;
+}
+
+/// Name-only fallback: the item NAME starts with the main lift
+/// ("Squat heavy", "OHP back-offs", "Overhead press 3x8", "Bench") →
+/// that lift; anything else (incl. "Bulgarian split squat", "RDL") →
+/// null.
+String? mainLiftOfItemName(String name) {
+  final n = name.trim().toLowerCase();
+  if (n.startsWith('overhead press') || n.startsWith('military press')) {
+    return 'press';
+  }
+  final first = RegExp(r'^[a-z]+').firstMatch(n)?.group(0);
+  return switch (first) {
+    'squat' => 'squat',
+    'bench' => 'bench',
+    'deadlift' => 'deadlift',
+    'ohp' || 'press' => 'press',
+    _ => null,
+  };
+}

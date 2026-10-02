@@ -54,6 +54,11 @@ class WeekState {
   /// excluded — `workingSetRecords`), one entry per set.
   final List<String> loggedOnDate;
 
+  /// The week's WORKING sets (strength + calisthenics, warm-ups
+  /// excluded), one entry per set, Mon..Sun — what the missed-work
+  /// detector allocates; the Week tab's program progress reuses it.
+  final List<({DateTime date, String exercise})> weekSets;
+
   /// Whoop workouts (all days; empty when no source / failed).
   final List<WhoopActivity> whoop;
 
@@ -70,6 +75,7 @@ class WeekState {
     required this.week,
     required this.strengthRows,
     required this.loggedOnDate,
+    this.weekSets = const [],
     required this.whoop,
     required this.missed,
   });
@@ -298,6 +304,7 @@ class WeekStateLoader {
       week: week,
       strengthRows: strengthRows,
       loggedOnDate: logged,
+      weekSets: strengthWeek,
       whoop: whoop,
       missed: missed,
     );

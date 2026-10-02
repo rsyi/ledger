@@ -185,7 +185,8 @@ Set<String> _tokens(String s) {
   for (var w in cleaned.split(RegExp(r'\s+'))) {
     if (w.isEmpty) continue;
     w = _alias[w] ?? w;
-    if (w.length > 3 && w.endsWith('s')) w = w.substring(0, w.length - 1);
+    // Plurals ("ups" too, so "Pull-ups" ~ "Pull-up").
+    if (w.length > 2 && w.endsWith('s')) w = w.substring(0, w.length - 1);
     if (_stop.contains(w) || w.length < 2) continue;
     out.add(w);
   }
@@ -199,6 +200,27 @@ bool loggedMatchesPrescribed(String loggedName, String prescribedName) {
   final a = _tokens(loggedName);
   final b = _tokens(prescribedName);
   return a.isNotEmpty && b.isNotEmpty && a.intersection(b).isNotEmpty;
+}
+
+// Qualifiers that make a logged movement a DIFFERENT lift from a bare
+// prescription ("Bulgarian Split Squat" is not "Squat", "Bench Press" is
+// not "Press") — token form, see [_tokens].
+const _variant = {
+  'romanian', 'bulgarian', 'split', 'leg', 'bench', 'overhead', 'military',
+  'hack', 'front', 'goblet', 'pistol', 'incline', 'decline',
+};
+
+/// STRONG match, for crediting spare sets from another day: EVERY
+/// identifying token of the prescribed name appears in the logged name
+/// ("Bench Press" covers "Bench heavy"; "Parallel Bar Triceps Dip" does
+/// NOT cover "Triceps extension"), and the logged name adds no variant
+/// qualifier the prescription lacks ("Bench Press" does not cover
+/// "Press top set").
+bool loggedCoversPrescribed(String loggedName, String prescribedName) {
+  final a = _tokens(loggedName);
+  final b = _tokens(prescribedName);
+  if (a.isEmpty || b.isEmpty || !a.containsAll(b)) return false;
+  return !a.difference(b).any(_variant.contains);
 }
 
 /// Counts, per prescribed item, how many logged sets match it (token

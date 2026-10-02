@@ -358,4 +358,103 @@ void main() {
     expect([for (final x in m.missed) '${x.item.name}|${x.kind}'],
         ['Norwegian|cardio']);
   });
+
+  group('cross-day spare sets need a STRONG match (I3)', () {
+    MissedWork one(String item, int target, DateTime loggedDay, String ex,
+            int n) =>
+        detectMissedWork(
+          week: effectiveWeek({
+            d(0): [it(item, scheme: '${target}x10', sets: target)],
+          }, const {}),
+          strengthRows: sets(loggedDay, ex, n),
+          climbDays: const {},
+          cardio4x4Days: const {},
+          today: d(4),
+        );
+
+    test('Thu triceps dip does not cover Mon triceps extension', () {
+      final mw = one('Triceps extension', 2, d(3),
+          'Parallel Bar Triceps Dip', 3);
+      expect(mw.missed.single.item.name, 'Triceps extension');
+      expect(mw.missed.single.setsShort, 2);
+    });
+
+    test('hanging leg raise does not cover lateral raise', () {
+      final mw = one('Lateral raise', 3, d(3), 'Hanging Leg Raise', 3);
+      expect(mw.missed.single.setsShort, 3);
+    });
+
+    test('pull up does not cover face pull', () {
+      final mw = one('Face pulls', 2, d(3), 'Pull Up', 3);
+      expect(mw.missed.single.setsShort, 2);
+    });
+
+    test('Bulgarian split squat does not cover squat; bench press does '
+        'not cover press', () {
+      expect(one('Squat', 3, d(3), 'Bulgarian Split Squat', 3).isEmpty,
+          isFalse);
+      expect(one('Press top set', 1, d(3), 'Bench Press', 1).isEmpty,
+          isFalse);
+    });
+
+    test('"Bench Press" logged Thu covers Wed "Bench heavy"', () {
+      final mw = detectMissedWork(
+        week: effectiveWeek({
+          d(2): [it('Bench heavy', scheme: '1x3')],
+        }, const {}),
+        strengthRows: sets(d(3), 'Bench Press', 1),
+        climbDays: const {},
+        cardio4x4Days: const {},
+        today: d(4),
+      );
+      expect(mw.isEmpty, isTrue);
+    });
+
+    test('plural prescriptions still strong-match singular logs', () {
+      final mw = one('Pull-ups', 2, d(3), 'Pull-up', 2);
+      expect(mw.isEmpty, isTrue);
+    });
+  });
+
+  group('allocateDay — one exclusive per-day allocation (I4)', () {
+    test('Fri moved-in "Bench heavy" + own "Bench volume", 3 bench sets → '
+        'own item (program order) complete, moved-in short', () {
+      final week = effectiveWeek({
+        d(2): [it('Bench heavy', scheme: '1x3')],
+        d(4): [it('Bench volume', scheme: '3x8-10', sets: 3)],
+      }, activeMoves([mv('Bench heavy', d(2), d(4))], mon));
+      final fri = [for (final e in week[d(4)]!) if (!e.isGhost) e.item];
+      expect(fri.map((i) => i.name), ['Bench volume', 'Bench heavy']);
+      final out = allocateDay(fri, List.filled(3, 'Bench Press'));
+      expect(out[0].loggedSets, 3);
+      expect(out[0].done, isTrue);
+      expect(out[1].loggedSets, 0);
+      expect(out[1].done, isFalse);
+      // The detector agrees (today Sat): only the moved-in item is short.
+      final mw = detectMissedWork(
+        week: week,
+        strengthRows: sets(d(4), 'Bench Press', 3),
+        climbDays: const {},
+        cardio4x4Days: const {},
+        today: d(5),
+      );
+      expect(mw.missed.map((m) => m.item.name), ['Bench heavy']);
+    });
+
+    test('strong matches claim first: face-pull sets go to face pulls, '
+        'not to pull-ups listed earlier', () {
+      final out = allocateDay([
+        it('Pull-ups', scheme: '2x6', sets: 2),
+        it('Face pulls', scheme: '2x15', sets: 2),
+      ], ['Face Pull', 'Face Pull', 'Pull Up', 'Pull Up']);
+      expect([for (final i in out) i.loggedSets], [2, 2]);
+    });
+
+    test('session items are left untouched', () {
+      final out = allocateDay([
+        it('Hard climb', period: 'PM'),
+      ], ['Climbing']);
+      expect(out.single.loggedSets, 0);
+    });
+  });
 }

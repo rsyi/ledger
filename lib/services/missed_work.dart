@@ -4,12 +4,14 @@
 /// An item is MISSED when it was due on a day strictly before today and
 /// the week's logged work doesn't cover it. Accounting is week-to-date,
 /// so doing Wed's bench on Thu without a move still clears it:
-///   * lifts — logged sets (one row per set) matched by exercise tokens
-///     (`loggedMatchesPrescribed`); each set credits at most one item.
-///     Allocation: today's items claim today's sets first (today's work
-///     is today's, not a makeup), then each due item claims its own
-///     day's sets in day order, then shortfalls draw on the week's
-///     remaining (Mon..today) sets in day order.
+///   * lifts — logged WORKING sets (one row per set; warm-ups filtered
+///     upstream by `workingSetRecords`); each set credits at most one
+///     item. Pass 1: each day's items claim that day's sets via
+///     [allocateDay] (the same allocation the program day card shows),
+///     so today's work is today's, not a makeup. Pass 2: past-due
+///     shortfalls draw on the week's unclaimed (Mon..today) sets in day
+///     order — STRONG matches only (`loggedCoversPrescribed`), so one
+///     shared token ("triceps") can't credit a different movement.
 ///   * climb items (`isClimbItem`) — sessions: one climb day covers one
 ///     item. Same order: today, own day, then any spare climb day.
 ///   * 4x4 items (name/scheme mentions "4x4") — same, vs cardio 4x4 days.
@@ -109,6 +111,55 @@ String _kindOf(PrescribedItem i) {
   return 'lift';
 }
 
+/// Exclusive allocation of one day's logged sets to that day's items:
+/// each set credits at most one item. Strong matches
+/// (`loggedCoversPrescribed`) are claimed first, then loose ones
+/// (`loggedMatchesPrescribed`) fill remaining shortfalls; within each
+/// phase items claim in list order, sets in logged order.
+///
+/// ORDER: pass items in program order — own items first, moved-in items
+/// after (the order `effectiveWeek` produces). So Fri's own "Bench
+/// volume 3x8" claims Fri's bench sets before a moved-in "Bench heavy".
+///
+/// Returns per-item claimed counts and the claimed mask over [logged].
+/// Only lift items take part ([programItemKind]); session items get 0.
+({List<int> got, List<bool> claimed}) _allocate(
+    List<PrescribedItem> items, List<String> logged) {
+  final got = List<int>.filled(items.length, 0);
+  final claimed = List<bool>.filled(logged.length, false);
+  final lift = [for (final i in items) _kindOf(i) == 'lift'];
+  for (final strong in [true, false]) {
+    for (var i = 0; i < items.length; i++) {
+      if (!lift[i]) continue;
+      for (var j = 0;
+          j < logged.length && got[i] < items[i].targetSets;
+          j++) {
+        if (claimed[j]) continue;
+        final ok = strong
+            ? loggedCoversPrescribed(logged[j], items[i].name)
+            : loggedMatchesPrescribed(logged[j], items[i].name);
+        if (!ok) continue;
+        claimed[j] = true;
+        got[i]++;
+      }
+    }
+  }
+  return (got: got, claimed: claimed);
+}
+
+/// [items] with `loggedSets` set by ONE exclusive per-day allocation of
+/// [loggedNames] (one entry per WORKING set logged that day) — shared by
+/// the program day card, the day synthesis and the detector's pass 1 so
+/// they always agree. Session items (climb / 4x4) are returned unchanged.
+List<PrescribedItem> allocateDay(
+    List<PrescribedItem> items, List<String> loggedNames) {
+  final r = _allocate(items, loggedNames);
+  return [
+    for (var i = 0; i < items.length; i++)
+      _kindOf(items[i]) == 'lift' ? items[i].withLogged(r.got[i]) : items[i],
+  ];
+}
+
 class _Slot {
   final EffectiveItem e;
   final DateTime day;
@@ -168,11 +219,31 @@ MissedWork detectMissedWork({
         (day: dayOnly(r.date), exercise: r.exercise),
   ];
   final claimed = List<bool>.filled(pool.length, false);
-  void claimLift(_Slot s, {required bool sameDayOnly}) {
+  // Pass 1 (lifts): per day, the shared exclusive allocation.
+  for (final day in days) {
+    final daySlots = [
+      for (final s in slots)
+        if (s.day == day && s.kind == 'lift') s,
+    ];
+    final idx = [
+      for (var i = 0; i < pool.length; i++)
+        if (pool[i].day == day) i,
+    ];
+    if (daySlots.isEmpty || idx.isEmpty) continue;
+    final r = _allocate([for (final s in daySlots) s.e.item],
+        [for (final i in idx) pool[i].exercise]);
+    for (var k = 0; k < daySlots.length; k++) {
+      daySlots[k].got += r.got[k];
+    }
+    for (var k = 0; k < idx.length; k++) {
+      if (r.claimed[k]) claimed[idx[k]] = true;
+    }
+  }
+  // Pass 2 (lifts): spare sets from any day — strong matches only.
+  void claimSpareLift(_Slot s) {
     for (var i = 0; i < pool.length && s.short; i++) {
       if (claimed[i]) continue;
-      if (sameDayOnly && pool[i].day != s.day) continue;
-      if (!loggedMatchesPrescribed(pool[i].exercise, s.e.item.name)) continue;
+      if (!loggedCoversPrescribed(pool[i].exercise, s.e.item.name)) continue;
       claimed[i] = true;
       s.got++;
     }
@@ -203,18 +274,20 @@ MissedWork detectMissedWork({
     s.got++;
   }
 
-  void claim(_Slot s, {required bool sameDayOnly}) => s.kind == 'lift'
-      ? claimLift(s, sameDayOnly: sameDayOnly)
-      : claimSession(s, sameDayOnly: sameDayOnly);
-
-  // Pass 1: every slot (today first) takes its own day's work.
+  // Pass 1 (sessions): every slot (today first) takes its own day's
+  // session. (Lifts were allocated per day above.)
   for (final s in ordered) {
-    claim(s, sameDayOnly: true);
+    if (s.kind != 'lift') claimSession(s, sameDayOnly: true);
   }
   // Pass 2: past-due shortfalls draw on the week's spare work, in day
   // order. Today's slots aren't due, so they don't compete here.
   for (final s in slots) {
-    if (s.day != t) claim(s, sameDayOnly: false);
+    if (s.day == t) continue;
+    if (s.kind == 'lift') {
+      claimSpareLift(s);
+    } else {
+      claimSession(s, sameDayOnly: false);
+    }
   }
 
   return MissedWork(

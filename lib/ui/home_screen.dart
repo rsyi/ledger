@@ -1263,6 +1263,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         strengthRepo: dashStrengthView == null
                             ? null
                             : data.registry.forView(dashStrengthView),
+                        workoutsView: dashWorkoutsView,
+                        workoutsRepo: dashboardRepoFor(
+                          dashWorkoutsView,
+                          readOnlyRepo: data.readOnlyRepo,
+                          forView: data.registry.forView,
+                        ),
                       ),
                     ],
                   ),
@@ -1486,6 +1492,12 @@ class _HomeScreenState extends State<HomeScreen> {
                           strengthRepo: dashStrengthView == null
                               ? null
                               : data.registry.forView(dashStrengthView),
+                          workoutsView: dashWorkoutsView,
+                          workoutsRepo: dashboardRepoFor(
+                            dashWorkoutsView,
+                            readOnlyRepo: data.readOnlyRepo,
+                            forView: data.registry.forView,
+                          ),
                         ),
                       _DomainSections(
                         key: _domainsKey,

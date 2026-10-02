@@ -10,6 +10,7 @@ import '../../services/program_current.dart' show programCurrent;
 import '../../services/program_provider.dart' show IntentDocs, ProgramProvider;
 import '../../services/set_recommendation.dart';
 import '../../services/warehouse_connector.dart';
+import '../../services/whoop_activity.dart';
 
 /// The program view for a day: the prescribed session as a CHECKLIST
 /// (every lift and accessory the routine names — squat, muscle-ups,
@@ -33,6 +34,11 @@ class ProgramDayCard extends StatefulWidget {
   final ViewSchema? strengthView;
   final WarehouseConnector? strengthRepo;
 
+  /// Whoop workouts — a Whoop climb on the card's day ticks the
+  /// prescribed climb (Kaya exports lag). Null → logged sets only.
+  final ViewSchema? workoutsView;
+  final WarehouseConnector? workoutsRepo;
+
   const ProgramDayCard({
     super.key,
     required this.provider,
@@ -40,6 +46,8 @@ class ProgramDayCard extends StatefulWidget {
     required this.date,
     this.strengthView,
     this.strengthRepo,
+    this.workoutsView,
+    this.workoutsRepo,
   });
 
   @override
@@ -133,6 +141,18 @@ class ProgramDayCardState extends State<ProgramDayCard> {
         }
       } catch (_) {/* honest empty */}
       items = markPrescribedDone(items, logged);
+    }
+
+    final wv = widget.workoutsView;
+    final wr = widget.workoutsRepo;
+    if (wv != null && wr != null && items.isNotEmpty) {
+      try {
+        final day = [
+          for (final a in whoopActivitiesFromRecords(await wr.list(wv)))
+            if (_sameDay(a.date, date)) a,
+        ];
+        items = creditClimbItems(items, day);
+      } catch (_) {/* honest: logged-only */}
     }
     return _DayData(prescription, items);
   }
@@ -357,10 +377,11 @@ class _ExerciseRow extends StatelessWidget {
             : partial
                 ? (Icons.pie_chart_outline, scheme.tertiary)
                 : (Icons.circle_outlined, muted);
-    // "k/N" when logged against a multi-set target.
-    final counter = showCheck && (item.loggedSets > 0 || item.targetSets > 1)
-        ? '${item.loggedSets}/${item.targetSets}'
-        : null;
+    // Whoop credit note ("strain 14.8") wins over the set counter.
+    final counter = item.creditNote ??
+        (showCheck && (item.loggedSets > 0 || item.targetSets > 1)
+            ? '${item.loggedSets}/${item.targetSets}'
+            : null);
 
     return InkWell(
       onTap: onTap,

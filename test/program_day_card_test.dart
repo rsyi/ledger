@@ -16,7 +16,9 @@ import 'package:airledger/services/log_event_bus.dart';
 import 'package:airledger/services/warehouse_connector.dart';
 import 'package:airledger/services/week_state_loader.dart';
 import 'package:airledger/services/wm_tabs.dart';
+import 'package:airledger/ui/design/design.dart';
 import 'package:airledger/ui/widgets/program_day_card.dart';
+import 'package:airledger/ui/widgets/video_preview.dart';
 
 const _fitness = '../airledger-fitness';
 
@@ -150,7 +152,7 @@ void main() {
 
   Finder menuOf(String name) => find.descendant(
     of: find
-        .ancestor(of: find.text(name), matching: find.byType(InkWell))
+        .ancestor(of: find.textContaining(name), matching: find.byType(InkWell))
         .first,
     matching: find.byIcon(Icons.more_vert),
   );
@@ -161,15 +163,15 @@ void main() {
     if (!hasFitness) return;
     final moves = _FakeRepo([benchMove()]);
     await pump(tester, date: fri, moves: moves);
-    expect(find.text('Bench heavy'), findsOneWidget);
-    expect(find.text('from Wed'), findsOneWidget);
+    expect(find.textContaining('Bench heavy'), findsOneWidget);
+    expect(find.textContaining('from Wed'), findsOneWidget);
     // Fri's 5 own items + the moved-in bench.
     expect(find.text('0 / 6 done'), findsOneWidget);
     expect(moves.lists, 1, reason: 'moves read once per load');
 
     await pump(tester, date: wed, moves: _FakeRepo([benchMove()]));
-    expect(find.text('Bench heavy'), findsOneWidget);
-    expect(find.text('→ Fri'), findsOneWidget);
+    expect(find.textContaining('Bench heavy'), findsOneWidget);
+    expect(find.textContaining('moved → Fri'), findsOneWidget);
     // Ghost isn't counted (Wed: 4 live of 5); its menu is Undo-only
     // (covered below).
     expect(find.text('0 / 4 done'), findsOneWidget);
@@ -189,7 +191,7 @@ void main() {
     ]);
     await pump(tester, date: fri, moves: _FakeRepo([benchMove()]),
         strength: strength);
-    expect(find.text('3/3'), findsOneWidget);
+    expect(find.textContaining('Bench volume  3 sets'), findsOneWidget);
     expect(find.text('1 / 6 done'), findsOneWidget);
   });
 
@@ -204,7 +206,8 @@ void main() {
         {'id': 's$i', 'date': fri, 'exercise': 'Bench Press', 'weight': w},
     ]);
     await pump(tester, date: fri, moves: _FakeRepo(), strength: strength);
-    expect(find.text('2/3'), findsOneWidget);
+    expect(find.textContaining('Bench volume  2 of 3 sets · best 225 lb'),
+        findsOneWidget);
     expect(find.text('0 / 5 done'), findsOneWidget);
   });
 
@@ -233,7 +236,7 @@ void main() {
     expect(m.source, 'manual');
     expect(m.createdAt, isNotNull);
     // Reloaded: Fri now shows the ghost.
-    expect(find.text('→ Sat'), findsOneWidget);
+    expect(find.textContaining('moved → Sat'), findsOneWidget);
   });
 
   testWidgets('Undo move writes a back-home row (latest-wins cancel)', (
@@ -251,8 +254,10 @@ void main() {
     expect(back.item, 'Bench heavy');
     expect(back.from, wed);
     expect(back.to, wed);
-    expect(find.text('Bench heavy'), findsNothing);
-    expect(find.text('from Wed'), findsNothing);
+    // Off Fri's program; back home on Wed (so it now reads as missed).
+    expect(find.textContaining('Bench heavy'), findsOneWidget);
+    expect(find.textContaining('Bench heavy  due Wed'), findsOneWidget);
+    expect(find.textContaining('from Wed'), findsNothing);
   });
 
   testWidgets('Undo move with an OLDER move row still sends it home', (
@@ -288,7 +293,7 @@ void main() {
     if (!hasFitness) return;
     final moves = _FakeRepo([benchMove()]);
     await pump(tester, date: wed, moves: moves);
-    expect(find.text('→ Fri'), findsOneWidget);
+    expect(find.textContaining('moved → Fri'), findsOneWidget);
     await tester.tap(menuOf('Bench heavy'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(PopupMenuItem<String>, 'Move to…'),
@@ -298,7 +303,7 @@ void main() {
     final back = ProgramMove.fromRecord(moves.created.single)!;
     expect(back.from, wed);
     expect(back.to, wed);
-    expect(find.text('→ Fri'), findsNothing);
+    expect(find.textContaining('moved → Fri'), findsNothing);
   });
 
   testWidgets('Move to… picker: past days disabled; home stays pickable '
@@ -359,16 +364,16 @@ void main() {
       climbing: climbing,
     );
     expect(find.text('MISSED THIS WEEK'), findsOneWidget);
-    expect(find.text('Squat heavy — Mon, 0/1 sets'), findsOneWidget);
-    expect(find.text('Norwegian — Tue, not logged'), findsOneWidget);
+    expect(find.textContaining('Squat heavy  due Mon · 0 of 1 sets'), findsOneWidget);
+    expect(find.textContaining('Norwegian  due Tue · not logged'), findsOneWidget);
     // Climb logged Tue; pull-ups logged Wed; bench moved to today.
-    expect(find.textContaining('Climb — HARD session —'), findsNothing);
-    expect(find.textContaining('Pull-ups —'), findsNothing);
-    expect(find.textContaining('Bench heavy —'), findsNothing);
+    expect(find.textContaining('Climb — HARD session  due'), findsNothing);
+    expect(find.textContaining('Pull-ups  due'), findsNothing);
+    expect(find.textContaining('Bench heavy  due'), findsNothing);
 
     final row = find.ancestor(
-      of: find.text('Squat heavy — Mon, 0/1 sets'),
-      matching: find.byType(Row),
+      of: find.textContaining('Squat heavy  due Mon · 0 of 1 sets'),
+      matching: find.byType(ExerciseRow),
     );
     await tester.tap(
       find.descendant(
@@ -384,7 +389,7 @@ void main() {
     expect(m.from, DateTime(2026, 9, 28));
     expect(m.to, DateTime(2026, 10, 3));
     expect(m.source, 'manual');
-    expect(find.text('Squat heavy — Mon, 0/1 sets'), findsNothing);
+    expect(find.textContaining('Squat heavy  due Mon · 0 of 1 sets'), findsNothing);
   });
 
   testWidgets('a log event reloads WITHOUT a spinner and without '
@@ -442,11 +447,11 @@ void main() {
     if (!hasFitness) return;
     await pump(tester, date: fri, moves: _FakeRepo(), wm: tms());
     // Deadlift TM 340 × wave wk1 81% = 275; back-offs 75% = 255.
-    expect(find.text('1×5 · 275 lb (81%)'), findsOneWidget);
-    expect(find.text('2×4 · 255 lb (75%)'), findsOneWidget);
-    expect(find.text('Romanian Deadlift 2×8-12'), findsOneWidget);
+    expect(find.textContaining('Deadlift heavy  1×5 · 275 lb (81%)'), findsOneWidget);
+    expect(find.textContaining('2×4 · 255 lb (75%)'), findsOneWidget);
+    expect(find.textContaining('Romanian Deadlift 2×8-12'), findsOneWidget);
     // One line per item; climb keeps its prose.
-    expect(find.text('Deadlift heavy'), findsOneWidget);
+    expect(find.textContaining('Deadlift heavy'), findsOneWidget);
     expect(find.textContaining('technique/volume'), findsOneWidget);
   });
 
@@ -456,7 +461,7 @@ void main() {
     if (!hasFitness) return;
     await pump(tester, date: fri, moves: _FakeRepo([benchMove()]), wm: tms());
     // Wed bench top: 245 × 0.811 → 200.
-    expect(find.text('1×5 · 200 lb (81%)'), findsOneWidget);
+    expect(find.textContaining('from Wed · 1×5 · 200 lb (81%)'), findsOneWidget);
   });
 
   testWidgets('info sheet leads with the program; no "+5 lb" over it', (
@@ -471,7 +476,7 @@ void main() {
     ]);
     await pump(tester,
         date: fri, moves: _FakeRepo(), strength: strength, wm: tms());
-    await tester.tap(find.text('Deadlift heavy'));
+    await tester.tap(find.textContaining('Deadlift heavy'));
     await tester.pumpAndSettle();
     expect(find.text('TODAY'), findsOneWidget);
     expect(find.text('1×5 · 275 lb (81%) (wave wk1, 81% TM)'), findsOneWidget);
@@ -508,9 +513,9 @@ void main() {
     expect(m.from, fri);
     expect(m.to, fri);
     expect(m.note, 'pain');
-    expect(find.text('skipped — pain'), findsOneWidget);
+    expect(find.textContaining('skipped — pain'), findsOneWidget);
     expect(find.text('0 / 4 done'), findsOneWidget, reason: 'not counted');
-    expect(find.text('→ Fri'), findsNothing, reason: 'a skip is not a move');
+    expect(find.textContaining('moved → Fri'), findsNothing, reason: 'a skip is not a move');
   });
 
   testWidgets('Undo skip deletes the skip row', (tester) async {
@@ -527,7 +532,7 @@ void main() {
       ).toRecord(),
     ]);
     await pump(tester, date: fri, moves: moves);
-    expect(find.text('skipped — time'), findsOneWidget);
+    expect(find.textContaining('skipped — time'), findsOneWidget);
     await tester.tap(menuOf('Deadlift heavy'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(PopupMenuItem<String>, 'Move to…'),
@@ -535,7 +540,7 @@ void main() {
     await tester.tap(find.text('Undo skip'));
     await tester.pumpAndSettle();
     expect([for (final r in moves.deleted) r['id']], ['s1']);
-    expect(find.text('skipped — time'), findsNothing);
+    expect(find.textContaining('skipped — time'), findsNothing);
     expect(find.text('0 / 5 done'), findsOneWidget);
   });
 
@@ -545,10 +550,10 @@ void main() {
     if (!hasFitness) return;
     final moves = _FakeRepo();
     await pump(tester, date: fri, moves: moves);
-    expect(find.text('Squat heavy — Mon, 0/1 sets'), findsOneWidget);
+    expect(find.textContaining('Squat heavy  due Mon · 0 of 1 sets'), findsOneWidget);
     final row = find.ancestor(
-      of: find.text('Squat heavy — Mon, 0/1 sets'),
-      matching: find.byType(Row),
+      of: find.textContaining('Squat heavy  due Mon · 0 of 1 sets'),
+      matching: find.byType(ExerciseRow),
     );
     await tester.tap(find.descendant(
         of: row.first, matching: find.widgetWithText(TextButton, 'Skip…')));
@@ -561,6 +566,149 @@ void main() {
     expect(m.source, 'skip');
     expect(m.to, DateTime(2026, 9, 28));
     expect(m.from, DateTime(2026, 9, 28));
-    expect(find.text('Squat heavy — Mon, 0/1 sets'), findsNothing);
+    expect(find.textContaining('Squat heavy  due Mon · 0 of 1 sets'), findsNothing);
+  });
+
+  // ---- UI redesign phase 3: accomplishment-forward rows + inline clips ----
+
+  Record set(String id, String ex, num w, int reps,
+          {num rpe = 8, String? clip, String? setType}) =>
+      {
+        'id': id,
+        'date': fri,
+        'exercise': ex,
+        'weight': w,
+        'reps': reps,
+        'rpe': rpe,
+        'set_type': ?setType,
+        if (clip != null) 'video_url': 'https://photos.google.com/lr/photo/$clip',
+        'video_media_id': ?clip,
+      };
+
+  Finder rowOf(String text) => find.ancestor(
+      of: find.textContaining(text), matching: find.byType(ExerciseRow));
+
+  testWidgets('done items show what was achieved, clips inline, also logged',
+      (tester) async {
+    if (!hasFitness) return;
+    final strength = _FakeRepo([
+      // Warm-up (clip filed under the item that claimed the lift).
+      set('w1', 'Barbell Deadlift', 135, 5, rpe: 4, setType: 'warmup', clip: 'warm'),
+      // A back-off logged BEFORE the top set: the top item still shows
+      // the heaviest set; the third back-off folds into back-offs.
+      set('b1', 'Barbell Deadlift', 255, 4, rpe: 7),
+      set('t1', 'Barbell Deadlift', 275, 6, rpe: 8.5, clip: 'top'),
+      set('b2', 'Barbell Deadlift', 255, 4, rpe: 7),
+      set('b3', 'Barbell Deadlift', 255, 4, rpe: 7.5),
+      set('r1', 'Romanian Deadlift', 135, 10),
+      set('r2', 'Romanian Deadlift', 135, 10),
+      for (var i = 0; i < 3; i++) set('p$i', 'Bench Press', 160, 8),
+      // Matches no Fri item → Also logged, with its clip.
+      set('f1', 'Cable Face Pull', 17.5, 19, clip: 'face'),
+    ]);
+    await pump(tester,
+        date: fri, moves: _FakeRepo(), strength: strength, wm: tms());
+
+    expect(find.textContaining('Deadlift heavy  top 275×6'), findsOneWidget);
+    expect(find.textContaining('Deadlift back-offs  3×4 · 255 lb'),
+        findsOneWidget);
+    expect(find.textContaining('RDL or leg curl  2×10 · 135 lb'),
+        findsOneWidget);
+    expect(find.textContaining('Bench volume  3×8 · 160 lb'), findsOneWidget);
+    expect(find.text('4 / 5 done'), findsOneWidget);
+    // Done rows: a done mark, no strikethrough, no prescription.
+    final top = rowOf('Deadlift heavy');
+    expect(
+        tester
+            .widget<StatusMark>(
+                find.descendant(of: top, matching: find.byType(StatusMark)))
+            .status,
+        ItemStatus.done);
+    expect(find.textContaining('275 lb (81%)'), findsNothing);
+
+    // Clips inline in the collapsed row (top set + the warm-up's).
+    final thumbs = find.descendant(of: top, matching: find.byType(VideoThumb));
+    expect(thumbs, findsNWidgets(2));
+    expect({
+      for (final t in tester.widgetList<VideoThumb>(thumbs)) t.mediaId,
+    }, {'top', 'warm'});
+    expect(tester.widget<VideoThumb>(thumbs.first).size, 44);
+
+    // Also logged: same row style, achieved meta + clip.
+    expect(find.text('ALSO LOGGED'), findsOneWidget);
+    final face = rowOf('Cable Face Pull  17.5×19');
+    expect(face, findsOneWidget);
+    expect(
+        tester
+            .widget<VideoThumb>(
+                find.descendant(of: face, matching: find.byType(VideoThumb)))
+            .mediaId,
+        'face');
+  });
+
+  testWidgets('more than three clips: two thumbs + "+N" opens them all',
+      (tester) async {
+    if (!hasFitness) return;
+    final strength = _FakeRepo([
+      for (var i = 0; i < 4; i++) set('p$i', 'Bench Press', 160, 8, clip: 'c$i'),
+    ]);
+    await pump(tester,
+        date: fri, moves: _FakeRepo(), strength: strength, wm: tms());
+    final row = rowOf('Bench volume  4×8');
+    expect(find.descendant(of: row, matching: find.byType(VideoThumb)),
+        findsNWidgets(2));
+    expect(find.descendant(of: row, matching: find.text('+2')), findsOneWidget);
+    // The 4th set folds into the item (no "Also logged" for a surplus set).
+    expect(find.text('ALSO LOGGED'), findsNothing);
+    expect(find.textContaining('Bench volume  4×8 · 160 lb'), findsOneWidget);
+    await tester.tap(find.text('+2'));
+    await tester.pumpAndSettle();
+    expect(find.byType(DetailSheet), findsOneWidget);
+    expect(find.descendant(
+            of: find.byType(DetailSheet), matching: find.byType(VideoThumb)),
+        findsNWidgets(4));
+  });
+
+  testWidgets('partial item shows progress; pending keeps the prescription',
+      (tester) async {
+    if (!hasFitness) return;
+    final strength = _FakeRepo([set('p0', 'Bench Press', 160, 8)]);
+    await pump(tester,
+        date: fri, moves: _FakeRepo(), strength: strength, wm: tms());
+    expect(find.textContaining('Bench volume  1 of 3 sets · best 160×8'),
+        findsOneWidget);
+    expect(
+        tester
+            .widget<StatusMark>(find.descendant(
+                of: rowOf('Bench volume  1 of 3'),
+                matching: find.byType(StatusMark)))
+            .status,
+        ItemStatus.partial);
+    expect(find.textContaining('Deadlift heavy  1×5 · 275 lb (81%)'),
+        findsOneWidget);
+  });
+
+  testWidgets('skipped + ghost rows render muted', (tester) async {
+    if (!hasFitness) return;
+    final skip = ProgramMove(
+      id: 's1',
+      to: fri,
+      from: fri,
+      item: 'Deadlift heavy',
+      period: 'AM',
+      source: 'skip',
+      createdAt: DateTime(2026, 10, 2, 8),
+      note: 'time',
+    ).toRecord();
+    await pump(tester, date: fri, moves: _FakeRepo([skip]));
+    final skipped = tester.widget<ExerciseRow>(rowOf('skipped — time'));
+    expect(skipped.name, 'Deadlift heavy');
+    expect(skipped.muted, isTrue);
+    expect(skipped.status, ItemStatus.muted);
+
+    await pump(tester, date: wed, moves: _FakeRepo([benchMove()]));
+    final ghost = tester.widget<ExerciseRow>(rowOf('Bench heavy  moved → Fri'));
+    expect(ghost.muted, isTrue);
+    expect(ghost.status, ItemStatus.muted);
   });
 }

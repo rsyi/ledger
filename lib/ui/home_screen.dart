@@ -62,8 +62,6 @@ import 'coach_threads_screen.dart';
 import 'widgets/daily_progress_card.dart';
 import 'widgets/program_day_card.dart';
 import 'widgets/recovery_card.dart';
-import 'widgets/today_clips_card.dart';
-import 'widgets/training_progress_card.dart';
 import 'home_dashboard.dart';
 import 'goals_screen.dart';
 import 'app_text.dart';
@@ -179,8 +177,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _todayStatusKey.currentState?.refresh();
       _recoveryKey.currentState?.reload();
       _dailyProgressKey.currentState?.reload();
-      _trainingProgressKey.currentState?.reload();
-      _todayClipsKey.currentState?.reload();
       _todayProgramKey.currentState?.reload();
     }
   }
@@ -213,8 +209,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _todayProgramKey = GlobalKey<ProgramDayCardState>();
   final _logProgramKey = GlobalKey<ProgramDayCardState>();
   final _recoveryKey = GlobalKey<RecoveryCardState>();
-  final _trainingProgressKey = GlobalKey<TrainingProgressCardState>();
-  final _todayClipsKey = GlobalKey<TodayClipsCardState>();
 
   /// The day the Today tab is showing (date-only). The top-of-tab day
   /// navigator shifts it; every card on the tab reflects it.
@@ -645,8 +639,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               _todayStatusKey.currentState?.refresh();
               _recoveryKey.currentState?.reload();
               _dailyProgressKey.currentState?.reload();
-              _trainingProgressKey.currentState?.reload();
-              _todayClipsKey.currentState?.reload();
               _todayProgramKey.currentState?.reload();
             }
           },
@@ -1243,8 +1235,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     _todayStatusKey.currentState?.refresh();
                     _recoveryKey.currentState?.reload();
                     _dailyProgressKey.currentState?.reload();
-                    _trainingProgressKey.currentState?.reload();
-                    _todayClipsKey.currentState?.reload();
                     _todayProgramKey.currentState?.reload();
                   },
                   child: ListView(
@@ -1354,26 +1344,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             : data.registry.forView(weightView),
                         date: _dayViewDate,
                       ),
-                      // 4. Training progress (what was logged).
-                      TrainingProgressCard(
-                        key: _trainingProgressKey,
-                        strengthView: dashStrengthView,
-                        strengthRepo: dashStrengthView == null
-                            ? null
-                            : data.registry.forView(dashStrengthView),
-                        date: _dayViewDate,
-                      ),
-                      // 4b. Clips: today's attached-video highlights.
-                      TodayClipsCard(
-                        key: _todayClipsKey,
-                        strengthView: dashStrengthView,
-                        strengthRepo: dashStrengthView == null
-                            ? null
-                            : data.registry.forView(dashStrengthView),
-                        date: _dayViewDate,
-                      ),
-                      // 5. The PROGRAM for the selected day — a checklist
-                      // that ticks green as sets are logged.
+                      // 4. The PROGRAM for the selected day — the ONE
+                      // training surface: each item ticks green with what
+                      // was achieved + its clips inline; unmatched work
+                      // lands in "Also logged" (UI redesign phase 3).
                       ProgramDayCard(
                         key: _todayProgramKey,
                         provider: programProvider,

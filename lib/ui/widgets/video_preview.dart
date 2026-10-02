@@ -96,6 +96,9 @@ class VideoThumb extends StatelessWidget {
   final String url;
   final String? mediaId;
   final String? label;
+
+  /// Player title when there's no caption [label] (inline thumbs).
+  final String? title;
   final double size;
 
   const VideoThumb({
@@ -103,6 +106,7 @@ class VideoThumb extends StatelessWidget {
     required this.url,
     required this.mediaId,
     this.label,
+    this.title,
     this.size = 96,
   });
 
@@ -149,7 +153,7 @@ class VideoThumb extends StatelessWidget {
     );
 
     return GestureDetector(
-      onTap: () => playVideo(context, url, mediaId, title: label),
+      onTap: () => playVideo(context, url, mediaId, title: label ?? title),
       child: label == null
           ? thumb
           : Column(

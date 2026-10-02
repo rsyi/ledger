@@ -134,12 +134,14 @@ String _kindOf(PrescribedItem i) {
 /// after (the order `effectiveWeek` produces). So Fri's own "Bench
 /// volume 3x8" claims Fri's bench sets before a moved-in "Bench heavy".
 ///
-/// Returns per-item claimed counts and the claimed mask over [logged].
-/// Only lift items take part ([programItemKind]); session items get 0.
-({List<int> got, List<bool> claimed}) _allocate(
+/// Returns per-item claimed counts, the claimed mask over [logged] and
+/// each set's owning item index (-1 = unclaimed). Only lift items take
+/// part ([programItemKind]); session items get 0.
+({List<int> got, List<bool> claimed, List<int> owner}) _allocate(
     List<PrescribedItem> items, List<String> logged) {
   final got = List<int>.filled(items.length, 0);
   final claimed = List<bool>.filled(logged.length, false);
+  final owner = List<int>.filled(logged.length, -1);
   final lift = [for (final i in items) _kindOf(i) == 'lift'];
   // Strong phase: items claim in program order.
   for (var i = 0; i < items.length; i++) {
@@ -149,6 +151,7 @@ String _kindOf(PrescribedItem i) {
         continue;
       }
       claimed[j] = true;
+      owner[j] = i;
       got[i]++;
     }
   }
@@ -171,9 +174,10 @@ String _kindOf(PrescribedItem i) {
     }
     if (best < 0) continue;
     claimed[j] = true;
+    owner[j] = best;
     got[best]++;
   }
-  return (got: got, claimed: claimed);
+  return (got: got, claimed: claimed, owner: owner);
 }
 
 /// [items] with `loggedSets` set by ONE exclusive per-day allocation of
@@ -187,6 +191,22 @@ List<PrescribedItem> allocateDay(
     for (var i = 0; i < items.length; i++)
       _kindOf(items[i]) == 'lift' ? items[i].withLogged(r.got[i]) : items[i],
   ];
+}
+
+/// [allocateDay] plus WHICH set went where: `owner[j]` is the index of
+/// the item [loggedNames]`[j]` credited, or -1 when it credited none —
+/// the Today card's "what was achieved" + "Also logged" source. Same
+/// allocation, so its counts always agree with [allocateDay].
+({List<PrescribedItem> items, List<int> owner}) allocateDayOwners(
+    List<PrescribedItem> items, List<String> loggedNames) {
+  final r = _allocate(items, loggedNames);
+  return (
+    items: [
+      for (var i = 0; i < items.length; i++)
+        _kindOf(items[i]) == 'lift' ? items[i].withLogged(r.got[i]) : items[i],
+    ],
+    owner: r.owner,
+  );
 }
 
 class _Slot {

@@ -19,6 +19,7 @@ import '../../services/program_provider.dart' show IntentDocs, ProgramProvider;
 import '../../services/warehouse_connector.dart';
 import '../../services/weight_series.dart' show loadDailyWeighIns;
 import '../../services/wilks.dart' show contemporaneousBodyweightLbs;
+import '../design/design.dart';
 import 'skeleton.dart';
 
 /// The Today tab's hero: today's intake as calorie + macro progress bars.
@@ -269,7 +270,6 @@ class DailyProgressCardState extends State<DailyProgressCard> {
     return FutureBuilder<List<MacroBar>?>(
       future: _future,
       builder: (context, snap) {
-        final scheme = Theme.of(context).colorScheme;
         Widget body;
         if (snap.connectionState != ConnectionState.done) {
           body = const Padding(
@@ -293,17 +293,15 @@ class DailyProgressCardState extends State<DailyProgressCard> {
                   onEdit: b.label == 'Calories' ? _editMaintenance : null,
                   isOverride: b.label == 'Calories' && _maintenanceIsOverride,
                 ),
-                if (b != bars.last) const SizedBox(height: 10),
+                if (b != bars.last) const SizedBox(height: 8),
               ],
             ],
           );
         }
-        return Material(
-          color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-            child: body,
-          ),
+        return AppCard(
+          margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: body,
         );
       },
     );
@@ -331,11 +329,12 @@ class _MacroBarRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final status = StatusColors.of(context);
     final (fill, textColor) = switch (bar.state) {
-      MacroState.good => (scheme.primary, scheme.onSurface),
-      MacroState.high => (scheme.error, scheme.error),
-      MacroState.low => (scheme.tertiary, scheme.onSurface),
-      MacroState.none => (scheme.outline, scheme.onSurfaceVariant),
+      MacroState.good => (status.done, scheme.onSurface),
+      MacroState.high => (status.problem, status.problem),
+      MacroState.low => (status.partial, scheme.onSurface),
+      MacroState.none => (status.muted, scheme.onSurfaceVariant),
     };
     // 'under maint' reads as the cut goal (eat below maintenance); the
     // ~ marks it as an estimate unless the user pinned it (• set).
@@ -351,20 +350,14 @@ class _MacroBarRow extends StatelessWidget {
       children: [
         SizedBox(
           width: 58,
-          child: Text(
-            bar.label,
-            style: Theme.of(context)
-                .textTheme
-                .bodyMedium
-                ?.copyWith(color: scheme.onSurface),
-          ),
+          child: Text(bar.label, style: AppText.row(context)),
         ),
         Expanded(
           child: ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
               value: bar.fraction,
-              minHeight: 8,
+              minHeight: 6,
               backgroundColor: scheme.surfaceContainerHighest,
               valueColor: AlwaysStoppedAnimation<Color>(fill),
             ),
@@ -380,10 +373,7 @@ class _MacroBarRow extends StatelessWidget {
                 child: Text(
                   trailing,
                   textAlign: TextAlign.right,
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodySmall
-                      ?.copyWith(color: textColor),
+                  style: AppText.meta(context).copyWith(color: textColor),
                 ),
               ),
               if (onEdit != null)

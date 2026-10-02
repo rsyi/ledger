@@ -15,6 +15,7 @@ import '../../services/program_provider.dart';
 import '../../services/today_program_call.dart' show shouldPromptKayaSync;
 import '../../services/today_status.dart';
 import '../../services/warehouse_connector.dart';
+import '../design/design.dart';
 import 'skeleton.dart';
 
 /// IDs of the quiet background integrations the gated refresh force-pulls
@@ -382,30 +383,19 @@ class TodayStatusCardState extends State<TodayStatusCard> {
 
     // Fallback: the original two static lines (disable_post_log / no LLM).
     final status = _status;
-    return Material(
-      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-      child: InkWell(
-        onTap: widget.onOpen,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-          child: Row(
-            children: [
-              Expanded(
-                child: status == null
-                    ? Text(
-                        'Today',
-                        style: TextStyle(
-                          color: scheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      )
-                    : _line(context, status.exerciseText,
-                        status.exerciseState),
-              ),
-              Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
-            ],
+    return AppCard(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+      onTap: widget.onOpen,
+      child: Row(
+        children: [
+          Expanded(
+            child: status == null
+                ? Text('Today', style: AppText.section(context))
+                : _line(context, status.exerciseText, status.exerciseState),
           ),
-        ),
+          Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+        ],
       ),
     );
   }
@@ -425,39 +415,31 @@ class TodayStatusCardState extends State<TodayStatusCard> {
   /// shown and the tap gesture now opens the coach.
   Widget _buildSynthesis(BuildContext context, ColorScheme scheme) {
     final synth = _synthesis;
-    return Material(
-      color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // --- header (refresh affordance lives here) ---
-            Row(
+    return AppCard(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.fromLTRB(16, 4, 8, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // --- header: ✨ COACH'S READ + the refresh affordance ---
+          SizedBox(
+            height: 36,
+            child: Row(
               children: [
-                Text(
-                  'Today',
-                  style: TextStyle(
-                    color: scheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                  ),
+                Icon(Icons.auto_awesome, size: 14, color: scheme.tertiary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text("COACH'S READ", style: AppText.section(context)),
                 ),
-                const Spacer(),
                 if (_syncStatus != null) ...[
-                  Text(
-                    _syncStatus!,
-                    style: TextStyle(
-                      color: scheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
-                  ),
+                  Text(_syncStatus!, style: AppText.meta(context)),
                   const SizedBox(width: 8),
                   const SizedBox(
                     width: 14,
                     height: 14,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
+                  const SizedBox(width: 8),
                 ] else if (_synthesizing)
                   const Padding(
                     padding: EdgeInsets.only(right: 8),
@@ -469,23 +451,20 @@ class TodayStatusCardState extends State<TodayStatusCard> {
                   )
                 else
                   IconButton(
-                    icon: const Icon(Icons.refresh, size: 18),
+                    icon: Icon(Icons.refresh,
+                        size: 18, color: scheme.onSurfaceVariant),
                     visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
                     onPressed: () => unawaited(onRefreshPressed(context)),
                     tooltip: 'Refresh',
                   ),
-                const SizedBox(width: 8),
               ],
             ),
-            const SizedBox(height: 6),
-            // --- AI read: markdown, tap → continue in Coach. This card is
-            // the coach's read only (2026-10-01) — macros, training, and the
-            // program checklist are their own cards on the Today tab. ---
-            _buildAiRead(context, scheme, synth),
-          ],
-        ),
+          ),
+          // --- AI read: markdown, tap → continue in Coach. This card is
+          // the coach's read only — macros and the program are their own
+          // cards on the Today tab. ---
+          _buildAiRead(context, scheme, synth),
+        ],
       ),
     );
   }
@@ -508,24 +487,10 @@ class TodayStatusCardState extends State<TodayStatusCard> {
         // markdown non-selectable so the whole block routes to the InkWell.
         selectable: false,
         styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-          p: Theme.of(context)
-              .textTheme
-              .bodyMedium
-              ?.copyWith(color: scheme.onSurface, fontSize: 14),
-          strong: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: scheme.onSurface,
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-              ),
-          em: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: scheme.onSurface,
-                fontSize: 14,
-                fontStyle: FontStyle.italic,
-              ),
-          listBullet: Theme.of(context)
-              .textTheme
-              .bodyMedium
-              ?.copyWith(color: scheme.onSurface, fontSize: 14),
+          p: _readStyle(context),
+          strong: _readStyle(context).copyWith(fontWeight: FontWeight.w600),
+          em: _readStyle(context).copyWith(fontStyle: FontStyle.italic),
+          listBullet: _readStyle(context),
         ),
       );
     } else if (_synthesizing) {
@@ -549,43 +514,25 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Icon(Icons.auto_awesome, size: 16, color: scheme.tertiary),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Today',
-                style: TextStyle(
-                  color: scheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-            if (open != null && synth != null)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Ask the coach',
-                      style: TextStyle(
-                        color: scheme.tertiary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    Icon(Icons.chevron_right, size: 16, color: scheme.tertiary),
-                  ],
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 6),
         body,
+        if (open != null && synth != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6, right: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Ask the coach',
+                  style: AppText.meta(context).copyWith(
+                    color: scheme.tertiary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 2),
+                Icon(Icons.chevron_right, size: 16, color: scheme.tertiary),
+              ],
+            ),
+          ),
       ],
     );
 
@@ -601,6 +548,10 @@ class TodayStatusCardState extends State<TodayStatusCard> {
       ),
     );
   }
+
+  /// The read's body text: the row role at regular weight, airier.
+  static TextStyle _readStyle(BuildContext context) =>
+      AppText.row(context).copyWith(fontWeight: FontWeight.w400, height: 1.4);
 
   Widget _line(BuildContext context, String text, TodayState state) {
     final scheme = Theme.of(context).colorScheme;

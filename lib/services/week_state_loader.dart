@@ -54,6 +54,11 @@ class WeekState {
   /// excluded — `workingSetRecords`), one entry per set.
   final List<String> loggedOnDate;
 
+  /// Parallel to [loggedOnDate]: the strength record behind each entry,
+  /// or null for a calisthenics set (no per-set record). Lets the card
+  /// say WHAT was achieved for each item (weight × reps).
+  final List<Record?> loggedRecordsOnDate;
+
   /// The week's WORKING sets (strength + calisthenics, warm-ups
   /// excluded), one entry per set, Mon..Sun — what the missed-work
   /// detector allocates; the Week tab's program progress reuses it.
@@ -75,6 +80,7 @@ class WeekState {
     required this.week,
     required this.strengthRows,
     required this.loggedOnDate,
+    this.loggedRecordsOnDate = const [],
     this.weekSets = const [],
     required this.whoop,
     required this.missed,
@@ -241,6 +247,7 @@ class WeekStateLoader {
 
     List<Record>? strengthRows;
     final logged = <String>[];
+    final loggedRecords = <Record?>[];
     final strengthWeek = <({DateTime date, String exercise})>[];
     if (strengthList != null) {
       try {
@@ -250,7 +257,10 @@ class WeekStateLoader {
           final d = _date(r['date']);
           final ex = r['exercise']?.toString().trim();
           if (d == null || ex == null || ex.isEmpty) continue;
-          if (dayOnly(d) == day) logged.add(ex);
+          if (dayOnly(d) == day) {
+            logged.add(ex);
+            loggedRecords.add(r);
+          }
           if (mondayOf(d) == mon) {
             strengthWeek.add((date: dayOnly(d), exercise: ex));
           }
@@ -261,7 +271,10 @@ class WeekStateLoader {
     if (calisthenicsRows != null) {
       try {
         for (final c in calisthenicsLoggedSets(calisthenicsRows)) {
-          if (c.date == day) logged.add(c.exercise);
+          if (c.date == day) {
+            logged.add(c.exercise);
+            loggedRecords.add(null);
+          }
           if (mondayOf(c.date) == mon) strengthWeek.add(c);
         }
       } catch (_) {/* honest: strength-only */}
@@ -304,6 +317,7 @@ class WeekStateLoader {
       week: week,
       strengthRows: strengthRows,
       loggedOnDate: logged,
+      loggedRecordsOnDate: loggedRecords,
       weekSets: strengthWeek,
       whoop: whoop,
       missed: missed,

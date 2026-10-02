@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../models/view_schema.dart';
 import '../../services/accessory_progression.dart';
+import '../../services/day_achievement.dart';
 import '../../services/day_prescription.dart';
 import '../../services/home_synthesis.dart' show strengthRowFromRecord;
 import '../../services/log_event_bus.dart';
@@ -18,11 +19,14 @@ import '../../services/program_provider.dart' show ProgramProvider;
 import '../../services/program_week.dart' show dayOnly, mondayOf;
 import '../../services/routine_display.dart' show SessionLine;
 import '../../services/set_recommendation.dart';
+import '../../services/video_rpe.dart' show mediaIdFieldFor;
 import '../../services/sync_scheduler.dart';
 import '../../services/warehouse_connector.dart';
 import '../../services/week_state_loader.dart';
 import '../../services/whoop_activity.dart';
 import '../../services/wm_tabs.dart' show WmSnapshot;
+import '../design/design.dart';
+import 'video_preview.dart';
 
 /// The program view for a day: the prescribed session as a CHECKLIST
 /// (every lift and accessory the routine names — squat, muscle-ups,
@@ -127,6 +131,13 @@ class _DayData {
   /// Strength history (accessory suggestions in the info sheet).
   final List<StrengthRow> history;
 
+  /// Per live item (identity): the working sets shown as its achievement
+  /// and the clips of its sets ([achieveDay]).
+  final Map<EffectiveItem, (List<AchievedSet>, List<DayClip>)> achieved;
+
+  /// Logged work that matched no item ("Also logged").
+  final List<ExtraWork> extra;
+
   const _DayData(
     this.prescription,
     this.items,
@@ -136,6 +147,8 @@ class _DayData {
     this.lines = const {},
     this.skips = const {},
     this.history = const [],
+    this.achieved = const {},
+    this.extra = const [],
   });
 
   List<SessionLine> linesOf(EffectiveItem e) =>
@@ -181,9 +194,9 @@ const _wdNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 String _wd(DateTime d) => _wdNames[d.weekday - 1];
 String _dayLabel(DateTime d) => '${_wd(d)} ${d.month}/${d.day}';
 
-/// "Bench heavy — Wed, 0/1 sets" / "Climb — Tue, not logged".
-String missedLine(MissedItem m) => '${m.item.name} — ${_wd(m.day)}, '
-    '${m.isSession ? 'not logged' : '${m.item.loggedSets}/${m.item.targetSets} sets'}';
+/// A missed row's meta: "due Wed · 0 of 1 sets" / "due Tue · not logged".
+String missedMeta(MissedItem m) => 'due ${_wd(m.day)} · '
+    '${m.isSession ? 'not logged' : '${m.item.loggedSets} of ${m.item.targetSets} sets'}';
 
 class ProgramDayCardState extends State<ProgramDayCard> {
   late Future<_DayData?> _future;
@@ -271,42 +284,6 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     if (state == null) return null;
     var entries = state.day;
 
-    // Done-marking + Whoop credit apply to the items that live here
-    // (ghosts are shown, never counted).
-    List<EffectiveItem> mapLive(
-        List<PrescribedItem> Function(List<PrescribedItem>) f) {
-      final live = [for (final e in entries) if (!e.isGhost) e];
-      if (live.isEmpty) return entries;
-      final marked = f([for (final e in live) e.item]);
-      var i = 0;
-      return [
-        for (final e in entries)
-          e.isGhost
-              ? e
-              : EffectiveItem(
-                  item: marked[i++],
-                  home: e.home,
-                  movedFrom: e.movedFrom,
-                  movedTo: e.movedTo,
-                  move: e.move,
-                ),
-      ];
-    }
-
-    if (widget.strengthView != null && widget.strengthRepo != null) {
-      if (state.strengthRows != null) _strengthRows = state.strengthRows;
-      // One exclusive allocation (each working set credits one item) —
-      // the same one the missed-work detector runs per day.
-      entries = mapLive((items) => allocateDay(items, state.loggedOnDate));
-    }
-    final day = [
-      for (final a in state.whoop)
-        if (_sameDay(a.date, date)) a,
-    ];
-    if (day.isNotEmpty) {
-      entries = mapLive((items) => creditClimbItems(items, day));
-    }
-
     // Plan-tab pricing (training max / wave / %TM / double progression).
     final wm = await wmFuture;
     // The TM tabs are a direct Sheets read: on a cold start it can fail
@@ -333,8 +310,122 @@ class ProgramDayCardState extends State<ProgramDayCard> {
         lines = _matchWeek(state.week, priced);
       } catch (_) {/* honest: prose schemes */}
     }
+
+    // What each live item ACHIEVED (+ its clips) and what was logged
+    // outside the program — one exclusive allocation (each working set
+    // credits one item), the same one the missed-work detector runs.
+    final achieved = <EffectiveItem, (List<AchievedSet>, List<DayClip>)>{};
+    var extra = const <ExtraWork>[];
+    if (widget.strengthView != null && widget.strengthRepo != null) {
+      if (state.strengthRows != null) _strengthRows = state.strengthRows;
+      final names = state.loggedOnDate;
+      final recs = state.loggedRecordsOnDate;
+      final logged = [
+        for (var j = 0; j < names.length; j++)
+          AchievedSet.fromRecord(names[j], j < recs.length ? recs[j] : null),
+      ];
+      final clips = _dayClips(state.strengthRows, date);
+      final live = [for (final e in entries) if (!e.isGhost) e];
+      final r = achieveDay(
+        items: [for (final e in live) e.item],
+        logged: logged,
+        clips: clips,
+        isTop: [
+          for (final e in live)
+            () {
+              final l = lines[_itemKey(e.home, e.item.name)] ?? const [];
+              return l.isNotEmpty && l.every((x) => x.top);
+            }(),
+        ],
+      );
+      extra = r.extra;
+      var i = 0;
+      entries = [
+        for (final e in entries)
+          e.isGhost
+              ? e
+              : () {
+                  final k = i++;
+                  final marked = EffectiveItem(
+                    item: r.items[k],
+                    home: e.home,
+                    movedFrom: e.movedFrom,
+                    movedTo: e.movedTo,
+                    move: e.move,
+                  );
+                  achieved[marked] = (r.sets[k], r.clips[k]);
+                  return marked;
+                }(),
+      ];
+    }
+    final day = [
+      for (final a in state.whoop)
+        if (_sameDay(a.date, date)) a,
+    ];
+    if (day.isNotEmpty) {
+      final live = [for (final e in entries) if (!e.isGhost) e];
+      if (live.isNotEmpty) {
+        final credited = creditClimbItems([for (final e in live) e.item], day);
+        var i = 0;
+        entries = [
+          for (final e in entries)
+            e.isGhost
+                ? e
+                : () {
+                    final next = EffectiveItem(
+                      item: credited[i++],
+                      home: e.home,
+                      movedFrom: e.movedFrom,
+                      movedTo: e.movedTo,
+                      move: e.move,
+                    );
+                    final a = achieved.remove(e);
+                    if (a != null) achieved[next] = a;
+                    return next;
+                  }(),
+        ];
+      }
+    }
     return _DayData(state.prescription, entries, state.week, state.missed,
-        priced: priced, lines: lines, skips: state.skips, history: history);
+        priced: priced,
+        lines: lines,
+        skips: state.skips,
+        history: history,
+        achieved: achieved,
+        extra: extra);
+  }
+
+  /// Every clip attached to [date]'s strength rows (warm-ups included —
+  /// [achieveDay] files those under the item that claimed the exercise).
+  List<DayClip> _dayClips(List<Map<String, Object?>>? rows, DateTime date) {
+    final sv = widget.strengthView;
+    if (rows == null || sv == null) return const [];
+    var field = 'video_url';
+    for (final d in sv.dimensions) {
+      if (d.input?.widget == WidgetType.video) {
+        field = d.name;
+        break;
+      }
+    }
+    final idField = mediaIdFieldFor(field);
+    final out = <DayClip>[];
+    for (final r in rows) {
+      final raw = r['date'];
+      final d = raw is DateTime
+          ? raw
+          : DateTime.tryParse(raw?.toString() ?? '');
+      if (d == null || !_sameDay(d, date)) continue;
+      final url = r[field]?.toString().trim() ?? '';
+      if (url.isEmpty) continue;
+      final mid = r[idField]?.toString().trim() ?? '';
+      out.add(DayClip(
+        url: url,
+        mediaId: mid.isEmpty ? null : mid,
+        exercise: r['exercise']?.toString().trim() ?? 'Clip',
+        record: r,
+      ));
+    }
+    return out;
   }
 
   bool get _canMove =>
@@ -517,7 +608,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
         final loading = snap.connectionState != ConnectionState.done;
         if (!loading) _last = snap.data;
         if (loading && _last == null) {
-          return const Card(
+          return const AppCard(
             margin: EdgeInsets.fromLTRB(12, 0, 12, 12),
             child: SizedBox(
               height: 96,
@@ -527,101 +618,92 @@ class ProgramDayCardState extends State<ProgramDayCard> {
         }
         final data = loading ? _last : snap.data;
         if (data == null) return const SizedBox.shrink();
-        final theme = Theme.of(context);
-        final muted = theme.colorScheme.onSurfaceVariant;
         final p = data.prescription;
         final showChecks = widget.strengthView != null;
         final live = data.liveOn(dayOnly(widget.date));
         final doneCount = live.where((e) => e.item.done).length;
+        final allDone = showChecks && live.isNotEmpty && doneCount == live.length;
         final missed = data.missed;
 
-        return Card(
+        return AppCard(
           margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text('${p.label} — program',
-                        style: theme.textTheme.titleSmall
-                            ?.copyWith(fontWeight: FontWeight.w700)),
-                    const SizedBox(width: 6),
-                    Text(p.weekday,
-                        style:
-                            theme.textTheme.bodySmall?.copyWith(color: muted)),
-                    const Spacer(),
-                    if (p.isRest && live.isEmpty)
-                      Text('Rest day',
-                          style: theme.textTheme.bodyMedium
-                              ?.copyWith(color: muted))
-                    else if (showChecks && live.isNotEmpty)
-                      Text('$doneCount / ${live.length} done',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: doneCount == live.length
-                                ? theme.colorScheme.primary
-                                : muted,
-                          )),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                if (data.items.isEmpty && !p.isRest)
-                  Text(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SectionHeader(
+                label: 'Program · ${p.weekday}',
+                count: p.isRest && live.isEmpty
+                    ? 'rest day'
+                    : showChecks && live.isNotEmpty
+                        ? '$doneCount / ${live.length} done'
+                        : null,
+                actions: [
+                  if (allDone)
+                    const Padding(
+                      padding: EdgeInsets.only(right: 12),
+                      child: StatusChip(
+                          label: 'complete', status: ItemStatus.done),
+                    ),
+                ],
+              ),
+              if (data.items.isEmpty && !p.isRest)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                      AppSpace.gutter, 0, AppSpace.gutter, 8),
+                  child: Text(
                     [p.morning, p.afternoon]
                         .where((s) => s != null)
                         .join('\n'),
-                    style: theme.textTheme.bodyMedium,
-                  )
-                else
-                  for (final period in const ['AM', 'PM'])
-                    ..._periodBlock(context, data, period, showChecks),
-                if (missed != null && !missed.isEmpty)
-                  ..._missedBlock(context, data, missed),
-              ],
-            ),
+                    style: AppText.meta(context),
+                  ),
+                )
+              else
+                for (final period in const ['AM', 'PM'])
+                  ..._periodBlock(context, data, period, showChecks),
+              if (data.extra.isNotEmpty) ..._extraBlock(context, data),
+              if (missed != null && !missed.isEmpty)
+                ..._missedBlock(context, data, missed),
+            ],
           ),
         );
       },
     );
   }
 
+  /// Small in-card period label (AM / PM) — lighter than a SectionHeader.
+  Widget _subLabel(BuildContext context, String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(AppSpace.gutter, 6, AppSpace.gutter, 0),
+        child: Text(text, style: AppText.section(context)),
+      );
+
   List<Widget> _periodBlock(
       BuildContext context, _DayData data, String period, bool showChecks) {
     final items = data.items;
     final group = items.where((e) => e.item.period == period).toList();
     if (group.isEmpty) return const [];
-    final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurfaceVariant;
     final bothPeriods = items.any((e) => e.item.period == 'AM') &&
         items.any((e) => e.item.period == 'PM');
     return [
-      if (bothPeriods)
-        Padding(
-          padding: const EdgeInsets.only(top: 4, bottom: 2),
-          child: Text(period,
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(letterSpacing: 0.8, color: muted)),
-        ),
+      if (bothPeriods) _subLabel(context, period),
       for (final e in group)
         () {
           final day = dayOnly(widget.date);
           final skip = data.skipOf(e, day);
           final lines = data.linesOf(e);
-          return _ExerciseRow(
+          final got = data.achieved[e];
+          return _ItemRow(
             item: e.item,
             showCheck: showChecks,
             movedTo: e.movedTo,
             movedFrom: e.movedFrom,
             pricedLines: [
               for (final l in lines)
-                (
-                  itemLineText(l, e.item, tm: data.priced.tmFor(l)),
-                  l.top,
-                ),
+                itemLineText(l, e.item, tm: data.priced.tmFor(l)),
             ],
+            top: lines.isNotEmpty && lines.every((l) => l.top),
+            sets: got?.$1 ?? const [],
+            clips: got?.$2 ?? const [],
             skipReason: skip?.note,
             onTap: widget.strengthView == null
                 ? null
@@ -650,51 +732,54 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     ];
   }
 
+  /// ALSO LOGGED: the day's working sets (and clips) that matched no
+  /// program item — same row style, achieved meta + clips.
+  List<Widget> _extraBlock(BuildContext context, _DayData data) => [
+        const SectionHeader(label: 'Also logged'),
+        for (final x in data.extra)
+          ExerciseRow(
+            name: x.exercise,
+            status: x.sets.isEmpty ? ItemStatus.muted : ItemStatus.done,
+            meta: achievedMeta(x.sets, target: 0) ?? 'warm-up only',
+            chips: clipChips(context, x.clips, x.exercise),
+          ),
+      ];
+
   /// MISSED THIS WEEK (today's card only): due before today, not covered
   /// by the week's logged work — each with a one-tap Move to….
   List<Widget> _missedBlock(
       BuildContext context, _DayData data, MissedWork missed) {
-    final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurfaceVariant;
+    final compact = TextButton.styleFrom(
+      visualDensity: VisualDensity.compact,
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      minimumSize: const Size(0, 32),
+    );
     return [
-      const SizedBox(height: 8),
-      Text('MISSED THIS WEEK',
-          style: theme.textTheme.labelSmall
-              ?.copyWith(letterSpacing: 0.8, color: muted)),
+      const SectionHeader(label: 'Missed this week'),
       for (final m in missed.missed)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2),
-          child: Row(
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Icon(Icons.error_outline,
-                    size: 16, color: theme.colorScheme.tertiary),
-              ),
-              Expanded(
-                child: Text(missedLine(m), style: theme.textTheme.bodyMedium),
-              ),
-              if (_canMove) ...[
-                TextButton(
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: () => _skipItem(context, m.item, m.day),
-                  child: const Text('Skip…'),
+        ExerciseRow(
+          name: m.item.name,
+          meta: missedMeta(m),
+          status: ItemStatus.problem,
+          trailing: !_canMove
+              ? null
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextButton(
+                      style: compact,
+                      onPressed: () => _skipItem(context, m.item, m.day),
+                      child: const Text('Skip…'),
+                    ),
+                    TextButton(
+                      style: compact,
+                      onPressed: () => _moveItem(context, data,
+                          item: m.item, home: m.home, current: m.day),
+                      child: const Text('Move to…'),
+                    ),
+                  ],
                 ),
-                TextButton(
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: () => _moveItem(context, data,
-                      item: m.item, home: m.home, current: m.day),
-                  child: const Text('Move to…'),
-                ),
-              ],
-            ],
-          ),
         ),
     ];
   }
@@ -923,29 +1008,98 @@ class _SkipDialogState extends State<_SkipDialog> {
   }
 }
 
-class _ExerciseRow extends StatelessWidget {
+/// Clip thumbnails as row chips: up to three 44 px thumbs (tap plays —
+/// the same [playVideo] path the Log rows use), then a "+N" tile that
+/// opens every clip of the row.
+List<Widget> clipChips(
+    BuildContext context, List<DayClip> clips, String title) {
+  if (clips.isEmpty) return const [];
+  const max = 3;
+  final shown = clips.length > max ? clips.take(max - 1).toList() : clips;
+  final rest = clips.length - shown.length;
+  return [
+    for (final c in shown)
+      VideoThumb(url: c.url, mediaId: c.mediaId, title: title, size: 44),
+    if (rest > 0)
+      _MoreClips(count: rest, clips: clips, title: title),
+  ];
+}
+
+class _MoreClips extends StatelessWidget {
+  final int count;
+  final List<DayClip> clips;
+  final String title;
+  const _MoreClips(
+      {required this.count, required this.clips, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(7),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(7),
+        onTap: () => showDetailSheet(
+          context: context,
+          title: title,
+          subtitle: '${clips.length} clips',
+          body: Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              for (final c in clips)
+                VideoThumb(url: c.url, mediaId: c.mediaId, title: title),
+            ],
+          ),
+        ),
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Center(
+            child: Text('+$count',
+                style: AppText.row(context)
+                    .copyWith(color: scheme.onSurfaceVariant)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One program item as an [ExerciseRow]: status mark · name · ONE meta
+/// line — what was ACHIEVED once sets are logged ("top 275×6",
+/// "2×4 · 255 lb"), else the priced prescription — then the clips of its
+/// sets inline. Ghosts / skipped rows are muted.
+class _ItemRow extends StatelessWidget {
   final PrescribedItem item;
   final bool showCheck;
   final VoidCallback? onTap;
 
-  /// Ghost (moved-out origin): muted, "→ Fri", no checkbox; its menu
-  /// only offers Undo move.
+  /// Ghost (moved-out origin): muted, "moved → Fri"; its menu only
+  /// offers Undo move.
   final DateTime? movedTo;
 
-  /// Moved-in: a small "from Wed" chip.
+  /// Moved-in: the meta leads with "from Wed".
   final DateTime? movedFrom;
 
   /// Trailing overflow menu (Move to… / Skip… / Undo); null → none.
   final _RowMenu? menu;
 
-  /// The Plan tab's priced lines (text, is-top-set) — replace the prose
-  /// scheme when present.
-  final List<(String, bool)> pricedLines;
+  /// The Plan tab's priced lines — replace the prose scheme when present.
+  final List<String> pricedLines;
+
+  /// Every priced line is a top set (achievement reads "top 275×6").
+  final bool top;
+
+  /// The working sets credited to (or folded into) this item.
+  final List<AchievedSet> sets;
+  final List<DayClip> clips;
 
   /// Non-null when the item was skipped that day (muted, "skipped — …").
   final String? skipReason;
 
-  const _ExerciseRow({
+  const _ItemRow({
     required this.item,
     required this.showCheck,
     this.onTap,
@@ -953,143 +1107,83 @@ class _ExerciseRow extends StatelessWidget {
     this.movedFrom,
     this.menu,
     this.pricedLines = const [],
+    this.top = false,
+    this.sets = const [],
+    this.clips = const [],
     this.skipReason,
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final muted = scheme.onSurfaceVariant;
     final ghost = movedTo != null;
     final skipped = !ghost && skipReason != null;
     final done = !ghost && !skipped && item.done;
     final partial = !ghost && !skipped && !done && item.loggedSets > 0;
-    final (icon, markColor) = skipped
-        ? (Icons.block, muted)
+    final status = ghost || skipped
+        ? ItemStatus.muted
         : !showCheck
-        ? (Icons.fitness_center, muted)
-        : done
-            ? (Icons.check_circle, scheme.primary)
-            : partial
-                ? (Icons.pie_chart_outline, scheme.tertiary)
-                : (Icons.circle_outlined, muted);
-    // Whoop credit note ("strain 14.8") wins over the set counter.
-    final counter = ghost
-        ? '→ ${_wd(movedTo!)}'
-        : skipped
-        ? null
-        : item.creditNote ??
-            (showCheck && (item.loggedSets > 0 || item.targetSets > 1)
-                ? '${item.loggedSets}/${item.targetSets}'
-                : null);
-
-    return InkWell(
+            ? ItemStatus.pending
+            : done
+                ? ItemStatus.done
+                : partial
+                    ? ItemStatus.partial
+                    : ItemStatus.pending;
+    final prescription = pricedLines.isNotEmpty
+        ? pricedLines.join('; ')
+        : item.scheme;
+    final String meta;
+    if (ghost) {
+      meta = 'moved → ${_wd(movedTo!)}';
+    } else if (skipped) {
+      meta = 'skipped — $skipReason';
+    } else {
+      // A Whoop credit note ("strain 8.0") is the achievement for a climb.
+      final achieved = item.creditNote ??
+          (done || partial
+              ? achievedMeta(sets, target: item.targetSets, top: top) ??
+                  (done
+                      ? '${item.loggedSets} set${item.loggedSets == 1 ? '' : 's'}'
+                      : '${item.loggedSets} of ${item.targetSets} sets')
+              : null);
+      final body = achieved ?? prescription;
+      meta = movedFrom == null
+          ? body
+          : 'from ${_wd(movedFrom!)}${body.isEmpty ? '' : ' · $body'}';
+    }
+    return ExerciseRow(
+      name: item.name,
+      meta: meta,
+      status: status,
+      muted: ghost || skipped,
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 1, right: 8),
-              child: ghost
-                  ? const SizedBox(width: 16, height: 16)
-                  : Icon(icon, size: 16, color: markColor),
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.name,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight:
-                          ghost || skipped ? FontWeight.w400 : FontWeight.w600,
-                      color: done || ghost || skipped ? muted : scheme.onSurface,
-                      decoration: done ? TextDecoration.lineThrough : null,
-                    ),
-                  ),
-                  if (pricedLines.isNotEmpty)
-                    for (final (text, top) in pricedLines)
-                      Text(text,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: muted,
-                            fontWeight:
-                                top && !skipped ? FontWeight.w600 : null,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ))
-                  else if (item.scheme.isNotEmpty)
-                    Text(item.scheme,
-                        style:
-                            theme.textTheme.bodySmall?.copyWith(color: muted)),
-                  if (skipped)
-                    Text('skipped — $skipReason',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                            color: muted, fontStyle: FontStyle.italic)),
-                  if (movedFrom != null)
-                    Container(
-                      margin: const EdgeInsets.only(top: 3),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: scheme.secondaryContainer,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text('from ${_wd(movedFrom!)}',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                              color: scheme.onSecondaryContainer)),
-                    ),
-                ],
-              ),
-            ),
-            if (counter != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Text(counter,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: done ? scheme.primary : muted,
-                      fontWeight: FontWeight.w600,
-                    )),
-              ),
-            if (onTap != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 4, top: 1),
-                child: Icon(Icons.info_outline, size: 14, color: muted),
-              ),
-            if (menu != null)
-              SizedBox(
-                width: 28,
-                height: 20,
-                child: PopupMenuButton<String>(
-                  tooltip: 'Move / skip',
-                  padding: EdgeInsets.zero,
-                  iconSize: 18,
-                  icon: Icon(Icons.more_vert, size: 18, color: muted),
-                  onSelected: (v) {
-                    if (v == 'move') menu!.onMove?.call();
-                    if (v == 'undo') menu!.onUndo?.call();
-                    if (v == 'skip') menu!.onSkip?.call();
-                    if (v == 'unskip') menu!.onUndoSkip?.call();
-                  },
-                  itemBuilder: (_) => [
-                    if (menu!.onMove != null)
-                      const PopupMenuItem(
-                          value: 'move', child: Text('Move to…')),
-                    if (menu!.onSkip != null)
-                      const PopupMenuItem(value: 'skip', child: Text('Skip…')),
-                    if (menu!.onUndo != null)
-                      const PopupMenuItem(
-                          value: 'undo', child: Text('Undo move')),
-                    if (menu!.onUndoSkip != null)
-                      const PopupMenuItem(
-                          value: 'unskip', child: Text('Undo skip')),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
+      chips: clipChips(context, clips, item.name),
+      trailing: menu == null ? null : _menuButton(context),
+    );
+  }
+
+  Widget _menuButton(BuildContext context) {
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return PopupMenuButton<String>(
+      tooltip: 'Move / skip',
+      padding: EdgeInsets.zero,
+      iconSize: 18,
+      icon: Icon(Icons.more_vert, size: 18, color: muted),
+      onSelected: (v) {
+        if (v == 'move') menu!.onMove?.call();
+        if (v == 'undo') menu!.onUndo?.call();
+        if (v == 'skip') menu!.onSkip?.call();
+        if (v == 'unskip') menu!.onUndoSkip?.call();
+      },
+      itemBuilder: (_) => [
+        if (menu!.onMove != null)
+          const PopupMenuItem(value: 'move', child: Text('Move to…')),
+        if (menu!.onSkip != null)
+          const PopupMenuItem(value: 'skip', child: Text('Skip…')),
+        if (menu!.onUndo != null)
+          const PopupMenuItem(value: 'undo', child: Text('Undo move')),
+        if (menu!.onUndoSkip != null)
+          const PopupMenuItem(value: 'unskip', child: Text('Undo skip')),
+      ],
     );
   }
 }

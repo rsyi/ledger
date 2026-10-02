@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/view_schema.dart';
 import '../../services/warehouse_connector.dart';
+import '../design/design.dart';
 
 /// Top-of-Today readiness: Whoop recovery score + hours slept for the
 /// selected day. Recovery is keyed on the wake date (one row per day).
@@ -88,9 +89,6 @@ class RecoveryCardState extends State<RecoveryCard> {
       future: _future,
       builder: (context, snap) {
         if (widget.recoveryView == null) return const SizedBox.shrink();
-        final theme = Theme.of(context);
-        final scheme = theme.colorScheme;
-        final muted = scheme.onSurfaceVariant;
         final r = snap.data;
         final hasData =
             r != null && (r.score != null || r.sleepHours != null);
@@ -98,87 +96,45 @@ class RecoveryCardState extends State<RecoveryCard> {
         Widget body;
         if (snap.connectionState != ConnectionState.done) {
           body = const SizedBox(
-            height: 20,
-            child: Center(
+            height: 18,
+            child: Align(
+              alignment: Alignment.centerLeft,
               child: SizedBox(
-                  width: 16,
-                  height: 16,
+                  width: 14,
+                  height: 14,
                   child: CircularProgressIndicator(strokeWidth: 2)),
             ),
           );
         } else if (!hasData) {
           body = Text('No recovery data for this day.',
-              style: theme.textTheme.bodyMedium?.copyWith(color: muted));
+              style: AppText.meta(context));
         } else {
-          body = Row(
-            children: [
-              _Metric(
-                label: 'Recovery',
-                value: r.score == null ? '—' : '${r.score!.round()}%',
-                color: _recoveryColor(r.score, scheme),
-              ),
-              const SizedBox(width: 24),
-              _Metric(
-                label: 'Slept',
-                value: r.sleepHours == null
-                    ? '—'
-                    : '${r.sleepHours!.toStringAsFixed(1)}h',
-                color: scheme.onSurface,
-              ),
-              const Spacer(),
-              if (r.restingHr != null || r.hrv != null)
-                Text(
-                  [
-                    if (r.hrv != null) 'HRV ${r.hrv!.round()}',
-                    if (r.restingHr != null) 'RHR ${r.restingHr!.round()}',
-                  ].join(' · '),
-                  style: theme.textTheme.bodySmall?.copyWith(color: muted),
-                ),
-            ],
-          );
+          body = StatStrip(items: [
+            if (r.score != null)
+              StatItem('Recovery', '${r.score!.round()}%',
+                  status: recoveryStatus(r.score)),
+            if (r.sleepHours != null)
+              StatItem('Sleep', '${r.sleepHours!.toStringAsFixed(1)}h'),
+            if (r.hrv != null) StatItem('HRV', '${r.hrv!.round()}'),
+            if (r.restingHr != null)
+              StatItem('RHR', '${r.restingHr!.round()}'),
+          ]);
         }
 
-        return Material(
-          color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            child: body,
-          ),
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(
+              AppSpace.gutter, 2, AppSpace.gutter, AppSpace.sectionGap),
+          child: body,
         );
       },
     );
   }
-
-  // Whoop bands: green >=67, yellow 34-66, red <34.
-  Color _recoveryColor(double? score, ColorScheme scheme) {
-    if (score == null) return scheme.onSurface;
-    if (score >= 67) return scheme.primary;
-    if (score >= 34) return scheme.tertiary;
-    return scheme.error;
-  }
 }
 
-class _Metric extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color color;
-  const _Metric({required this.label, required this.value, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      children: [
-        Text(value,
-            style: theme.textTheme.titleLarge
-                ?.copyWith(color: color, fontWeight: FontWeight.w700)),
-        const SizedBox(width: 5),
-        Text(label,
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-      ],
-    );
-  }
+/// Whoop bands: green >= 67, amber 34-66, red < 34.
+ItemStatus? recoveryStatus(double? score) {
+  if (score == null) return null;
+  if (score >= 67) return ItemStatus.done;
+  if (score >= 34) return ItemStatus.partial;
+  return ItemStatus.problem;
 }

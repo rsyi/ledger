@@ -185,6 +185,10 @@ Set<String> _tokens(String s) {
   for (var w in cleaned.split(RegExp(r'\s+'))) {
     if (w.isEmpty) continue;
     w = _alias[w] ?? w;
+    // Stop words are checked BEFORE and after plural stripping — "offs"
+    // is a stop word but stripped to "off" it leaked through, so
+    // "Deadlift back-offs" never strong-matched "Barbell Deadlift".
+    if (_stop.contains(w)) continue;
     // Plurals ("ups" too, so "Pull-ups" ~ "Pull-up").
     if (w.length > 2 && w.endsWith('s')) w = w.substring(0, w.length - 1);
     if (_stop.contains(w) || w.length < 2) continue;
@@ -218,10 +222,19 @@ const _variant = {
 /// "Press top set").
 bool loggedCoversPrescribed(String loggedName, String prescribedName) {
   final a = _tokens(loggedName);
-  final b = _tokens(prescribedName);
-  if (a.isEmpty || b.isEmpty || !a.containsAll(b)) return false;
-  return !a.difference(b).any(_variant.contains);
+  // "RDL or leg curl" is a choice: covering EITHER alternative counts.
+  for (final alt in prescribedName.split(RegExp(r'\s+or\s+', caseSensitive: false))) {
+    final b = _tokens(alt);
+    if (a.isEmpty || b.isEmpty || !a.containsAll(b)) continue;
+    if (!a.difference(b).any(_variant.contains)) return true;
+  }
+  return false;
 }
+
+/// Shared significant tokens between a logged and a prescribed name — the
+/// loose phase's tie-breaker (more shared words = better fit).
+int sharedTokenCount(String loggedName, String prescribedName) =>
+    _tokens(loggedName).intersection(_tokens(prescribedName)).length;
 
 /// Counts, per prescribed item, how many logged sets match it (token
 /// overlap). [loggedNames] is ONE entry per logged set, so the count is

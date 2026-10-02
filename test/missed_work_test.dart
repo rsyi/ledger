@@ -473,4 +473,40 @@ void main() {
       expect(expiryLabel(DateTime(2026, 10, 5), sun), isNull);
     });
   });
+
+  group('Fri 10/2 regression: RDL sets credit "RDL or leg curl"', () {
+    final items = parsePrescribedProse(
+        'Deadlift heavy: wave top per strength_wave_cut, then deadlift '
+        'back-offs 2x4-6 @ 75% TM; RDL or leg curl 2-3x8-12; bench volume '
+        '3x8-10 @ 65% TM.',
+        null);
+    // Working sets as logged (log order — RDL before the deadlifts).
+    const logged = [
+      'Cable Face Pull', 'Cable Face Pull', 'Flat Barbell Bench Press',
+      'Cable Face Pull', 'Flat Barbell Bench Press',
+      'Flat Barbell Bench Press', 'Romanian Deadlift', 'Romanian Deadlift',
+      'Barbell Deadlift', 'Barbell Deadlift', 'Barbell Deadlift',
+    ];
+    test('allocation', () {
+      final out = {
+        for (final i in allocateDay(items, logged)) i.name: i.loggedSets,
+      };
+      expect(out['Deadlift heavy'], 1);
+      expect(out['Deadlift back-offs'], 2);
+      expect(out['RDL or leg curl'], 2);
+      expect(out['Bench volume'], 3);
+    });
+    test('"or" alternatives strong-match either side', () {
+      expect(loggedCoversPrescribed('Romanian Deadlift', 'RDL or leg curl'),
+          isTrue);
+      expect(loggedCoversPrescribed('Lying Leg Curl', 'RDL or leg curl'),
+          isTrue);
+      expect(loggedCoversPrescribed('Barbell Deadlift', 'RDL or leg curl'),
+          isFalse);
+    });
+    test('"back-offs" is a qualifier, not an exercise word', () {
+      expect(loggedCoversPrescribed('Barbell Deadlift', 'Deadlift back-offs'),
+          isTrue);
+    });
+  });
 }

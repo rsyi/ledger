@@ -123,9 +123,10 @@ String _kindOf(PrescribedItem i) {
 
 /// Exclusive allocation of one day's logged sets to that day's items:
 /// each set credits at most one item. Strong matches
-/// (`loggedCoversPrescribed`) are claimed first, then loose ones
-/// (`loggedMatchesPrescribed`) fill remaining shortfalls; within each
-/// phase items claim in list order, sets in logged order.
+/// (`loggedCoversPrescribed`) are claimed first (items in list order,
+/// sets in logged order); leftover sets then go loosely
+/// (`loggedMatchesPrescribed`) to the still-short item they share the
+/// most words with.
 ///
 /// ORDER: pass items in program order — own items first, moved-in items
 /// after (the order `effectiveWeek` produces). So Fri's own "Bench
@@ -138,21 +139,37 @@ String _kindOf(PrescribedItem i) {
   final got = List<int>.filled(items.length, 0);
   final claimed = List<bool>.filled(logged.length, false);
   final lift = [for (final i in items) _kindOf(i) == 'lift'];
-  for (final strong in [true, false]) {
+  // Strong phase: items claim in program order.
+  for (var i = 0; i < items.length; i++) {
+    if (!lift[i]) continue;
+    for (var j = 0; j < logged.length && got[i] < items[i].targetSets; j++) {
+      if (claimed[j] || !loggedCoversPrescribed(logged[j], items[i].name)) {
+        continue;
+      }
+      claimed[j] = true;
+      got[i]++;
+    }
+  }
+  // Loose phase: each leftover set goes to the still-short item it fits
+  // BEST (most shared words; ties → program order). First-item-wins let
+  // "Deadlift back-offs" eat "Romanian Deadlift" sets meant for
+  // "RDL or leg curl" (2026-10-02).
+  for (var j = 0; j < logged.length; j++) {
+    if (claimed[j]) continue;
+    var best = -1;
+    var bestScore = 0;
     for (var i = 0; i < items.length; i++) {
-      if (!lift[i]) continue;
-      for (var j = 0;
-          j < logged.length && got[i] < items[i].targetSets;
-          j++) {
-        if (claimed[j]) continue;
-        final ok = strong
-            ? loggedCoversPrescribed(logged[j], items[i].name)
-            : loggedMatchesPrescribed(logged[j], items[i].name);
-        if (!ok) continue;
-        claimed[j] = true;
-        got[i]++;
+      if (!lift[i] || got[i] >= items[i].targetSets) continue;
+      if (!loggedMatchesPrescribed(logged[j], items[i].name)) continue;
+      final score = sharedTokenCount(logged[j], items[i].name);
+      if (score > bestScore) {
+        best = i;
+        bestScore = score;
       }
     }
+    if (best < 0) continue;
+    claimed[j] = true;
+    got[best]++;
   }
   return (got: got, claimed: claimed);
 }

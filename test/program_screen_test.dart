@@ -12,7 +12,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:airledger/models/database_config.dart';
+import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/program_provider.dart';
+import 'package:airledger/services/sheets_repository.dart' show Record;
+import 'package:airledger/services/warehouse_connector.dart';
 import 'package:airledger/services/wm_store.dart';
 import 'package:airledger/services/wm_tabs.dart';
 import 'package:airledger/ui/program_screen.dart';
@@ -65,6 +69,56 @@ class _FakeWmStore extends WmStore {
   }
 }
 
+/// Strength history stub (accessory double progression reads it).
+class _FakeRepo implements WarehouseConnector {
+  final List<Record> rows;
+  _FakeRepo(this.rows);
+
+  @override
+  DatabaseConfig get config => throw UnimplementedError();
+  @override
+  Future<void> ensureTable(ViewSchema view) async {}
+  @override
+  Future<List<Record>> list(ViewSchema view, {DateTime? onDate}) async => rows;
+  @override
+  Future<Record> create(ViewSchema view, Record record) async => record;
+  @override
+  Future<void> update(ViewSchema view, Record record) async {}
+  @override
+  Future<void> delete(ViewSchema view, Record record) async {}
+}
+
+final _strengthView = ViewSchema(
+  name: 'strength',
+  datasource: 'gsheets',
+  table: 'strength',
+  entities: const [],
+  measures: const [],
+  dimensions: [
+    Dimension(name: 'date', type: DimensionType.date, expr: 'date'),
+  ],
+);
+
+/// Last week's bodyweight work, logged the app's way: weight = the
+/// lifter's bodyweight on the day (the form prefills it).
+List<Record> _bodyweightHistory() => [
+      for (final (day, ex, w, reps) in [
+        (23, 'Pull Up', 160.5, 8),
+        (23, 'Muscle Up', 161.0, 1),
+        (24, 'Muscle Up Green Band', 173.0, 4),
+        (24, 'Hanging Leg Raise', 161.0, 10),
+        (24, 'Parallel Bar Triceps Dip', 173.0, 9),
+      ])
+        for (var i = 0; i < 3; i++)
+          {
+            'date': DateTime(2026, 9, day),
+            'exercise': ex,
+            'weight': w,
+            'reps': reps,
+            'rpe': 7,
+          },
+    ];
+
 List<WorkingMaxRow> _seedRows({bool confirmed = false}) => [
       for (final (lift, variant, value) in [
         ('bench', 'paused', 240.0),
@@ -90,9 +144,10 @@ void main() {
   Future<String?> fetcher(String path) async =>
       path == 'coach/program.yaml' ? programYaml : null;
 
-  Future<void> pump(WidgetTester tester, _FakeWmStore store) async {
+  Future<void> pump(WidgetTester tester, _FakeWmStore store,
+      {List<Record>? history, Size size = const Size(420, 2400)}) async {
     ProgramProvider.clearCache();
-    tester.view.physicalSize = const Size(420, 2400);
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -100,6 +155,8 @@ void main() {
       home: ProgramScreen(
         provider: ProgramProvider(fetcher),
         wmStore: store,
+        strengthRepo: history == null ? null : _FakeRepo(history),
+        strengthView: history == null ? null : _strengthView,
         // Wed Sep 30 → displayed week = cut wave week 1 (Sep 28).
         today: DateTime(2026, 9, 30),
       ),
@@ -193,5 +250,43 @@ void main() {
     // outside the 2-week lookback window here, so no "was" tail).
     expect(find.textContaining('since Sep 30', findRichText: true),
         findsOneWidget);
+  });
+
+  testWidgets('bodyweight movements read BW, never a priced load '
+      '(audit: "Pull Up 3×6-10 · 160.5 lb")', (tester) async {
+    await pump(tester, _FakeWmStore(_seedRows(confirmed: true)),
+        history: _bodyweightHistory());
+
+    expect(find.text('Pull Up 3×6-10 · BW'), findsWidgets);
+    expect(find.text('Muscle Up Green Band 2×3-5 · BW'), findsOneWidget);
+    expect(find.text('Parallel Bar Triceps Dip 3×8-12 · BW'), findsOneWidget);
+    expect(find.text('Hanging Leg Raise 3×8-15 · BW'), findsOneWidget);
+    final priced = RegExp(
+        r'^(Pull Up|Muscle Up|Parallel Bar Triceps Dip|Hanging Leg Raise)'
+        r'.* lb');
+    expect(
+        find.byWidgetPredicate(
+            (w) => w is Text && priced.hasMatch(w.data ?? '')),
+        findsNothing);
+  });
+
+  testWidgets('STRIKETHROUGH AUDIT: no routine line is decorated, and the '
+      'list stops above the gesture-nav inset', (tester) async {
+    // The device screenshot's "struck-through" Muscle Up Green Band was
+    // the gesture-navigation pill drawn over the last visible line
+    // (edge-to-edge, root-navigator route, no bottom bar).
+    tester.view.padding = const FakeViewPadding(bottom: 48);
+    addTearDown(tester.view.resetPadding);
+    await pump(tester, _FakeWmStore(_seedRows(confirmed: true)),
+        history: _bodyweightHistory(), size: const Size(420, 900));
+
+    final listRect =
+        tester.getRect(find.byKey(const ValueKey('routine-list')));
+    expect(listRect.bottom, lessThanOrEqualTo(900 - 48));
+
+    for (final t in tester.widgetList<Text>(find.byType(Text))) {
+      expect(t.style?.decoration, isNot(TextDecoration.lineThrough),
+          reason: '"${t.data}" is struck through');
+    }
   });
 }

@@ -28,6 +28,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/view_schema.dart';
+import '../services/bodyweight_cache.dart' show BodyweightCache;
 import '../services/program_current.dart';
 import '../services/program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
@@ -41,7 +42,7 @@ import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
 import '../services/working_max.dart'
     show LoadPolicy, defaultVariantByLift, loadPolicies, policyForDate;
-import 'app_text.dart';
+import 'design/design.dart';
 import 'widgets/chart_bottom_axis.dart';
 import 'widgets/chart_range.dart';
 import 'widgets/pinned_tooltip_line_chart.dart';
@@ -229,37 +230,45 @@ class _ProgramScreenState extends State<ProgramScreen> {
           ),
         ],
       ),
-      body: FutureBuilder<_RoutineData?>(
-        future: _load,
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final data = snap.data;
-          if (data == null || data.docs.program == null) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text('Program data unavailable — check GitHub config.'),
+      // SafeArea(bottom): the screen is pushed on the root navigator
+      // with no bottom bar, so under edge-to-edge the last visible line
+      // drew BENEATH the gesture-navigation handle — the 2026-10-02
+      // audit's "Muscle Up Green Band struck through" was that pill
+      // over the text, not a text decoration.
+      body: SafeArea(
+        top: false,
+        child: FutureBuilder<_RoutineData?>(
+          future: _load,
+          builder: (context, snap) {
+            if (snap.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            final data = snap.data;
+            if (data == null || data.docs.program == null) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('Program data unavailable — check GitHub config.'),
+                ),
+              );
+            }
+            return RefreshIndicator(
+              onRefresh: _refresh,
+              child: _RoutineView(
+                data: data,
+                weekStart: _weekStart,
+                today: _today,
+                hasWmStore: widget.wmStore != null,
+                wmBusy: _wmBusy,
+                strengthView: widget.strengthView,
+                onSetTrainingMax: _setTrainingMaxDialog,
+                onConfirmSeed: (lift) =>
+                    _wmAction(() => widget.wmStore!.confirmSeed(lift)),
+                onRefreshMaxes: () => _wmAction(() async {}),
               ),
             );
-          }
-          return RefreshIndicator(
-            onRefresh: _refresh,
-            child: _RoutineView(
-              data: data,
-              weekStart: _weekStart,
-              today: _today,
-              hasWmStore: widget.wmStore != null,
-              wmBusy: _wmBusy,
-              strengthView: widget.strengthView,
-              onSetTrainingMax: _setTrainingMaxDialog,
-              onConfirmSeed: (lift) =>
-                  _wmAction(() => widget.wmStore!.confirmSeed(lift)),
-              onRefreshMaxes: () => _wmAction(() async {}),
-            ),
-          );
-        },
+          },
+        ),
       ),
     );
   }
@@ -375,65 +384,61 @@ class _RoutineView extends StatelessWidget {
     final backoff = backoffLine(version?['backoff_rule']);
 
     final todayUtc = DateTime.utc(today.year, today.month, today.day);
+    const gutter = EdgeInsets.symmetric(horizontal: AppSpace.gutter);
     return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      key: const ValueKey('routine-list'),
+      padding: const EdgeInsets.symmetric(vertical: AppSpace.sectionGap),
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
-        _HeaderCard(
-          weekStart: weekStart,
-          slice: repSlice,
-          phaseYaml: phase,
-          version: version,
+        Padding(
+          padding: gutter,
+          child: _HeaderCard(
+            weekStart: weekStart,
+            slice: repSlice,
+            phaseYaml: phase,
+            version: version,
+          ),
         ),
         if (hasWmStore) ...[
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Row(
-              children: [
-                Expanded(
-                  child:
-                      Text('TRAINING MAXES', style: AppText.title(context)),
-                ),
-                wmBusy
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    : PopupMenuButton<String>(
-                        onSelected: (v) {
-                          if (v == 'set') onSetTrainingMax();
-                          if (v == 'refresh') onRefreshMaxes();
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(
-                              value: 'set',
-                              child: Text('Set training max…')),
-                          PopupMenuItem(
-                              value: 'refresh', child: Text('Refresh')),
-                        ],
+          SectionHeader(
+            label: 'Training maxes',
+            actions: [
+              wmBusy
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-              ],
+                    )
+                  : PopupMenuButton<String>(
+                      onSelected: (v) {
+                        if (v == 'set') onSetTrainingMax();
+                        if (v == 'refresh') onRefreshMaxes();
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(
+                            value: 'set', child: Text('Set training max…')),
+                        PopupMenuItem(value: 'refresh', child: Text('Refresh')),
+                      ],
+                    ),
+            ],
+          ),
+          Padding(
+            padding: gutter,
+            child: AppCard(
+              padding: EdgeInsets.zero,
+              child: _TrainingMaxSection(
+                snapshot: wm,
+                today: today,
+                busy: wmBusy,
+                onConfirm: onConfirmSeed,
+              ),
             ),
           ),
-          Card(
-            elevation: 0,
-            margin: EdgeInsets.zero,
-            color: Theme.of(context).colorScheme.surfaceContainerLow,
-            child: _TrainingMaxSection(
-              snapshot: wm,
-              today: today,
-              busy: wmBusy,
-              onConfirm: onConfirmSeed,
-            ),
-          ),
-          const SizedBox(height: 4),
         ],
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpace.sectionGap),
         for (final day in week)
           _DayTile(
             day: day,
@@ -441,6 +446,7 @@ class _RoutineView extends StatelessWidget {
             lines: linesByDay[day.date] ?? const [],
             maxes: maxes,
             backoff: backoff,
+            bodyweight: BodyweightCache.currentLbs,
           ),
         const SizedBox(height: 24),
       ],
@@ -504,63 +510,49 @@ class _HeaderCard extends StatelessWidget {
     }
     final status = _statusLine();
 
-    return Card(
-      elevation: 0,
-      color: scheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    dateRange,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                if (weekTypeLine != null && weekTypeLine != 'normal')
-                  _WeekTypeBadge(type: weekTypeLine),
-              ],
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(dateRange, style: AppText.title(context)),
+              ),
+              if (weekTypeLine != null && weekTypeLine != 'normal')
+                _WeekTypeBadge(type: weekTypeLine),
+            ],
+          ),
+          if (blockLine != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              '$blockLine${phaseLine != null ? ' · $phaseLine' : ''}',
+              style: AppText.meta(context),
             ),
-            if (blockLine != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                '$blockLine${phaseLine != null ? ' · $phaseLine' : ''}',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-              ),
-            ],
-            if (status != null) ...[
-              const SizedBox(height: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: scheme.primaryContainer.withValues(alpha: 0.5),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  status,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                ),
-              ),
-            ],
-            if (slice == null) ...[
-              const SizedBox(height: 6),
-              Text(
-                'No program for this week',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-              ),
-            ],
           ],
-        ),
+          if (status != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(AppRadius.chip),
+              ),
+              child: Text(
+                status,
+                style: AppText.meta(context).copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+          ],
+          if (slice == null) ...[
+            const SizedBox(height: 6),
+            Text('No program for this week', style: AppText.meta(context)),
+          ],
+        ],
       ),
     );
   }
@@ -590,14 +582,12 @@ class _WeekTypeBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(AppRadius.chip),
       ),
       child: Text(
         type,
-        style: Theme.of(context)
-            .textTheme
-            .labelSmall
-            ?.copyWith(color: fg, fontWeight: FontWeight.w600),
+        style: AppText.meta(context)
+            .copyWith(color: fg, fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -631,12 +621,13 @@ class _TrainingMaxSection extends StatelessWidget {
             (lift, s, needsConfirmation(snap.workingMax, lift)),
     ];
     if (rows.isEmpty) {
-      return ListTile(
-        title: Text(
+      return Padding(
+        padding: const EdgeInsets.all(AppSpace.gutter),
+        child: Text(
           snap == null
               ? 'Training maxes unavailable — pull to retry.'
               : 'No training maxes yet.',
-          style: Theme.of(context).textTheme.bodyMedium,
+          style: AppText.meta(context),
         ),
       );
     }
@@ -654,8 +645,10 @@ class _TrainingMaxSection extends StatelessWidget {
                   signal: row.$2,
                 ),
               )),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+              child: Container(
+                constraints: const BoxConstraints(minHeight: AppSpace.row),
+                padding: const EdgeInsets.fromLTRB(
+                    AppSpace.gutter, AppSpace.rowV, 8, AppSpace.rowV),
                 child: Row(
                   children: [
                     Expanded(
@@ -664,15 +657,18 @@ class _TrainingMaxSection extends StatelessWidget {
                           children: [
                             TextSpan(
                                 text: '${liftTitle(row.$1)}  ',
-                                style:
-                                    Theme.of(context).textTheme.bodyMedium),
+                                style: AppText.row(context)),
                             TextSpan(
                               text: fmtLb(row.$2.current),
-                              style: AppText.value(context),
+                              style: AppText.title(context).copyWith(
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures()
+                                ],
+                              ),
                             ),
                             TextSpan(
                               text: '  ${tmSignalSuffix(row.$2)}',
-                              style: AppText.tag(context),
+                              style: AppText.meta(context),
                             ),
                           ],
                         ),
@@ -752,7 +748,7 @@ class _TmTrendScreenState extends State<_TmTrendScreen> {
                   TextSpan(
                     text: '  ${tmSignalSuffix(widget.signal)}'
                         '${variant.isNotEmpty ? ' · $variant' : ''}',
-                    style: AppText.tag(context),
+                    style: AppText.meta(context),
                   ),
                 ],
               ),
@@ -911,12 +907,16 @@ class _DayTile extends StatelessWidget {
   final Map<String, double> maxes;
   final String? backoff;
 
+  /// Current bodyweight (lb) for `BW+N` on weighted bodyweight moves.
+  final double? bodyweight;
+
   const _DayTile({
     required this.day,
     required this.isToday,
     required this.lines,
     required this.maxes,
     required this.backoff,
+    this.bodyweight,
   });
 
   @override
@@ -938,17 +938,19 @@ class _DayTile extends StatelessWidget {
     final muted = slice == null || summary == 'Rest';
     final hasTop = lines.any((l) => l.top);
 
-    final small = Theme.of(context)
-        .textTheme
-        .bodySmall
-        ?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+    // The dense per-exercise lines (the redesign's reference style):
+    // meta role, top sets emphasised in the row colour.
+    final meta = AppText.meta(context);
 
     return Material(
       color: isToday
           ? scheme.primaryContainer.withValues(alpha: 0.45)
           : Colors.transparent,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+        padding: const EdgeInsets.symmetric(
+          vertical: 10,
+          horizontal: AppSpace.gutter,
+        ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -959,24 +961,16 @@ class _DayTile extends StatelessWidget {
                 children: [
                   Text(
                     weekdayLabel,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          fontWeight:
-                              isToday ? FontWeight.w700 : FontWeight.w500,
-                          color: isToday
-                              ? scheme.primary
-                              : scheme.onSurfaceVariant,
-                        ),
+                    style: AppText.row(context).copyWith(
+                      fontWeight: isToday ? FontWeight.w700 : FontWeight.w500,
+                      color: isToday ? scheme.primary : scheme.onSurfaceVariant,
+                    ),
                   ),
-                  Text(
-                    dateLabel,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                  ),
+                  Text(dateLabel, style: meta),
                 ],
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: AppSpace.leadGap),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -984,14 +978,10 @@ class _DayTile extends StatelessWidget {
                   Text(
                     summary,
                     style: muted
-                        ? Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: scheme.onSurfaceVariant,
-                              fontStyle: FontStyle.italic,
-                            )
-                        : Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.copyWith(fontWeight: FontWeight.w600),
+                        ? meta.copyWith(fontStyle: FontStyle.italic)
+                        : AppText.row(
+                            context,
+                          ).copyWith(fontWeight: FontWeight.w600),
                   ),
                   if (lines.isNotEmpty) ...[
                     const SizedBox(height: 4),
@@ -999,20 +989,26 @@ class _DayTile extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 1),
                         child: Text(
-                          formatSessionLine(l,
-                              tm: maxes[mainLiftByExercise[l.exercise]]),
-                          style: small?.copyWith(
-                            fontWeight:
-                                l.top ? FontWeight.w600 : FontWeight.w400,
-                            color: l.top ? null : scheme.onSurfaceVariant,
+                          formatSessionLine(
+                            l,
+                            tm: maxes[mainLiftByExercise[l.exercise]],
+                            bodyweight: bodyweight,
                           ),
+                          style: l.top
+                              ? meta.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                  color: scheme.onSurface,
+                                )
+                              : meta,
                         ),
                       ),
                     if (hasTop && backoff != null)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
-                        child: Text('Back-offs: $backoff',
-                            style: AppText.micro(context)),
+                        child: Text(
+                          'Back-offs: $backoff',
+                          style: meta.copyWith(fontWeight: FontWeight.w600),
+                        ),
                       ),
                   ],
                 ],

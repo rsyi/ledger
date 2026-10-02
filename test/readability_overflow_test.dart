@@ -18,7 +18,11 @@ import 'package:airledger/services/program_provider.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
 import 'package:airledger/ui/domain_screen.dart';
-import 'package:airledger/ui/plan_screen.dart';
+import 'package:airledger/services/wm_tabs.dart';
+import 'package:airledger/ui/lift_screen.dart';
+import 'package:airledger/ui/plan_data.dart';
+import 'package:airledger/ui/strength_screen.dart';
+import 'package:airledger/ui/weight_screen.dart';
 import 'package:airledger/ui/program_screen.dart';
 
 class _FakeRepo implements WarehouseConnector {
@@ -185,64 +189,78 @@ domains:
     // Reaching here without a RenderFlex overflow report = pass.
   });
 
-  testWidgets(
-      'plan screen (declared/blocks/progress/verdict) '
-      'reflows without overflow at 360dp', (tester) async {
-    ProgramProvider.clearCache();
-    DomainConfigProvider.clearCache();
-    _sizeAt(tester, const Size(360, 690));
+  Future<String?> planFetcher(String path) async => switch (path) {
+        'coach/phase.yaml' => phaseYaml,
+        'coach/program.yaml' => programYaml,
+        'app/dashboards.yaml' => dashboardsYaml,
+        _ => null,
+      };
 
-    Future<String?> fetcher(String path) async => switch (path) {
-          'coach/phase.yaml' => phaseYaml,
-          'coach/program.yaml' => programYaml,
-          'app/dashboards.yaml' => dashboardsYaml,
-          _ => null,
-        };
-
-    await tester.pumpWidget(MaterialApp(
-      home: PlanScreen(
-        provider: ProgramProvider(fetcher),
+  PlanSources sources() => PlanSources(
+        provider: ProgramProvider(planFetcher),
         weightRepo: _FakeRepo(_weighIns()),
         weightView: _view('weight'),
         strengthRepo: _FakeRepo(_strengthRows()),
         strengthView: _view('strength'),
-        today: DateTime(2026, 9, 23),
-      ),
+      );
+
+  // IA restructure 2026-10-02: the Plan tab's content now lives on the
+  // Weight / Strength pages (+ the Progress tab's phase timeline, pinned
+  // in home_dashboard_test). Same 360dp no-overflow guarantee.
+  testWidgets(
+      'weight page (verdict, bodyweight trajectory, nutrition, body '
+      'composition, phase notes) reflows without overflow at 360dp',
+      (tester) async {
+    ProgramProvider.clearCache();
+    _sizeAt(tester, const Size(360, 690));
+    await tester.pumpWidget(MaterialApp(
+      home: WeightScreen(sources: sources(), today: DateTime(2026, 9, 23)),
     ));
     await tester.pumpAndSettle();
 
-    // Top sections up at 360dp, plain-language summary FIRST (UI
-    // redesign phase 6): verdict above the phase card + block timeline
-    // (the "You are here" row wraps instead of overflowing).
+    // Verdict first (plain words), the phase name + since date in its
+    // header; no "Target 154 lb" headline anywhere.
     expect(find.text('VERDICT'), findsOneWidget);
-    expect(find.text('PHASE'), findsOneWidget);
-    expect(tester.getTopLeft(find.text('VERDICT')).dy,
-        lessThan(tester.getTopLeft(find.text('PHASE')).dy));
-    expect(find.textContaining('You are here'), findsOneWidget);
-
-    // Shared-style phase + blocks (UI redesign consistency pass): the
-    // phase name rides the header, the title is plain words, blocks are
-    // named rows ("Block 0 · Cut") with the accent you-are-here line —
-    // no "B0" badges, no abbreviations.
     expect(find.text('Cut · since Oct 6, 2025'), findsOneWidget);
-    expect(find.text('Target 154 lb · −0.75 lb/week'), findsOneWidget);
-    expect(find.textContaining('Block 0 · Cut', findRichText: true),
-        findsOneWidget);
-    expect(find.text('You are here · week 1 of 12'), findsOneWidget);
-    expect(find.text('B0'), findsNothing);
+    expect(find.textContaining('Target 154 lb'), findsNothing);
+    expect(find.text('BODYWEIGHT'), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-bw-chart')), findsOneWidget);
     for (final banned in ['wks', 'lb/wk', 'SBD', 'OHP']) {
       expect(find.textContaining(banned, findRichText: true), findsNothing,
           reason: banned);
     }
-    // Exit criteria sit behind the Details disclosure.
-    expect(find.textContaining('Exit:'), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('plan-phase-details')));
-    await tester.pumpAndSettle();
-    expect(find.text('Exit: 154 lb or Wilks floor breached'), findsOneWidget);
+    // Strength-only sections stay on the Strength page.
+    expect(find.byKey(const ValueKey('sim2-expressed-chart')), findsNothing);
+    expect(find.text('Model details'), findsNothing);
 
-    // Scroll the rest of the lazy ListView into layout — projection
-    // summary, strength chart, nutrition card, folds, the Model details
-    // disclosure — so every section gets overflow-checked at this width.
+    await tester.dragUntilVisible(
+      find.byKey(const ValueKey('phase-exit')),
+      find.byType(ListView),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('nutrition-card')), findsOneWidget);
+    expect(find.text('Exit: 154 lb or Wilks floor breached'), findsOneWidget);
+    // Reaching here without a RenderFlex overflow report = pass.
+  });
+
+  testWidgets(
+      'strength page (weekly Wilks, projection, folds, model details) '
+      'reflows without overflow at 360dp', (tester) async {
+    ProgramProvider.clearCache();
+    _sizeAt(tester, const Size(360, 690));
+    await tester.pumpWidget(MaterialApp(
+      home: StrengthScreen(sources: sources(), today: DateTime(2026, 9, 23)),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('THIS WEEK'), findsOneWidget);
+    expect(find.text('PROJECTION'), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-summary')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-capacity-toggle')),
+        findsOneWidget);
+    // The weight lever lives on the Weight page.
+    expect(find.byKey(const ValueKey('nutrition-card')), findsNothing);
     await tester.dragUntilVisible(
       find.text('Model details'),
       find.byType(ListView),
@@ -250,6 +268,56 @@ domains:
     );
     await tester.pumpAndSettle();
     expect(find.text('Model details'), findsOneWidget);
+    expect(find.text('Fatigue budget'), findsOneWidget);
+    // Reaching here without a RenderFlex overflow report = pass.
+  });
+
+  testWidgets(
+      'lift page (now, e1RM chart, top sets, training max, projection) '
+      'reflows without overflow at 360dp', (tester) async {
+    ProgramProvider.clearCache();
+    _sizeAt(tester, const Size(360, 690));
+    await tester.pumpWidget(MaterialApp(
+      home: LiftScreen(
+        lift: 'squat',
+        summary: LiftSummary(
+          recent: (value: 340, date: DateTime(2026, 9, 21), wilks: 98.4),
+          lastBulk: (value: 315, date: DateTime(2025, 6, 10), wilks: 85.1),
+          best: (value: 405, date: DateTime(2024, 3, 1), wilks: 110.2),
+          bulkWindow: (
+            start: DateTime(2025, 2, 5),
+            end: DateTime(2025, 10, 6),
+            label: '2025 bulk',
+          ),
+          currentBwLbs: 162.4,
+        ),
+        sources: sources(),
+        wmSnapshot: () async => (
+              workingMax: [
+                WorkingMaxRow(
+                  lift: 'squat',
+                  variant: 'belted',
+                  valueLb: 320,
+                  effectiveFrom: DateTime(2026, 9, 21),
+                  source: 'seed',
+                  reason: 'starting value from the September readings',
+                ),
+              ],
+              readings: const <ReadingRow>[],
+            ),
+        today: DateTime(2026, 9, 23),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('lift-now')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lift-e1rm-chart')), findsOneWidget);
+    await tester.dragUntilVisible(
+      find.byKey(const ValueKey('lift-explainer')),
+      find.byType(ListView),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('lift-explainer')), findsOneWidget);
     // Reaching here without a RenderFlex overflow report = pass.
   });
 

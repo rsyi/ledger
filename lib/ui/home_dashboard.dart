@@ -6,9 +6,15 @@
 /// StatusChip + a status-coloured sparkline; tap model unchanged), then
 /// a LIFTS section of per-lift rows (recent e1RM, change vs the last
 /// bulk's best — green within 5%, amber 5-10% below, red beyond — and
-/// the number's age in words). Per-lift Wilks points (the old "128.2w"
-/// tags), all-time bests and every explainer moved to the Lifts detail
-/// sheet (showDetailSheet). The sections below describe the legacy /
+/// the number's age in words). IA restructure 2026-10-02 (Plan tab
+/// folded in): a PHASE section — the program block timeline — sits
+/// between the verdict rows and the lifts; the Weight / Strength rows
+/// open the Weight / Strength forecast pages ([onOpenWeight] /
+/// [onOpenStrength]); each lift row opens its own page (lift_screen.dart
+/// — chart, top sets, training max, projection, and the
+/// how-it's-measured notes in small text) instead of the old Lifts text
+/// sheet; the Lifts header carries no info icon. The sections below
+/// describe the legacy /
 /// non-progressOnly layout, which is unchanged apart from the shared
 /// sheet chrome.
 ///
@@ -163,6 +169,8 @@ import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
 import '../services/goals_service.dart' show liftDisplayName;
 import 'app_text.dart';
+import 'lift_screen.dart' show LiftSummary;
+import 'widgets/plan_sections.dart' show BlockTimeline;
 import 'design/design.dart' hide AppText;
 import 'design/tokens.dart' as ds show AppText;
 import 'widgets/skeleton.dart';
@@ -244,6 +252,20 @@ class HomeDashboard extends StatefulWidget {
   /// dashboard). Null → falls back to [onOpenProgram].
   final VoidCallback? onOpenStrengthDomain;
 
+  /// PROGRESS tab (IA restructure 2026-10-02): the Weight row opens the
+  /// Weight page (bodyweight trajectory, nutrition what-if, body comp).
+  /// Null → the legacy navigation ([onOpenProgram]).
+  final VoidCallback? onOpenWeight;
+
+  /// PROGRESS tab: the Strength row opens the Strength page (weekly
+  /// Wilks, strength projection, climbing/VO2/fatigue, model details).
+  /// Null → the legacy weekly-Wilks sheet.
+  final VoidCallback? onOpenStrength;
+
+  /// PROGRESS tab: a lift row opens that lift's page with the numbers
+  /// this dashboard already computed. Null → the explainer sheet.
+  final void Function(String lift, LiftSummary summary)? onOpenLift;
+
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -285,6 +307,9 @@ class HomeDashboard extends StatefulWidget {
     this.onOpenWeekPlan,
     this.onOpenStatus,
     this.onOpenStrengthDomain,
+    this.onOpenWeight,
+    this.onOpenStrength,
+    this.onOpenLift,
     this.today,
     this.progressOnly = false,
   });
@@ -1334,9 +1359,60 @@ class HomeDashboardState extends State<HomeDashboard> {
                 ProgressVerdictRow(row: row, onTap: () => _onHeroRowTap(row)),
             ]),
           ),
+        _progressPhase(context),
         _progressLifts(context),
         const SizedBox(height: 16),
       ],
+    );
+  }
+
+  /// PHASE: the program's block timeline (cut → reverse → climbing →
+  /// lifting…) with the you-are-here marker — the Plan tab's BLOCKS card,
+  /// folded into Progress (IA restructure 2026-10-02). No target card.
+  Widget _progressPhase(BuildContext context) {
+    return FutureBuilder<IntentDocs?>(
+      future: _docs,
+      builder: (context, snap) {
+        final program = snap.data?.program;
+        final version = currentVersion(program);
+        if (version == null || version['blocks'] is! List) {
+          return const SizedBox.shrink();
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SectionHeader(label: 'Phase'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.gutter),
+              child: BlockTimeline(
+                key: const ValueKey('progress-block-timeline'),
+                programVersion: version,
+                slice: _slice(snap.data),
+                today: _today,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Progress lift row → the lift page (no-op when no page opener is
+  /// wired — legacy callers).
+  Future<void> _openLift(String lift) async {
+    final open = widget.onOpenLift;
+    if (open == null) return;
+    final d = await _strength;
+    if (!mounted) return;
+    open(
+      lift,
+      LiftSummary(
+        recent: d?.recent[lift],
+        lastBulk: d?.lastBulk[lift],
+        best: d?.best[lift],
+        bulkWindow: d?.bulkWindow,
+        currentBwLbs: d?.currentBwLbs,
+      ),
     );
   }
 
@@ -1376,14 +1452,6 @@ class HomeDashboardState extends State<HomeDashboard> {
           count: snap.connectionState != ConnectionState.done
               ? null
               : (hasBulk ? 'e1RM vs last bulk' : 'e1RM'),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.info_outline, size: 20),
-              tooltip: 'How these are measured',
-              visualDensity: VisualDensity.compact,
-              onPressed: _openLiftsSheet,
-            ),
-          ],
         );
         final Widget body;
         if (snap.connectionState != ConnectionState.done) {
@@ -1401,7 +1469,6 @@ class HomeDashboardState extends State<HomeDashboard> {
         } else if (d == null || d.isEmpty) {
           body = AppCard(
             margin: gutter,
-            onTap: _openLiftsSheet,
             child: Text(
               'No strength data yet',
               style: ds.AppText.meta(context),
@@ -1421,7 +1488,9 @@ class HomeDashboardState extends State<HomeDashboard> {
                   bulkDate: hasBulk ? d.lastBulk[lift]?.date : null,
                   showBulk: hasBulk,
                   today: _today,
-                  onTap: _openLiftsSheet,
+                  onTap: widget.onOpenLift == null
+                      ? null
+                      : () => _openLift(lift),
                 ),
             ]),
           );
@@ -1434,168 +1503,24 @@ class HomeDashboardState extends State<HomeDashboard> {
     );
   }
 
-  /// The Lifts detail sheet: every number per lift in words (recent
-  /// e1RM, last-bulk best, all-time best, each with its Wilks points),
-  /// then how each is measured — RPE-adjusted e1RM, the bulk window,
-  /// Wilks points, the colour rule, where the working max went.
-  Future<void> _openLiftsSheet() async {
-    final d = await _strength;
-    if (!mounted) return;
-    final bw = d?.currentBwLbs;
-    final window = d?.bulkWindow;
-    final row = ds.AppText.row(context);
-    final meta = ds.AppText.meta(context);
-    final prose = row.copyWith(
-      fontWeight: FontWeight.w400,
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
-    );
-    String fig(_LiftValue v, String when) =>
-        '${fmtLb(v.value.roundToDouble())} lb · $when'
-        '${v.wilks == null ? '' : ' · ${v.wilks!.toStringAsFixed(1)} Wilks points'}';
-    Widget line(String label, String value) => Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: Text.rich(
-        TextSpan(
-          children: [
-            TextSpan(text: '$label  ', style: meta),
-            TextSpan(text: value, style: row.copyWith(fontSize: 13)),
-          ],
-        ),
-      ),
-    );
-    Widget section(String title, String text) => Padding(
-      padding: const EdgeInsets.only(top: AppSpace.sectionGap),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: row),
-          const SizedBox(height: 2),
-          Text(text, style: prose),
-        ],
-      ),
-    );
-    final lifts = <Widget>[
-      if (d != null && !d.isEmpty)
-        for (final lift in synthesisLifts)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(liftTitle(lift), style: row),
-                line(
-                  'Recent e1RM',
-                  d.recent[lift] == null
-                      ? '—'
-                      : fig(
-                          d.recent[lift]!,
-                          fmtAgoWords(d.recent[lift]!.date, _today),
-                        ),
-                ),
-                if (window != null)
-                  line(
-                    'Last bulk best',
-                    d.lastBulk[lift] == null
-                        ? '—'
-                        : fig(
-                            d.lastBulk[lift]!,
-                            fmtMonthTag(d.lastBulk[lift]!.date),
-                          ),
-                  ),
-                line(
-                  'All-time best',
-                  d.best[lift] == null
-                      ? '—'
-                      : fig(d.best[lift]!, fmtMonthTag(d.best[lift]!.date)),
-                ),
-              ],
-            ),
-          )
-      else
-        Text('No strength data yet.', style: prose),
-    ];
-    await showDetailSheet(
-      context: context,
-      title: 'Lifts',
-      subtitle: window == null
-          ? 'Your recent estimated max per lift'
-          : 'Your recent estimated max per lift vs your ${window.label}',
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ...lifts,
-          const Divider(height: 8),
-          section(
-            'Recent e1RM (estimated 1-rep max)',
-            'The best estimated 1-rep max over the last 14 days of real '
-                'work, RPE-adjusted: RPE says how many reps you had left '
-                '(reps in reserve = 10 − RPE), and those count as reps — a '
-                '275×2 at RPE 8 scores like 275×4 (Epley, total reps capped '
-                'at 12). Because you don\'t train to failure, this reads '
-                'your strength better than the raw set. Sets without an RPE '
-                'score as-is. Deload weeks and easy sets under 75% effort '
-                'don\'t count; with no real work in the window it slides '
-                'back to your newest qualifying set — "4 days ago" says how '
-                'current it is.',
-          ),
-          if (window != null)
-            section(
-              'Last bulk best',
-              'The heaviest weight you ACTUALLY lifted per lift during the '
-                  '${window.label} '
-                  '(${DateFormat('MMM d yyyy').format(window.start)} – '
-                  '${DateFormat('MMM d yyyy').format(window.end)}) — the '
-                  'high-water mark the cut is defending. The window comes '
-                  'from dashboards.yaml `last_bulk` (start derived from the '
-                  'bodyweight trough; edit the dates there if it looks off).',
-            ),
-          section(
-            'Change vs last bulk',
-            'Recent e1RM minus the last bulk\'s best. Green: within 5% '
-                '(holding). Amber: 5–10% below. Red: more than 10% below. '
-                'It compares an ESTIMATE against a weight actually lifted, '
-                'so a recent e1RM can sit above a top you never lifted.',
-          ),
-          section(
-            'All-time best',
-            'The heaviest weight you\'ve ever actually lifted (any reps '
-                '≥ 1 — a 405×2 counts as 405; no estimates) over the full '
-                'strength history.',
-          ),
-          section(
-            'Wilks points',
-            'Each lift\'s share of a Wilks score — the weight scored '
-                'against bodyweight so lifts at different bodyweights '
-                'compare fairly. Recent numbers use your current '
-                'bodyweight'
-                '${bw == null ? '' : ' (${bw.toStringAsFixed(1)} lb)'}; '
-                'the bests use the bodyweight you carried the month they '
-                'were set.',
-          ),
-          section(
-            'Working max',
-            'Not shown here: it\'s the program\'s setting that session '
-                'percentages hang off, not a measured max. Confirm or '
-                'override it on the Program screen.',
-          ),
-        ],
-      ),
-      actions: [
-        if (widget.onOpenProgram != null)
-          DetailAction(
-            icon: Icons.arrow_forward,
-            label: 'Open Program',
-            onTap: widget.onOpenProgram!,
-          ),
-      ],
-    );
-  }
-
   /// Hero row taps: the Wilks rows (wilks_stability / strength_gain)
   /// open their detail sheet first — the weekly decomposition is the
   /// whole point of the tap (2026-09-25); everything else navigates
   /// straight to the owning screen as before.
   void _onHeroRowTap(EigenRowData row) {
+    // PROGRESS tab (IA restructure 2026-10-02): Weight → the Weight
+    // page, Strength (incl. the Wilks rows) → the Strength page, which
+    // carries the weekly-Wilks breakdown the sheet used to.
+    if (widget.progressOnly) {
+      if (row.nav == EigenNav.program && widget.onOpenWeight != null) {
+        widget.onOpenWeight!();
+        return;
+      }
+      if (row.nav == EigenNav.strength && widget.onOpenStrength != null) {
+        widget.onOpenStrength!();
+        return;
+      }
+    }
     if (row.id == 'wilks_stability' || row.id == 'strength_gain') {
       _openHeroWilksSheet(row);
       return;
@@ -4046,25 +3971,34 @@ class ProgressLiftRow extends StatelessWidget {
       status: status,
       onTap: onTap,
       subtitle: Text(subtitle),
-      trailing: Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(
-              recent == null ? '—' : '${fmtLb(recent!.roundToDouble())} lb',
-              style: value,
-            ),
-            if (showBulk && recent != null && bulk != null)
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
               Text(
-                fmtLbDelta(recent!, bulk!),
-                style: ds.AppText.meta(
-                  context,
-                ).copyWith(color: color, fontWeight: FontWeight.w600),
+                recent == null ? '—' : '${fmtLb(recent!.roundToDouble())} lb',
+                style: value,
               ),
-          ],
-        ),
+              if (showBulk && recent != null && bulk != null)
+                Text(
+                  fmtLbDelta(recent!, bulk!),
+                  style: ds.AppText.meta(
+                    context,
+                  ).copyWith(color: color, fontWeight: FontWeight.w600),
+                ),
+            ],
+          ),
+          // Opens the lift's own page (IA restructure 2026-10-02).
+          if (onTap != null)
+            Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+        ],
       ),
     );
   }

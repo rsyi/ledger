@@ -1,4 +1,4 @@
-/// FORECAST section for the Plan tab — the SINGLE-TRAJECTORY program
+/// FORECAST section for the Weight + Strength pages (was the Plan tab) — the SINGLE-TRAJECTORY program
 /// forecast (user directive 2026-09-28: "remove this whole lever-based
 /// computation… I want to just stick with this program long-term …
 /// the only lever really be based on my caloric intake").
@@ -55,7 +55,8 @@ import 'chart_bottom_axis.dart';
 // Inputs
 // ---------------------------------------------------------------------------
 
-/// Everything the section needs, assembled by the Plan screen.
+/// Everything the section needs, assembled by loadPlanData
+/// (ui/plan_data.dart).
 class ForecastInputs {
   /// Block calendar from coach/program.yaml (sim2BlocksFromProgramDocs).
   /// The section extends it with the steady-state continuation.
@@ -125,7 +126,7 @@ class Sim2McJob {
 
 typedef Sim2McRunner = Future<Sim2McSummary> Function(Sim2McJob job);
 
-Future<Sim2McSummary> _isolateMcRunner(Sim2McJob j) => sim2MonteCarloInIsolate(
+Future<Sim2McSummary> sim2IsolateMcRunner(Sim2McJob j) => sim2MonteCarloInIsolate(
   params: j.params,
   blocks: j.blocks,
   start: j.start,
@@ -138,9 +139,96 @@ Future<Sim2McSummary> _isolateMcRunner(Sim2McJob j) => sim2MonteCarloInIsolate(
 // The section
 // ---------------------------------------------------------------------------
 
+/// Which slice of the forecast a page shows (IA restructure
+/// 2026-10-02 — the Plan tab folded into Progress):
+///   * [weight]   — the Weight page: bodyweight trajectory (observed +
+///                  projection), body composition, the NUTRITION card
+///                  with the what-if stepper (the lever for weight).
+///   * [strength] — the Strength page: the plain projection summary,
+///                  the strength-total chart + capacity toggle, the
+///                  climbing / VO2 max / fatigue folds and the ONE
+///                  Model details disclosure.
+///   * [all]      — everything in one column (the pre-split layout;
+///                  kept as the default so the section stays testable
+///                  as a whole).
+enum ForecastFocus { all, weight, strength }
+
+/// Fitted params with the nightly recalibration scales applied.
+Sim2Params forecastFittedParams(ForecastMeta? meta) {
+  final p = Sim2Params.fitted();
+  if (meta != null) {
+    p.a *= meta.aScale;
+    p.b *= meta.bScale;
+  }
+  return p;
+}
+
+/// Nutrition with the nightly maintenance offset + a local what-if
+/// delta (kcal/day).
+NutritionForecast? forecastNutrition(ForecastInputs inputs, {double delta = 0}) {
+  final n = inputs.nutrition;
+  if (n == null) return null;
+  return n
+      .withMaintenanceOffset(inputs.meta?.maintenanceOffsetKcal ?? 0)
+      .withDelta(delta);
+}
+
+/// The nutrition-derived dial overrides (r + P), scoped to the CURRENT
+/// block only — later blocks keep the declared calendar rates ("phase
+/// declarations stay": today's eating predicts the current phase, it
+/// doesn't rewrite next year's plan). Empty when the data can't project
+/// (declared block rates apply throughout).
+Map<int, Sim2DialOverrides> forecastBlockOverrides(
+  ForecastInputs inputs,
+  List<Sim2Block> blocks,
+  DateTime today,
+  NutritionForecast? n,
+) {
+  if (n == null || !n.canProject) return const {};
+  final bw = inputs.observedBw ?? inputs.stats.bw7dAvg ?? sim2SeedBw;
+  final currentN = sim2CurrentBlockN(blocks, today) ?? blocks.first.n;
+  return {
+    currentN: Sim2DialOverrides(
+      r: n.rProjectedLbWk,
+      p: n.proteinGPerLb(bw),
+    ),
+  };
+}
+
+/// The deterministic single trajectory exactly as [ForecastSection]
+/// renders it with no what-if and fitted params (+ recalibration) —
+/// for pages that need the numbers without the section (the per-lift
+/// page's "Squat 404 by Dec '28").
+Sim2Run forecastBaselineRun(
+  ForecastInputs inputs,
+  DateTime today, {
+  int steadyStateWeeks = 52,
+}) {
+  final blocks = sim2ExtendSteadyState(
+    inputs.blocks,
+    extraWeeks: steadyStateWeeks,
+  );
+  return sim2Run(
+    params: forecastFittedParams(inputs.meta),
+    blocks: blocks,
+    start: sim2StartMonday(today),
+    blockOverrides: forecastBlockOverrides(
+      inputs,
+      blocks,
+      today,
+      forecastNutrition(inputs),
+    ),
+    observedBw: inputs.observedBw,
+    observedIndexTotal: inputs.observedIndexTotal,
+  );
+}
+
 class ForecastSection extends StatefulWidget {
   final ForecastInputs inputs;
   final DateTime today;
+
+  /// Which slice to render (see [ForecastFocus]).
+  final ForecastFocus focus;
 
   /// Injectable MC runner (tests pass a synchronous one); default runs
   /// the 200 paths via Isolate.run — never on the UI thread.
@@ -154,7 +242,8 @@ class ForecastSection extends StatefulWidget {
     super.key,
     required this.inputs,
     required this.today,
-    this.mcRunner = _isolateMcRunner,
+    this.focus = ForecastFocus.all,
+    this.mcRunner = sim2IsolateMcRunner,
     this.steadyStateWeeks = 52,
   });
 
@@ -178,44 +267,16 @@ class _ForecastSectionState extends State<ForecastSection> {
 
   /// Fitted params with the nightly recalibration scales applied —
   /// the baseline the param sheet's EDITED marker compares against.
-  Sim2Params _recalibratedFitted() {
-    final p = Sim2Params.fitted();
-    final meta = widget.inputs.meta;
-    if (meta != null) {
-      p.a *= meta.aScale;
-      p.b *= meta.bScale;
-    }
-    return p;
-  }
+  Sim2Params _recalibratedFitted() => forecastFittedParams(widget.inputs.meta);
 
   /// Nutrition with the nightly maintenance offset + the local delta.
-  NutritionForecast? get _nutrition {
-    final n = widget.inputs.nutrition;
-    if (n == null) return null;
-    return n
-        .withMaintenanceOffset(widget.inputs.meta?.maintenanceOffsetKcal ?? 0)
-        .withDelta(_calorieDelta);
-  }
+  NutritionForecast? get _nutrition =>
+      forecastNutrition(widget.inputs, delta: _calorieDelta);
 
-  /// The nutrition-derived dial overrides (r + P), scoped to the
-  /// CURRENT block only — later blocks keep the declared calendar
-  /// rates ("phase declarations stay": today's eating predicts the
-  /// current phase, it doesn't rewrite next year's plan). Empty when
-  /// the data can't project (declared block rates apply throughout).
-  Map<int, Sim2DialOverrides> get _blockOverrides {
-    final n = _nutrition;
-    if (n == null || !n.canProject) return const {};
-    final bw =
-        widget.inputs.observedBw ?? widget.inputs.stats.bw7dAvg ?? sim2SeedBw;
-    final currentN =
-        sim2CurrentBlockN(_blocks, widget.today) ?? _blocks.first.n;
-    return {
-      currentN: Sim2DialOverrides(
-        r: n.rProjectedLbWk,
-        p: n.proteinGPerLb(bw),
-      ),
-    };
-  }
+  /// Nutrition-driven dial overrides for the current block
+  /// ([forecastBlockOverrides]).
+  Map<int, Sim2DialOverrides> get _blockOverrides =>
+      forecastBlockOverrides(widget.inputs, _blocks, widget.today, _nutrition);
 
   bool get _nutritionDriven => _blockOverrides.isNotEmpty;
 
@@ -258,10 +319,12 @@ class _ForecastSectionState extends State<ForecastSection> {
   }
 
   /// 200-path MC off the UI thread; deterministic lines render
-  /// immediately, the P(V8) chip fills in when it lands.
+  /// immediately, the P(V8) chip fills in when it lands. The Weight
+  /// page shows no climbing numbers, so it skips the MC entirely.
   void _kickMc() {
     final token = ++_mcToken;
     _mc = null;
+    if (widget.focus == ForecastFocus.weight) return;
     widget
         .mcRunner(
           Sim2McJob(
@@ -339,96 +402,172 @@ class _ForecastSectionState extends State<ForecastSection> {
   @override
   Widget build(BuildContext context) {
     final horizonLabel = DateFormat("MMM d ''yy").format(_blocks.last.end);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Plain-language answer first: where the program lands.
-        const SectionHeader(label: 'Projection'),
+    final children = switch (widget.focus) {
+      ForecastFocus.weight => [
+        ..._bodyweightBlock(context, horizonLabel),
+        ..._nutritionBlock(),
+        const SectionHeader(label: 'Body composition'),
         _gutter(
-          _SummaryLine(
-            key: const ValueKey('sim2-summary'),
-            run: _run,
-            mc: _mc,
-            horizonLabel: horizonLabel,
-            nutritionDriven: _nutritionDriven,
-          ),
-        ),
-        const SizedBox(height: AppSpace.sectionGap),
-        _gutter(
-          _card(
-            context,
-            title: 'Strength total',
-            trailing: FilterChip(
-              key: const ValueKey('sim2-capacity-toggle'),
-              label: const Text('capacity'),
-              visualDensity: VisualDensity.compact,
-              selected: _showCapacity,
-              onSelected: (v) => setState(() => _showCapacity = v),
-            ),
-            child: _strengthBody(context, horizonLabel),
-          ),
-        ),
-        // The input + the ONE lever.
-        const SectionHeader(label: 'Nutrition'),
-        _gutter(
-          _NutritionCard(
-            key: const ValueKey('nutrition-card'),
-            nutrition: _nutrition,
-            delta: _calorieDelta,
-            onDelta: _setDelta,
-            stepKcal: _deltaStepKcal,
-          ),
-        ),
-        const SectionHeader(label: 'More projections'),
-        _gutter(
-          _foldout(
-            context,
-            key: 'sim2-fold-body',
-            title: 'Body composition',
-            child: _bodyCompBody(context),
-          ),
-        ),
-        const SizedBox(height: 8),
-        _gutter(
-          _foldout(
-            context,
-            key: 'sim2-fold-climb',
-            title: 'Climbing',
-            child: _climbBody(context, horizonLabel),
-          ),
-        ),
-        const SizedBox(height: 8),
-        _gutter(
-          _foldout(
-            context,
-            key: 'sim2-fold-vo2',
-            title: 'VO2 max',
-            child: _vo2Body(context),
-          ),
-        ),
-        const SizedBox(height: 8),
-        _gutter(
-          _foldout(
-            context,
-            key: 'sim2-fold-fatigue',
-            title: 'Fatigue budget',
-            child: _fatigueBody(context),
-          ),
-        ),
-        const SizedBox(height: 8),
-        // Model internals (provenance) — ONE disclosure, collapsed.
-        _gutter(
-          _foldout(
-            context,
-            key: 'forecast-model-details',
-            title: 'Model details',
-            child: _modelDetails(context),
+          AppCard(
+            key: const ValueKey('forecast-bodycomp-card'),
+            padding: const EdgeInsets.all(12),
+            child: _bodyFatBody(context),
           ),
         ),
       ],
+      ForecastFocus.strength => [
+        ..._projectionBlock(context, horizonLabel),
+        const SectionHeader(label: 'More projections'),
+        ..._moreFolds(context, horizonLabel, includeBody: false),
+        _modelDetailsFold(context),
+      ],
+      ForecastFocus.all => [
+        ..._projectionBlock(context, horizonLabel),
+        ..._nutritionBlock(),
+        const SectionHeader(label: 'More projections'),
+        ..._moreFolds(context, horizonLabel, includeBody: true),
+        _modelDetailsFold(context),
+      ],
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
     );
   }
+
+  /// Plain-language answer first: where the program lands, then the
+  /// strength-total chart with the capacity toggle.
+  List<Widget> _projectionBlock(BuildContext context, String horizonLabel) => [
+    const SectionHeader(label: 'Projection'),
+    _gutter(
+      _SummaryLine(
+        key: const ValueKey('sim2-summary'),
+        run: _run,
+        mc: _mc,
+        horizonLabel: horizonLabel,
+        nutritionDriven: _nutritionDriven,
+      ),
+    ),
+    const SizedBox(height: AppSpace.sectionGap),
+    _gutter(
+      _card(
+        context,
+        title: 'Strength total',
+        trailing: FilterChip(
+          key: const ValueKey('sim2-capacity-toggle'),
+          label: const Text('capacity'),
+          visualDensity: VisualDensity.compact,
+          selected: _showCapacity,
+          onSelected: (v) => setState(() => _showCapacity = v),
+        ),
+        child: _strengthBody(context, horizonLabel),
+      ),
+    ),
+  ];
+
+  /// The input + the ONE lever.
+  List<Widget> _nutritionBlock() => [
+    const SectionHeader(label: 'Nutrition'),
+    _gutter(
+      _NutritionCard(
+        key: const ValueKey('nutrition-card'),
+        nutrition: _nutrition,
+        delta: _calorieDelta,
+        onDelta: _setDelta,
+        stepKcal: _deltaStepKcal,
+      ),
+    ),
+  ];
+
+  /// Weight page: the bodyweight trajectory (observed daily + 7-day
+  /// average + the projection), the observed stats, and where the
+  /// projection lands — always open (it is the page's subject).
+  List<Widget> _bodyweightBlock(BuildContext context, String horizonLabel) => [
+    const SectionHeader(label: 'Bodyweight'),
+    _gutter(
+      AppCard(
+        key: const ValueKey('forecast-bw-card'),
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _bwChartBody(context),
+            const SizedBox(height: 8),
+            Text(
+              'Projected ${_run.last.bw.toStringAsFixed(0)} lb by $horizonLabel',
+              key: const ValueKey('forecast-bw-summary'),
+              style: AppText.row(context),
+            ),
+            Text(
+              _nutritionDriven
+                  ? 'Weight rate from your logged intake'
+                  : "Weight rate from the program's declared rates (no "
+                        'nutrition data yet)',
+              key: const ValueKey('forecast-basis'),
+              style: AppText.meta(context),
+            ),
+          ],
+        ),
+      ),
+    ),
+  ];
+
+  /// Climbing / VO2 max / fatigue folds (+ body composition when the
+  /// page has no dedicated body section).
+  List<Widget> _moreFolds(
+    BuildContext context,
+    String horizonLabel, {
+    required bool includeBody,
+  }) => [
+    if (includeBody) ...[
+      _gutter(
+        _foldout(
+          context,
+          key: 'sim2-fold-body',
+          title: 'Body composition',
+          child: _bodyCompBody(context),
+        ),
+      ),
+      const SizedBox(height: 8),
+    ],
+    _gutter(
+      _foldout(
+        context,
+        key: 'sim2-fold-climb',
+        title: 'Climbing',
+        child: _climbBody(context, horizonLabel),
+      ),
+    ),
+    const SizedBox(height: 8),
+    _gutter(
+      _foldout(
+        context,
+        key: 'sim2-fold-vo2',
+        title: 'VO2 max',
+        child: _vo2Body(context),
+      ),
+    ),
+    const SizedBox(height: 8),
+    _gutter(
+      _foldout(
+        context,
+        key: 'sim2-fold-fatigue',
+        title: 'Fatigue budget',
+        child: _fatigueBody(context),
+      ),
+    ),
+    const SizedBox(height: 8),
+  ];
+
+  /// Model internals (provenance) — ONE disclosure, collapsed.
+  Widget _modelDetailsFold(BuildContext context) => _gutter(
+    _foldout(
+      context,
+      key: 'forecast-model-details',
+      title: 'Model details',
+      child: _modelDetails(context),
+    ),
+  );
 
   static Widget _gutter(Widget child) => Padding(
     padding: const EdgeInsets.symmetric(horizontal: AppSpace.gutter),
@@ -594,30 +733,47 @@ class _ForecastSectionState extends State<ForecastSection> {
     );
   }
 
-  Widget _bodyCompBody(BuildContext context) {
+  Widget _bodyCompBody(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      _bwChartBody(context),
+      const SizedBox(height: 10),
+      _bodyFatBody(context),
+    ],
+  );
+
+  /// Observed + projected bodyweight chart, the expectation note and
+  /// the observed stats row.
+  Widget _bwChartBody(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      _BwChart(
+        key: const ValueKey('sim2-bw-chart'),
+        run: _run,
+        daily: widget.inputs.observedDaily,
+        today: widget.today,
+        expectationBand: widget.inputs.expectations?.bodyweightLb,
+      ),
+      const SizedBox(height: 6),
+      if (widget.inputs.expectations?.bodyweightLb != null)
+        Text(
+          key: const ValueKey('sim2-expectation-bw'),
+          'shaded: '
+          '${widget.inputs.expectations!.bodyweightLb![0].toStringAsFixed(0)}–'
+          '${widget.inputs.expectations!.bodyweightLb![1].toStringAsFixed(0)} lb'
+          ' — expectation range, not target',
+          style: AppText.meta(context),
+        ),
+      _StatsRow(stats: widget.inputs.stats),
+    ],
+  );
+
+  /// Projected body-fat chart + where it lands.
+  Widget _bodyFatBody(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _BwChart(
-          key: const ValueKey('sim2-bw-chart'),
-          run: _run,
-          daily: widget.inputs.observedDaily,
-          today: widget.today,
-          expectationBand: widget.inputs.expectations?.bodyweightLb,
-        ),
-        const SizedBox(height: 6),
-        if (widget.inputs.expectations?.bodyweightLb != null)
-          Text(
-            key: const ValueKey('sim2-expectation-bw'),
-            'shaded: '
-            '${widget.inputs.expectations!.bodyweightLb![0].toStringAsFixed(0)}–'
-            '${widget.inputs.expectations!.bodyweightLb![1].toStringAsFixed(0)} lb'
-            ' — expectation range, not target',
-            style: AppText.meta(context),
-          ),
-        _StatsRow(stats: widget.inputs.stats),
-        const SizedBox(height: 10),
         Text('Body fat %', style: AppText.meta(context)),
         _Sim2Chart(
           key: const ValueKey('sim2-bf-chart'),

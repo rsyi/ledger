@@ -82,6 +82,11 @@ class ProgramDayCard extends StatefulWidget {
   /// Clock for "is this today's card" — tests pin it.
   final DateTime Function() now;
 
+  /// Opens the full-week Program screen (IA restructure 2026-10-02 —
+  /// the Plan tab and its app-bar entry point are gone). Null → no
+  /// "Full week" action in the header.
+  final VoidCallback? onOpenWeek;
+
   const ProgramDayCard({
     super.key,
     required this.provider,
@@ -101,6 +106,7 @@ class ProgramDayCard extends StatefulWidget {
     this.climbingRepo,
     this.wmSnapshot,
     this.now = DateTime.now,
+    this.onOpenWeek,
   });
 
   @override
@@ -641,10 +647,30 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                         : null,
                 actions: [
                   if (allDone)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 12),
-                      child: StatusChip(
+                    Padding(
+                      padding: EdgeInsets.only(
+                          right: widget.onOpenWeek == null ? 12 : 4),
+                      child: const StatusChip(
                           label: 'complete', status: ItemStatus.done),
+                    ),
+                  if (widget.onOpenWeek != null)
+                    TextButton(
+                      key: const ValueKey('program-full-week'),
+                      onPressed: widget.onOpenWeek,
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        padding: const EdgeInsets.only(left: 8, right: 4),
+                        textStyle: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Full week'),
+                          Icon(Icons.chevron_right, size: 16),
+                        ],
+                      ),
                     ),
                 ],
               ),

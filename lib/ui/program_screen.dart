@@ -19,8 +19,11 @@
 ///      heavy days. Template prose is never rendered.
 ///
 /// All row/summary/label formatting is pure and tested —
-/// services/routine_display.dart. Phases + forecast/sim live on the
-/// Plan tab (plan_screen.dart), not here.
+/// services/routine_display.dart. Phases live on the Progress tab and
+/// the forecast/sim on the Weight / Strength pages, not here. Entry
+/// points (2026-10-02, Plan tab retired): Today's program card "Full
+/// week" action, the Week tab's app-bar icon, and every old
+/// week-plan / Program deep link.
 library;
 
 import 'package:fl_chart/fl_chart.dart';

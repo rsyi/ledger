@@ -81,6 +81,7 @@ Future<void> pumpSection(
   WidgetTester tester, {
   ForecastInputs? section,
   Size surface = const Size(800, 5200),
+  ForecastFocus focus = ForecastFocus.all,
 }) async {
   tester.view.physicalSize = surface;
   tester.view.devicePixelRatio = 1.0;
@@ -91,6 +92,7 @@ Future<void> pumpSection(
         child: ForecastSection(
           inputs: section ?? inputs(n: nutrition()),
           today: _today,
+          focus: focus,
           mcRunner: testMcRunner,
         ),
       ),
@@ -392,5 +394,84 @@ void main() {
     expect(find.byKey(const ValueKey('nutrition-card')), findsOneWidget);
     expect(find.byKey(const ValueKey('sim2-expressed-chart')), findsOneWidget);
     // Reaching here without a RenderFlex overflow report = pass.
+  });
+
+  // IA restructure 2026-10-02: the Plan tab split into the Weight and
+  // Strength pages, each rendering one slice of the same section.
+  group('focus slices', () {
+    testWidgets('weight: bodyweight trajectory open, nutrition lever, body '
+        'fat — no strength chart, folds or model details', (tester) async {
+      await pumpSection(tester, focus: ForecastFocus.weight);
+      expect(find.text('BODYWEIGHT'), findsOneWidget);
+      expect(find.byKey(const ValueKey('sim2-bw-chart')), findsOneWidget);
+      expect(find.byKey(const ValueKey('sim2-bf-chart')), findsOneWidget);
+      expect(find.byKey(const ValueKey('nutrition-card')), findsOneWidget);
+      expect(textOf(tester, 'forecast-bw-summary'),
+          startsWith('Projected '));
+      expect(textOf(tester, 'forecast-basis'),
+          contains('from your logged intake'));
+      for (final k in [
+        'sim2-expressed-chart',
+        'sim2-summary',
+        'sim2-fold-body',
+        'sim2-fold-climb',
+        'forecast-model-details',
+      ]) {
+        expect(find.byKey(ValueKey(k)), findsNothing, reason: k);
+      }
+      // The what-if lever moves the weight projection here.
+      final before = textOf(tester, 'forecast-bw-summary');
+      for (var i = 0; i < 5; i++) {
+        await tester.tap(find.byKey(const ValueKey('nutrition-delta-plus')));
+        await tester.pump();
+      }
+      expect(textOf(tester, 'nutrition-delta-value'), '+500 kcal/day');
+      expect(textOf(tester, 'forecast-bw-summary'), isNot(before));
+    });
+
+    testWidgets('strength: summary + strength chart + capacity toggle, '
+        'climbing/VO2/fatigue folds, model details — no nutrition card or '
+        'body fold', (tester) async {
+      await pumpSection(tester, focus: ForecastFocus.strength);
+      expect(find.byKey(const ValueKey('sim2-summary')), findsOneWidget);
+      expect(summaryText(tester), contains('Staying on this program, by'));
+      expect(find.byKey(const ValueKey('sim2-expressed-chart')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('sim2-capacity-toggle')),
+          findsOneWidget);
+      for (final k in [
+        'sim2-fold-climb',
+        'sim2-fold-vo2',
+        'sim2-fold-fatigue',
+        'forecast-model-details',
+      ]) {
+        expect(find.byKey(ValueKey(k)), findsOneWidget, reason: k);
+      }
+      expect(find.byKey(const ValueKey('nutrition-card')), findsNothing);
+      expect(find.byKey(const ValueKey('sim2-fold-body')), findsNothing);
+      // Model details still holds the provenance sheet.
+      await openModelDetails(tester);
+      expect(find.byKey(const ValueKey('sim2-params-tile')), findsOneWidget);
+      expect(find.byKey(const ValueKey('forecast-tracking')), findsOneWidget);
+    });
+
+    testWidgets('both slices reflow without overflow at 360dp',
+        (tester) async {
+      await pumpSection(tester,
+          focus: ForecastFocus.weight, surface: const Size(360, 4000));
+      await pumpSection(tester,
+          focus: ForecastFocus.strength, surface: const Size(360, 4000));
+    });
+
+    testWidgets('forecastBaselineRun matches the section\'s default '
+        'trajectory (the lift page reads its numbers from it)',
+        (tester) async {
+      await pumpSection(tester);
+      final run = forecastBaselineRun(inputs(n: nutrition()), _today);
+      expect(summaryText(tester),
+          contains('Strength total ${run.last.sTrue.toStringAsFixed(0)} lb'));
+      expect(summaryText(tester),
+          contains('bodyweight ${run.last.bw.toStringAsFixed(0)} lb'));
+    });
   });
 }

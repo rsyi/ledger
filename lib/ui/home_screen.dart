@@ -69,15 +69,22 @@ import 'home_dashboard.dart';
 import 'goals_screen.dart';
 import 'app_text.dart';
 import 'timeline_screen.dart';
-import 'plan_screen.dart';
+import 'home_tabs.dart';
+import 'lift_screen.dart';
+import 'plan_data.dart';
+import 'strength_screen.dart';
+import 'weight_screen.dart';
 
 /// The synced view that backs the coach chat. Hidden from the normal
 /// tile list; surfaced only through the pinned Coach row + chat screen.
 const kCoachChatViewName = 'coach_chat';
 
 /// App entrypoint shell. Loads config + schemas, connects to the
-/// warehouse, and presents a 5-tab NavigationBar — Today · Log · Week ·
-/// Progress · Plan (2026-10-02 order; indices are the `_tab*` constants).
+/// warehouse, and presents a 4-tab NavigationBar — Today · Log · Week ·
+/// Progress (2026-10-02 order; indices are the `_tab*` constants). The
+/// Plan tab folded into Progress the same day (IA restructure): the
+/// block timeline sits on Progress, the forecast lives behind the
+/// Weight / Strength rows, and each lift row opens its own page.
 /// Progress/Goals split 2026-09-29 — the output-over-input principle
 /// made literal: the old combined Home tab divided into an OUTPUT
 /// surface and an INPUT surface (Goals is the Week tab):
@@ -103,11 +110,13 @@ const kCoachChatViewName = 'coach_chat';
 ///   COACH    the coach threads screen embedded as the tab root (the
 ///            old pinned-row → pushed-threads flow, minus the push);
 ///            opening a thread still pushes the chat.
-///   PLAN     the phases + forecast screen (plan_screen.dart); the
-///            ROUTINE (Program screen) rides its app-bar action.
+///   (PLAN    retired 2026-10-02 — phases → Progress' PHASE section;
+///            forecast → the Weight / Strength pages; the ROUTINE
+///            (Program screen) opens from Today's "Full week" action and
+///            the Week tab's app-bar icon.)
 ///
 /// Bootstrap stays at THIS level: one FutureBuilder feeds every tab, so
-/// the SchemaSync poller's rebuild swaps all five bodies at once and
+/// the SchemaSync poller's rebuild swaps all four bodies at once and
 /// the selected tab (a plain State field) survives. Tab switches don't
 /// push routes, so the poller's canPop() mid-task guard keeps working.
 ///
@@ -156,11 +165,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Bottom-nav tab indices (2026-10-02 order: Log sits right after
   /// Today). Every tab switch goes through these names — never a bare
   /// index — so a reorder is a one-place change.
-  static const int _tabToday = 0;
-  static const int _tabLog = 1;
-  static const int _tabWeek = 2;
-  static const int _tabProgress = 3;
-  static const int _tabPlan = 4;
+  static const int _tabToday = HomeTabs.today;
+  static const int _tabLog = HomeTabs.log;
+  static const int _tabWeek = HomeTabs.week;
+  static const int _tabProgress = HomeTabs.progress;
 
   /// Selected bottom-nav tab (one of the `_tab*` constants). Plain state
   /// field so it survives the poller's setState rebuilds.
@@ -965,10 +973,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 WidgetsBinding.instance
                     .addPostFrameCallback((_) => _runCarryoverCheck());
               }
-              // Plan is a tab — hero taps / sheet actions select it
-              // instead of pushing a duplicate screen.
-              void openProgram() => _selectTab(_tabPlan);
-
               // Shared timeline opener for tracker rows. Read-only views
               // ride the direct-sheet repo with no post-log hooks; entry
               // views get the full plumbing (LLM, QBO when mapped).
@@ -1082,6 +1086,66 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 );
               }
+
+              // Every old "Plan"/"Program" deep link (hero rows, sheet
+              // actions) opens the Program screen directly — the Plan tab
+              // is gone (IA restructure 2026-10-02).
+              void openProgram() => openWeekPlan();
+
+              // Forecast pages (the old Plan tab's content): one sources
+              // bundle shared by Weight / Strength / per-lift pages.
+              final planSources = programProvider == null
+                  ? null
+                  : PlanSources(
+                      provider: programProvider,
+                      analytics: data.analytics,
+                      weightView: weightView,
+                      weightRepo: weightView == null
+                          ? null
+                          : data.registry.forView(weightView),
+                      strengthView: dashStrengthView,
+                      strengthRepo: dashStrengthView == null
+                          ? null
+                          : data.registry.forView(dashStrengthView),
+                      // kaya_ascents is read-only → direct-sheet repo.
+                      climbingView: dashClimbingView,
+                      climbingRepo: dashboardRepoFor(
+                        dashClimbingView,
+                        readOnlyRepo: data.readOnlyRepo,
+                        forView: data.registry.forView,
+                      ),
+                      mealsView: dashMealsView,
+                      mealsRepo: dashboardRepoFor(
+                        dashMealsView,
+                        readOnlyRepo: data.readOnlyRepo,
+                        forView: data.registry.forView,
+                      ),
+                      metaStore: data.forecastMetaStore,
+                    );
+
+              void openWeight() => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => WeightScreen(sources: planSources!),
+                ),
+              );
+
+              void openStrength() => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => StrengthScreen(sources: planSources!),
+                ),
+              );
+
+              void openLift(String lift, LiftSummary summary) =>
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => LiftScreen(
+                        lift: lift,
+                        summary: summary,
+                        sources: planSources,
+                        wmSnapshot: data.wmStore?.snapshot,
+                      ),
+                    ),
+                  );
 
               void openStatusLedger() {
                 final view = statusView;
@@ -1391,6 +1455,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           readOnlyRepo: data.readOnlyRepo,
                           forView: data.registry.forView,
                         ),
+                        // The Program screen's entry point now that the
+                        // Plan tab is gone.
+                        onOpenWeek:
+                            programProvider == null ? null : openWeekPlan,
                       ),
                     ],
                   ),
@@ -1494,6 +1562,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             domainProvider == null || dashStrengthView == null
                             ? null
                             : openStrengthDomain,
+                        // IA restructure 2026-10-02: Weight / Strength
+                        // rows open the forecast pages; lift rows open
+                        // the per-lift page.
+                        onOpenWeight: planSources == null ? null : openWeight,
+                        onOpenStrength:
+                            planSources == null ? null : openStrength,
+                        onOpenLift: openLift,
                       ),
                     ],
                   ),
@@ -1509,7 +1584,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   // Labelled "Week" (idx 1): the week-scale input
                   // eigenvectors, one zoom level out from Today.
                   title: const Text('Week'),
-                  actions: [SyncStatusButton()],
+                  actions: [
+                    // The full-week routine (Program screen) — one of
+                    // its two entry points since the Plan tab left.
+                    if (programProvider != null)
+                      IconButton(
+                        icon: const Icon(Icons.fitness_center_outlined),
+                        tooltip: 'Program — full week',
+                        onPressed: openWeekPlan,
+                      ),
+                    SyncStatusButton(),
+                  ],
                 ),
                 body: RefreshIndicator(
                   onRefresh: () async => _goalsKey.currentState?.reload(),
@@ -1624,64 +1709,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               // (Coach left the bottom nav 2026-09-30 — reached via the
               // Today tab's app-bar icon → openCoachThreads.)
 
-              // ---- PLAN: phases + progress (tab split 2026-09-28 —
-              // replaces the old everything-Program tab); the ROUTINE
-              // (Program screen) rides its app-bar action.
-              final planTab = programProvider == null
-                  ? Scaffold(
-                      appBar: AppBar(title: const Text('Plan')),
-                      body: const Center(
-                        child: Padding(
-                          padding: EdgeInsets.all(24),
-                          child: Text(
-                            'Program data unavailable — needs GitHub config.',
-                          ),
-                        ),
-                      ),
-                    )
-                  : PlanScreen(
-                      provider: programProvider,
-                      analytics: data.analytics,
-                      weightView: weightView,
-                      weightRepo: weightView == null
-                          ? null
-                          : data.registry.forView(weightView),
-                      // Forecast initial state: strength history +
-                      // climbing ascents (kaya_ascents is read-only —
-                      // route through the direct-sheet repo).
-                      strengthView: dashStrengthView,
-                      strengthRepo: dashStrengthView == null
-                          ? null
-                          : data.registry.forView(dashStrengthView),
-                      climbingView: dashClimbingView,
-                      climbingRepo: dashboardRepoFor(
-                        dashClimbingView,
-                        readOnlyRepo: data.readOnlyRepo,
-                        forView: data.registry.forView,
-                      ),
-                      // Nutrition input (Macrofactor meals) + nightly
-                      // recalibration state for the forecast.
-                      mealsView: dashMealsView,
-                      mealsRepo: dashboardRepoFor(
-                        dashMealsView,
-                        readOnlyRepo: data.readOnlyRepo,
-                        forView: data.registry.forView,
-                      ),
-                      metaStore: data.forecastMetaStore,
-                      onOpenRoutine: openWeekPlan,
-                    );
-
               // IndexedStack keeps every tab's state (scroll positions,
               // in-flight futures) alive across switches; the bootstrap
-              // swap above recreates all five together. Order matches the
+              // swap above recreates all four together. Order matches the
               // NavigationBar and the `_tab*` constants: Today · Log ·
-              // Week · Progress · Plan.
+              // Week · Progress.
               final tabsByIndex = <int, Widget>{
                 _tabToday: todayTab,
                 _tabLog: logTab,
                 _tabWeek: goalsTab,
                 _tabProgress: progressTab,
-                _tabPlan: planTab,
               };
               return IndexedStack(
                 index: _tab,
@@ -1703,36 +1740,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onDestinationSelected: _selectTab,
             // Today (day inputs + AI synthesis) · Log (right beside it —
             // the two daily surfaces, 2026-10-02) · then zooming out:
-            // Week (week inputs) · Progress (outputs) · Plan. Coach left
+            // Week (week inputs) · Progress (outputs; the old Plan tab folded
+            // in 2026-10-02). Coach left
             // the bar 2026-09-30 (top of Today instead). Indices = the
             // `_tab*` constants.
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.today_outlined),
-                selectedIcon: Icon(Icons.today),
-                label: 'Today',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.edit_note_outlined),
-                selectedIcon: Icon(Icons.edit_note),
-                label: 'Log',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.calendar_view_week_outlined),
-                selectedIcon: Icon(Icons.calendar_view_week),
-                label: 'Week',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.insights_outlined),
-                selectedIcon: Icon(Icons.insights),
-                label: 'Progress',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.track_changes_outlined),
-                selectedIcon: Icon(Icons.track_changes),
-                label: 'Plan',
-              ),
-            ],
+            destinations: homeNavDestinations,
           ),
           ),
         );

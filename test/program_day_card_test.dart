@@ -119,8 +119,10 @@ void main() {
     _FakeRepo? strength,
     _FakeRepo? climbing,
     WmSnapshot? wm,
+    VoidCallback? onOpenWeek,
+    Size size = const Size(1200, 4000),
   }) async {
-    tester.view.physicalSize = const Size(1200, 4000);
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -142,6 +144,7 @@ void main() {
               cardioView: cardioView,
               cardioRepo: _FakeRepo(),
               wmSnapshot: wm == null ? null : () async => wm,
+              onOpenWeek: onOpenWeek,
             ),
           ),
         ),
@@ -330,6 +333,28 @@ void main() {
     final back = ProgramMove.fromRecord(moves.created.single)!;
     expect(back.to, wed);
     expect(back.from, wed);
+  });
+
+  testWidgets('"Full week" header action opens the Program screen (the '
+      'Plan tab is gone); absent without an opener; fits at 360dp',
+      (tester) async {
+    if (!hasFitness) return;
+    await pump(tester, date: fri, moves: _FakeRepo());
+    expect(find.byKey(const ValueKey('program-full-week')), findsNothing);
+
+    var opened = 0;
+    await pump(
+      tester,
+      date: fri,
+      moves: _FakeRepo(),
+      onOpenWeek: () => opened++,
+      size: const Size(360, 4000),
+    );
+    expect(find.text('Full week'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('program-full-week')));
+    await tester.pumpAndSettle();
+    expect(opened, 1);
+    // Reaching here without a RenderFlex overflow report = fits.
   });
 
   testWidgets('own-day items have Move to… but no Undo', (tester) async {

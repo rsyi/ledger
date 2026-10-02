@@ -16,6 +16,7 @@ import 'package:airledger/services/wm_store.dart';
 import 'package:airledger/services/wm_tabs.dart';
 import 'package:airledger/ui/design/design.dart';
 import 'package:airledger/ui/home_dashboard.dart';
+import 'package:airledger/ui/lift_screen.dart' show LiftSummary;
 import 'package:airledger/ui/widgets/skeleton.dart';
 
 /// A connector whose reads never complete — holds every card in its
@@ -1463,6 +1464,9 @@ last_bulk:
     Future<void> pumpProgress(
       WidgetTester tester, {
       VoidCallback? onOpenProgram,
+      VoidCallback? onOpenWeight,
+      VoidCallback? onOpenStrength,
+      void Function(String lift, LiftSummary summary)? onOpenLift,
       Size? size,
     }) async {
       ProgramProvider.clearCache();
@@ -1517,6 +1521,9 @@ last_bulk:
           },
         ]),
         onOpenProgram: onOpenProgram,
+        onOpenWeight: onOpenWeight,
+        onOpenStrength: onOpenStrength,
+        onOpenLift: onOpenLift,
         today: DateTime(2026, 9, 23),
       )));
       await tester.pumpAndSettle();
@@ -1535,7 +1542,8 @@ last_bulk:
       expect(find.textContaining('lb/week'), findsOneWidget);
       expect(find.textContaining('target -0.75'), findsOneWidget);
       expect(find.byType(StatusChip), findsNWidgets(2));
-      expect(find.byType(AppCard), findsNWidgets(2)); // phase + lifts
+      // verdict rows + phase timeline + lifts
+      expect(find.byType(AppCard), findsNWidgets(3));
       // Outputs only: the input strip and the legacy cards are gone.
       expect(find.text('THIS WEEK'), findsNothing);
       expect(find.text('BODY'), findsNothing);
@@ -1582,37 +1590,75 @@ last_bulk:
       }
     });
 
-    testWidgets('lifts sheet: per-lift numbers in words incl. Wilks points '
-        '+ all-time best, RPE-adj explained, Open Program', (tester) async {
-      var opened = false;
-      await pumpProgress(tester, onOpenProgram: () => opened = true);
-      await tester.tap(find.text('Squat'));
-      await tester.pumpAndSettle();
-      expect(find.byType(DetailSheet), findsOneWidget);
-      expect(find.text('Lifts'), findsOneWidget);
-      expect(find.textContaining('Wilks points', findRichText: true),
-          findsWidgets);
-      expect(find.textContaining("315 lb · Jun '25", findRichText: true),
-          findsNWidgets(2)); // last bulk best + all-time best
-      expect(find.textContaining('reps in reserve = 10 − RPE'),
+    testWidgets('phase timeline (IA restructure): blocks with the '
+        'you-are-here marker between the verdict rows and the lifts; no '
+        'target card, no separate verdict card', (tester) async {
+      await pumpProgress(tester);
+      expect(find.text('PHASE'), findsOneWidget);
+      expect(find.byKey(const ValueKey('progress-block-timeline')),
           findsOneWidget);
-      expect(find.textContaining('2025 bulk (Feb 5 2025 – Oct 6 2025)'),
+      expect(find.textContaining('Block 0 · Cut', findRichText: true),
           findsOneWidget);
-      await tester.tap(find.text('Open Program'));
-      await tester.pumpAndSettle();
-      expect(opened, isTrue);
+      expect(find.text('You are here · week 1 of 12'), findsOneWidget);
+      // The Plan tab's target card + verdict card are gone from here.
+      expect(find.textContaining('Target 154'), findsNothing);
+      expect(find.text('VERDICT'), findsNothing);
+      // Order: verdict rows (CUT) → PHASE → LIFTS.
+      final cutY = tester.getTopLeft(find.text('CUT')).dy;
+      final phaseY = tester.getTopLeft(find.text('PHASE')).dy;
+      final liftsY = tester.getTopLeft(find.text('LIFTS')).dy;
+      expect(cutY, lessThan(phaseY));
+      expect(phaseY, lessThan(liftsY));
     });
 
-    testWidgets('weight row taps through to Program; info icon opens the '
-        'lifts sheet', (tester) async {
+    testWidgets('lift row opens the lift page with the Progress numbers; '
+        'no info icon on the Lifts header', (tester) async {
+      String? opened;
+      LiftSummary? got;
+      await pumpProgress(tester, onOpenLift: (lift, summary) {
+        opened = lift;
+        got = summary;
+      });
+      // The (i) icon + Lifts text sheet are gone (user: "seems useless").
+      expect(find.byTooltip('How these are measured'), findsNothing);
+      expect(find.byIcon(Icons.info_outline), findsNothing);
+      await tester.tap(find.text('Squat'));
+      await tester.pumpAndSettle();
+      expect(find.byType(DetailSheet), findsNothing);
+      expect(opened, 'squat');
+      expect(got!.recent!.value.round(), 310);
+      expect(got!.lastBulk!.value, 315);
+      expect(got!.best!.value, 315);
+      expect(got!.bulkWindow!.label, '2025 bulk');
+    });
+
+    testWidgets('weight row → Weight page, strength row → Strength page',
+        (tester) async {
+      var weight = 0, strength = 0, program = 0;
+      await pumpProgress(
+        tester,
+        onOpenProgram: () => program++,
+        onOpenWeight: () => weight++,
+        onOpenStrength: () => strength++,
+      );
+      await tester.tap(find.textContaining('Weight', findRichText: true).first);
+      await tester.pumpAndSettle();
+      expect(weight, 1);
+      await tester.tap(
+          find.textContaining('Strength', findRichText: true).first);
+      await tester.pumpAndSettle();
+      expect(strength, 1);
+      expect(find.byType(DetailSheet), findsNothing); // no Wilks sheet now
+      expect(program, 0);
+    });
+
+    testWidgets('weight row without a Weight page opener keeps the legacy '
+        'Program navigation', (tester) async {
       var opened = false;
       await pumpProgress(tester, onOpenProgram: () => opened = true);
       await tester.tap(find.textContaining('Weight', findRichText: true).first);
       await tester.pumpAndSettle();
       expect(opened, isTrue);
-      await tester.tap(find.byTooltip('How these are measured'));
-      await tester.pumpAndSettle();
-      expect(find.byType(DetailSheet), findsOneWidget);
     });
 
     testWidgets('no overflow at 360x690', (tester) async {

@@ -23,11 +23,13 @@ import '../services/llm_client.dart';
 import '../services/llm_response_cache.dart';
 import '../services/log_now.dart';
 import '../services/plan_store.dart';
+import '../services/planned_slots.dart';
 import '../services/sheets_repository.dart';
 import '../services/warehouse_connector.dart';
 import '../services/working_sets.dart' show warmupIndices;
 import '../services/week_planner.dart' show WeekPlanner;
 import 'chat_screen.dart';
+import 'design/design.dart';
 import 'form_screen.dart';
 import '../services/video_rpe.dart' show mediaIdFieldFor;
 import 'widgets/history_panel.dart';
@@ -198,6 +200,14 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// which has surfaced as "bad state: can't finalize a finalized request"
   /// in the auth client when the second request hits during a token refresh.
   final Set<String> _logNowInFlight = {};
+
+  /// This session's log-nows (rowId → the planned entry), recorded
+  /// optimistically so a row's ✓ / the group's n/N update before the
+  /// undo mapping is persisted. Only counted while the row is on screen.
+  final Map<String, PlannedEntry> _optimisticDone = {};
+
+  /// Warm-up rows expanded to individual chips (date|slot key).
+  final Set<String> _expandedWarmups = {};
 
   /// Set of dates that have at least one logged row for this view.
   /// Populated lazily — fed into the date-bar calendar so the user can see
@@ -489,7 +499,9 @@ class _TimelineScreenState extends State<TimelineScreen> {
       if (!changed) return;
       final items = await _assemble(fresh);
       if (!mounted || dateKey != _dateKey()) return;
-      setState(() => _items = Future.value(items));
+      setState(() {
+        _items = Future.value(items);
+      });
     } catch (_) {
       // keep serving cached data
     } finally {
@@ -638,7 +650,6 @@ class _TimelineScreenState extends State<TimelineScreen> {
                   // the planned items (which are the actionable ones).
                   final logged = items.where((it) => it.isLogged).toList();
                   final planned = items.where((it) => !it.isLogged).toList();
-                  final plannedRows = _groupByTemplate(planned);
                   return ListView(
                     children: [
                       if (logged.isNotEmpty)
@@ -677,56 +688,9 @@ class _TimelineScreenState extends State<TimelineScreen> {
                               : _undoMappings.keys.toSet(),
                           onRevert: (item) => _revertToPlan(item.logged!),
                           readOnly: _readOnly,
+                          trailingFor: _loggedTrailing,
                         ),
-                      for (var i = 0; i < plannedRows.length; i++) ...[
-                        if (i > 0 &&
-                            plannedRows[i] is! _HeaderRow &&
-                            plannedRows[i - 1] is! _HeaderRow)
-                          const Divider(height: 1),
-                        if (plannedRows[i] is _HeaderRow)
-                          _TemplateHeader(
-                            name: (plannedRows[i] as _HeaderRow).name,
-                            totalCount:
-                                (plannedRows[i] as _HeaderRow).totalCount,
-                            doneCount:
-                                (plannedRows[i] as _HeaderRow).doneCount,
-                            onLogAll: () => _logAllTemplateGroup(
-                                (plannedRows[i] as _HeaderRow).name),
-                            onDelete: () => _deleteTemplateGroup(
-                                (plannedRows[i] as _HeaderRow).name),
-                          )
-                        else
-                          Builder(builder: (_) {
-                            final item = plannedRows[i] as _Item;
-                            final selected =
-                                _selectedKeys.contains(item.keyString);
-                            final qboId = _qboEnabled
-                                ? item.values['id']?.toString()
-                                : null;
-                            return _RecordTile(
-                              key: ValueKey(item.keyString),
-                              view: widget.view,
-                              item: item,
-                              selected: selected,
-                              selectionMode: _selectionMode,
-                              llmCache: widget.llmCache,
-                              repository: widget.repository,
-                              qboStatus:
-                                  qboId == null ? null : _qboStatus[qboId],
-                              onQboRetry: qboId == null
-                                  ? null
-                                  : () => _retryQbo(item.values),
-                              onTap: _selectionMode
-                                  ? () => _toggleSelect(item)
-                                  : () => _edit(item),
-                              onLongPress: () => _toggleSelect(item),
-                              onDelete: () => _delete(item),
-                              onLogNow: () => _logNow(item),
-                              highlighted:
-                                  _highlightKeys.contains(item.keyString),
-                            );
-                          }),
-                      ],
+                      ..._buildPlanned(planned, logged),
                     ],
                   );
                 },
@@ -742,6 +706,365 @@ class _TimelineScreenState extends State<TimelineScreen> {
               ),
       ),
     );
+  }
+
+  // ---------------------------------------------------------------------
+  // Planned work — ONE ROW PER EXERCISE+SLOT (UI redesign phase 2).
+  // planned_slots.dart groups the per-set planned entries; each set is a
+  // SetChip whose tap is exactly the old per-row log circle (_logNow on
+  // that single entry) and whose long-press is the old row tap (_edit).
+  // ---------------------------------------------------------------------
+
+  /// Sets logged from the plan on the selected day, (values, group) in log
+  /// order: the persisted undo-logging mappings plus this session's
+  /// optimistic log-nows, kept only while their logged row is on screen
+  /// (a reverted / deleted / failed row drops out by itself).
+  List<(Map<String, Object?>, String?)> _doneFromPlan(List<_Item> logged) {
+    final ids = <String>{
+      for (final it in logged)
+        for (final r in it.batchRows ?? [it.logged!])
+          if (r['id'] != null) r['id'].toString(),
+    };
+    final day = _selectedDate;
+    return [
+      for (final e in {..._undoMappings, ..._optimisticDone}.entries)
+        if (ids.contains(e.key) &&
+            e.value.date.year == day.year &&
+            e.value.date.month == day.month &&
+            e.value.date.day == day.day)
+          (e.value.values, e.value.templateName),
+    ];
+  }
+
+  List<Widget> _buildPlanned(List<_Item> planned, List<_Item> logged) {
+    if (_readOnly) return const [];
+    final blocks = groupPlannedSlots<_Item>(
+      pending: [
+        for (final it in planned)
+          PlannedSetIn(it, it.planned!.values, it.templateName),
+      ],
+      done: _doneFromPlan(logged),
+    );
+    final out = <Widget>[];
+    for (final b in blocks) {
+      final name = b.name;
+      if (name != null) {
+        final allDone = b.pendingCount == 0;
+        out.add(SectionHeader(
+          key: ValueKey('plan-header-$name'),
+          // The auto-planner's group reads as a plain label; coach-
+          // proposed / other groups keep their own name.
+          label: name == WeekPlanner.templateLabel ? 'From your program' : name,
+          upperCase: name == WeekPlanner.templateLabel,
+          count: '${b.doneCount} / ${b.totalCount}${allDone ? ' ✓' : ''}',
+          actions: [
+            // One-tap "log the whole group now" — hidden once everything
+            // in the group is already logged.
+            if (!allDone && !_selectionMode)
+              IconButton(
+                icon: const Icon(Icons.done_all, size: 20),
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _logAllTemplateGroup(name),
+                tooltip: 'Log all',
+              ),
+            if (!allDone && !_selectionMode)
+              IconButton(
+                icon: const Icon(Icons.delete_outline, size: 20),
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _deleteTemplateGroup(name),
+                tooltip: 'Remove group',
+              ),
+          ],
+        ));
+        // A finished group collapses to its header (N / N ✓) — the
+        // logged section above already lists every set.
+        if (allDone) continue;
+      }
+      for (final slot in b.slots) {
+        out.add(_plannedSlotRow(slot));
+      }
+    }
+    if (out.isNotEmpty) out.add(const SizedBox(height: 88)); // FAB clearance
+    return out;
+  }
+
+  /// Key for a slot's UI state (warm-up expansion), stable across reloads.
+  String _slotUiKey(PlannedSlot<_Item> slot) =>
+      '${DateFormat('yyyy-MM-dd').format(_selectedDate)}|${slot.key}';
+
+  Widget _plannedSlotRow(PlannedSlot<_Item> slot) {
+    final scheme = Theme.of(context).colorScheme;
+    final keys = [for (final p in slot.pending) p.ref.keyString];
+    final allSelected =
+        keys.isNotEmpty && keys.every(_selectedKeys.contains);
+    final warmupOpen = _expandedWarmups.contains(_slotUiKey(slot));
+    final showChips = !slot.warmup || warmupOpen || _selectionMode;
+    final status = slot.isDone
+        ? ItemStatus.done
+        : (slot.isPartial
+            ? ItemStatus.partial
+            : (slot.warmup ? ItemStatus.muted : ItemStatus.pending));
+    final name = slot.warmup
+        ? 'Warm-up'
+        : (slot.exercise ?? _titleFor(widget.view, slot.pending.isNotEmpty
+            ? slot.pending.first.values
+            : slot.done.first));
+    final meta = slot.exercise == null && slot.pending.isNotEmpty
+        ? _subtitleFor(widget.view, slot.pending.first.values)
+        : slot.meta;
+    Widget row = ExerciseRow(
+      key: ValueKey('plan-slot-${slot.key}'),
+      name: name,
+      meta: meta,
+      status: status,
+      muted: slot.warmup,
+      leading: _selectionMode && keys.isNotEmpty
+          ? Icon(
+              allSelected ? Icons.check_box : Icons.check_box_outline_blank,
+              size: 20,
+              color: allSelected ? scheme.secondary : scheme.outlineVariant,
+            )
+          : null,
+      selected: allSelected,
+      highlighted: keys.any(_highlightKeys.contains),
+      chips: !showChips
+          ? const []
+          : [
+              for (final p in slot.pending)
+                SetChip(
+                  key: ValueKey('chip-${p.ref.keyString}'),
+                  label: slot.chipLabel(p),
+                  muted: slot.warmup,
+                  selected: _selectedKeys.contains(p.ref.keyString),
+                  // Tap = the old row's log circle; long-press = the old
+                  // row tap (edit). In selection mode both toggle.
+                  onTap: _selectionMode
+                      ? () => _toggleSelect(p.ref)
+                      : () => _logNow(p.ref),
+                  onLongPress: _selectionMode
+                      ? () => _toggleSelect(p.ref)
+                      : () => _edit(p.ref),
+                ),
+            ],
+      trailing: keys.isEmpty || _selectionMode
+          ? null
+          : (slot.warmup
+              ? Icon(
+                  warmupOpen ? Icons.expand_less : Icons.expand_more,
+                  size: 20,
+                  color: scheme.onSurfaceVariant,
+                )
+              : IconButton(
+                  icon: const Icon(Icons.more_vert, size: 20),
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Options',
+                  onPressed: () => _slotMenu(slot),
+                )),
+      onTap: keys.isEmpty
+          ? null
+          : (_selectionMode
+              ? () => _toggleSelectAll(keys)
+              : (slot.warmup
+                  ? () => setState(() {
+                        final k = _slotUiKey(slot);
+                        if (!_expandedWarmups.add(k)) {
+                          _expandedWarmups.remove(k);
+                        }
+                      })
+                  : () => _slotMenu(slot))),
+      onLongPress: keys.isEmpty ? null : () => _slotMenu(slot),
+    );
+    // Swipe-to-delete removes the row's remaining planned sets (confirm
+    // first). Off in selection mode, like the logged tiles.
+    if (keys.isEmpty || _selectionMode) return row;
+    return Dismissible(
+      key: ValueKey('dismiss-${slot.key}'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        color: Colors.red,
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: const Icon(Icons.delete, color: Colors.white),
+      ),
+      confirmDismiss: (_) async {
+        await _removeSlot(slot);
+        return false;
+      },
+      child: row,
+    );
+  }
+
+  /// Row menu (long-press / ⋮ / tap): log, edit, history, select, remove.
+  Future<void> _slotMenu(PlannedSlot<_Item> slot) async {
+    if (slot.pending.isEmpty) return;
+    final first = slot.pending.first.ref;
+    final n = slot.pending.length;
+    ({Dimension dim, String value})? history;
+    for (final d in widget.view.dimensions) {
+      if (!(d.input?.history ?? false)) continue;
+      final v = first.values[d.name]?.toString().trim();
+      if (v == null || v.isEmpty) continue;
+      history = (dim: d, value: v);
+      break;
+    }
+    await showDetailSheet(
+      context: context,
+      title: slot.warmup
+          ? '${slot.exercise ?? ''} warm-up'.trim()
+          : (slot.exercise ?? _titleFor(widget.view, first.values)),
+      subtitle: slot.exercise == null
+          ? _subtitleFor(widget.view, first.values)
+          : (n == slot.total ? slot.meta : '${slot.meta} · $n left'),
+      actions: [
+        DetailAction(
+          icon: Icons.check_circle_outline,
+          label: 'Log next set',
+          onTap: () => _logNow(first),
+        ),
+        if (n > 1)
+          DetailAction(
+            icon: Icons.done_all,
+            label: 'Log all $n sets',
+            onTap: () => _logSlot(slot),
+          ),
+        DetailAction(
+          icon: Icons.edit_outlined,
+          label: 'Edit next set…',
+          onTap: () => _edit(first),
+        ),
+        if (history != null)
+          DetailAction(
+            icon: Icons.history,
+            label: 'History',
+            onTap: () => showHistorySheet(
+              context: context,
+              view: widget.view,
+              dim: history!.dim,
+              value: history.value,
+              repository: widget.repository,
+            ),
+          ),
+        DetailAction(
+          icon: Icons.check_box_outlined,
+          label: 'Select',
+          onTap: () => setState(() => _selectedKeys.addAll(
+                [for (final p in slot.pending) p.ref.keyString],
+              )),
+        ),
+        DetailAction(
+          icon: Icons.delete_outline,
+          label: n == 1 ? 'Remove planned set' : 'Remove $n planned sets',
+          destructive: true,
+          onTap: () => _removeSlot(slot),
+        ),
+      ],
+    );
+  }
+
+  /// Logs every remaining set of a slot through the same per-entry path.
+  Future<void> _logSlot(PlannedSlot<_Item> slot) async {
+    for (final p in [...slot.pending]) {
+      if (_logNowInFlight.contains(p.ref.planned!.localId)) continue;
+      await _logNow(p.ref);
+    }
+  }
+
+  /// Confirm, then drop a slot's remaining planned sets.
+  Future<void> _removeSlot(PlannedSlot<_Item> slot) async {
+    if (slot.pending.length == 1) {
+      await _delete(slot.pending.single.ref);
+      return;
+    }
+    final n = slot.pending.length;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Remove $n planned sets?'),
+        content: Text(
+            '${slot.warmup ? 'Warm-up' : (slot.exercise ?? '')} · ${slot.meta}'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await _deleteOptimistic({for (final p in slot.pending) p.ref.keyString});
+  }
+
+  void _toggleSelectAll(List<String> keys) {
+    setState(() {
+      if (keys.every(_selectedKeys.contains)) {
+        _selectedKeys.removeAll(keys);
+      } else {
+        _selectedKeys.addAll(keys);
+      }
+    });
+  }
+
+  /// Trailing extras on a compact logged row: the attached clip's inline
+  /// thumbnail (tap plays) and the QuickBooks push badge. Both lived on
+  /// the old per-row tile, which after the logged/planned split only
+  /// ever rendered PLANNED rows (no id, no clip) — so they never showed;
+  /// the logged row is where they belong.
+  Widget? _loggedTrailing(_Item item) {
+    if (item.isBatch || item.logged == null) return null;
+    final values = item.logged!;
+    Widget? video;
+    for (final d in widget.view.dimensions) {
+      if (d.input?.widget != WidgetType.video) continue;
+      final url = values[d.name]?.toString().trim();
+      if (url == null || url.isEmpty) continue;
+      final mid = values[mediaIdFieldFor(d.name)]?.toString().trim();
+      video = Padding(
+        padding: const EdgeInsets.only(left: 6),
+        child: VideoThumb(
+          url: url,
+          mediaId: (mid == null || mid.isEmpty) ? null : mid,
+          size: 28,
+        ),
+      );
+      break;
+    }
+    Widget? badge;
+    final id = values['id']?.toString();
+    final qbo = _qboEnabled && id != null ? _qboStatus[id] : null;
+    if (qbo != null) {
+      final scheme = Theme.of(context).colorScheme;
+      final (IconData icon, Color color, String tip, bool retry) =
+          switch (qbo.status) {
+        QboPushStatus.pushed =>
+          (Icons.cloud_done, Colors.green, 'Pushed to QuickBooks', false),
+        QboPushStatus.pushing =>
+          (Icons.cloud_upload, scheme.outline, 'Pushing…', false),
+        QboPushStatus.failed => (
+            Icons.error_outline,
+            scheme.error,
+            qbo.error ?? 'Push failed — tap to retry',
+            true,
+          ),
+        QboPushStatus.pending =>
+          (Icons.cloud_queue, scheme.outline, 'Not pushed yet — tap to push', true),
+      };
+      badge = Tooltip(
+        message: tip,
+        child: InkWell(
+          onTap: retry ? () => _retryQbo(values) : null,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Icon(icon, size: 16, color: color),
+          ),
+        ),
+      );
+    }
+    if (video == null && badge == null) return null;
+    return Row(mainAxisSize: MainAxisSize.min, children: [?video, ?badge]);
   }
 
   AppBar _buildNormalAppBar() {
@@ -1171,10 +1494,14 @@ class _TimelineScreenState extends State<TimelineScreen> {
         by: 1,
       );
       final loggedItem = _Item.logged(values);
+      final optimisticId = values['id']?.toString();
+      if (optimisticId != null) _optimisticDone[optimisticId] = planned;
       final updated = List<_Item>.from(current);
       updated.removeAt(idx);
       updated.add(loggedItem);
-      setState(() => _items = Future.value(updated));
+      setState(() {
+        _items = Future.value(updated);
+      });
       // Instant confirmation: flash the row (replaces the "Logged X"
       // snackbar — no dismissal, no network wait).
       if (notify) _flash([loggedItem.keyString]);
@@ -1435,131 +1762,6 @@ String _titleFor(ViewSchema view, Map<String, Object?> record) =>
 
 String? _subtitleFor(ViewSchema view, Map<String, Object?> record) =>
     ListDisplayRender.subtitle(view, record);
-
-/// Walks the ordered item list once, emitting a `_HeaderRow` data marker
-/// whenever the planned-template attribution changes. Logged items and
-/// ad-hoc planned items (no template) emit no header. Assumes items are
-/// already grouped contiguously by template — true because `PlanStore.addAll`
-/// appends in apply order and we never interleave.
-List<Object> _groupByTemplate(List<_Item> items) {
-  final out = <Object>[];
-  String? lastHeader;
-  // Pre-count done / total per template name. `loggedFromPlanned` items count
-  // toward both totals and dones; pure `planned` items count toward totals only.
-  final totals = <String, int>{};
-  final dones = <String, int>{};
-  for (final it in items) {
-    final t = it.templateName;
-    if (t == null) continue;
-    totals[t] = (totals[t] ?? 0) + 1;
-    if (it.isLogged) dones[t] = (dones[t] ?? 0) + 1;
-  }
-  for (final item in items) {
-    final templateName = item.templateName;
-    if (templateName != null && templateName != lastHeader) {
-      out.add(_HeaderRow(
-        name: templateName,
-        totalCount: totals[templateName] ?? 0,
-        doneCount: dones[templateName] ?? 0,
-      ));
-      lastHeader = templateName;
-    } else if (templateName == null) {
-      lastHeader = null;
-    }
-    out.add(item);
-  }
-  return out;
-}
-
-/// Data-only marker for a template group header. The actual widget
-/// (`_TemplateHeader`) is constructed in the timeline's itemBuilder so it can
-/// close over the delete callback.
-class _HeaderRow {
-  final String name;
-  final int totalCount;
-  final int doneCount;
-  _HeaderRow({
-    required this.name,
-    required this.totalCount,
-    required this.doneCount,
-  });
-}
-
-/// Section header rendered above the planned items that came from the same
-/// template apply. The trailing delete button removes the whole group
-/// (after confirm).
-class _TemplateHeader extends StatelessWidget {
-  final String name;
-  final int totalCount;
-  final int doneCount;
-  final VoidCallback onLogAll;
-  final VoidCallback onDelete;
-
-  const _TemplateHeader({
-    required this.name,
-    required this.totalCount,
-    required this.doneCount,
-    required this.onLogAll,
-    required this.onDelete,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.only(left: 16, right: 4, top: 10, bottom: 6),
-      decoration: BoxDecoration(
-        color: scheme.surface,
-        border: Border(
-          top: BorderSide(color: scheme.outline, width: 1),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              // The auto-planner's group reads as a clear call to action;
-              // coach-proposed / other groups keep their own name.
-              name == WeekPlanner.templateLabel
-                  ? 'From your program — tap to log'
-                  : name,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                color: scheme.onSurface,
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 6),
-            child: Text(
-              '$doneCount / $totalCount',
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          // One-tap "log the whole group now" — hidden once everything
-          // in the group is already logged.
-          if (doneCount < totalCount)
-            IconButton(
-              icon: const Icon(Icons.done_all, size: 20),
-              color: scheme.onSurfaceVariant,
-              visualDensity: VisualDensity.compact,
-              onPressed: onLogAll,
-              tooltip: 'Log all',
-            ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline, size: 20),
-            color: scheme.onSurfaceVariant,
-            visualDensity: VisualDensity.compact,
-            onPressed: onDelete,
-            tooltip: 'Remove group',
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 
 /// Date-toggle bar pinned just below the AppBar — left/right chevrons
 /// for day-stepping plus a center button that opens [_CalendarPickerDialog]
@@ -1839,280 +2041,6 @@ class _CalendarPickerDialogState extends State<_CalendarPickerDialog> {
       a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
-class _RecordTile extends StatelessWidget {
-  final ViewSchema view;
-  final _Item item;
-  final bool selected;
-  final bool selectionMode;
-  final VoidCallback onTap;
-  final VoidCallback onLongPress;
-  final VoidCallback onDelete;
-  final VoidCallback onLogNow;
-  final LlmResponseCache? llmCache;
-  final WarehouseConnector repository;
-
-  /// QuickBooks push status for this row (null when the view isn't
-  /// QBO-mapped). Drives the trailing badge. [onQboRetry] pushes just this
-  /// row (used for pending/failed badges).
-  final QboPushRecord? qboStatus;
-  final VoidCallback? onQboRetry;
-
-  /// True while this entry is in the coach hand-off highlight set.
-  /// The parent screen clears the set after a few seconds, causing
-  /// [AnimatedContainer] to fade the tint back to transparent.
-  final bool highlighted;
-
-  const _RecordTile({
-    super.key,
-    required this.view,
-    required this.item,
-    required this.selected,
-    required this.selectionMode,
-    required this.onTap,
-    required this.onLongPress,
-    required this.onDelete,
-    required this.onLogNow,
-    required this.repository,
-    this.llmCache,
-    this.qboStatus,
-    this.onQboRetry,
-    this.highlighted = false,
-  });
-
-  /// First dimension on the view opted-in to `input.history: true` whose
-  /// value is non-empty on this row. The history icon scopes to this dim.
-  /// Returns null when no opted-in dim has a value (e.g. blank fields,
-  /// planned rows without the subject field filled in).
-  ({Dimension dim, String value})? _historyTarget() {
-    for (final d in view.dimensions) {
-      if (!(d.input?.history ?? false)) continue;
-      final raw = item.values[d.name];
-      final s = raw?.toString().trim();
-      if (s == null || s.isEmpty) continue;
-      return (dim: d, value: s);
-    }
-    return null;
-  }
-
-  Widget? _buildTrailing(BuildContext context) {
-    if (selectionMode) return null;
-    final video = _videoButton(context);
-    final badge = _qboBadge(context);
-    final history = _historyButton(context);
-    if (video == null && badge == null && history == null) return null;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [?video, ?badge, ?history],
-    );
-  }
-
-  /// The row's attached video: deep link + picker media id (for the
-  /// cached thumbnail), from the first `widget: video` dim with a value.
-  ({String url, String? mediaId})? _videoRef() {
-    for (final d in view.dimensions) {
-      if (d.input?.widget != WidgetType.video) continue;
-      final s = item.values[d.name]?.toString().trim();
-      if (s == null || s.isEmpty) continue;
-      final mid = item.values[mediaIdFieldFor(d.name)]?.toString().trim();
-      return (url: s, mediaId: (mid == null || mid.isEmpty) ? null : mid);
-    }
-    return null;
-  }
-
-  /// An inline thumbnail of the row's clip — visible in the collapsed
-  /// tile. Tap plays it in-app (or Google Photos as fallback).
-  Widget? _videoButton(BuildContext context) {
-    final ref = _videoRef();
-    if (ref == null) return null;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: VideoThumb(url: ref.url, mediaId: ref.mediaId, size: 46),
-    );
-  }
-
-  Widget? _historyButton(BuildContext context) {
-    final t = _historyTarget();
-    if (t == null) return null;
-    return IconButton(
-      icon: const Icon(Icons.history),
-      tooltip: 'History',
-      onPressed: () => showHistorySheet(
-        context: context,
-        view: view,
-        dim: t.dim,
-        value: t.value,
-        repository: repository,
-      ),
-    );
-  }
-
-  /// Trailing badge showing this transaction's QuickBooks push status.
-  /// Pending/failed badges are tappable to push just this row.
-  Widget? _qboBadge(BuildContext context) {
-    if (!item.isLogged || qboStatus == null) return null;
-    final scheme = Theme.of(context).colorScheme;
-    switch (qboStatus!.status) {
-      case QboPushStatus.pushed:
-        return const Tooltip(
-          message: 'Pushed to QuickBooks',
-          child: Padding(
-            padding: EdgeInsets.all(8),
-            child: Icon(Icons.cloud_done, size: 18, color: Colors.green),
-          ),
-        );
-      case QboPushStatus.pushing:
-        return const Padding(
-          padding: EdgeInsets.all(9),
-          child: SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        );
-      case QboPushStatus.failed:
-        return IconButton(
-          icon: Icon(Icons.error_outline, size: 18, color: scheme.error),
-          tooltip: qboStatus!.error ?? 'Push failed — tap to retry',
-          onPressed: onQboRetry,
-        );
-      case QboPushStatus.pending:
-        return IconButton(
-          icon: Icon(Icons.cloud_queue, size: 18, color: scheme.outline),
-          tooltip: 'Not pushed yet — tap to push',
-          onPressed: onQboRetry,
-        );
-    }
-  }
-
-  /// A warm-up row: a planned program ramp row (stamped `set_type:
-  /// warmup` by the week planner) or a logged set tagged warmup. Muted +
-  /// "warm-up" tag so ramps read differently from working sets.
-  bool get isWarmup =>
-      item.values['set_type']?.toString().trim().toLowerCase() == 'warmup';
-
-  @override
-  Widget build(BuildContext context) {
-    final subtitle = _subtitleFor(view, item.values);
-    final scheme = Theme.of(context).colorScheme;
-    final rowId = item.logged?['id']?.toString();
-    final llmResponse =
-        rowId == null ? null : llmCache?.get(rowId);
-    final llmPending =
-        rowId == null ? false : (llmCache?.isPending(rowId) ?? false);
-    Widget tile = ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-      minLeadingWidth: 0,
-      horizontalTitleGap: 14,
-      minVerticalPadding: 10,
-      selected: selected,
-      selectedTileColor: scheme.primaryContainer.withValues(alpha: 0.4),
-      // The leading slot doubles as the log-button when the row is planned:
-      // the empty orange circle is tappable (with a Material ripple to
-      // signal "this is a button") and tap = log. Replaces the separate
-      // trailing play button — same affordance the user's intuition was
-      // already reaching for.
-      leading: selectionMode
-          ? Icon(
-              selected
-                  ? Icons.check_circle
-                  : Icons.radio_button_unchecked,
-              size: 22,
-              color: selected ? scheme.secondary : scheme.outlineVariant,
-            )
-          : (item.isPlanned
-              ? _LogCircle(onTap: onLogNow)
-              : const Padding(
-                  padding: EdgeInsets.all(11),
-                  child: Icon(Icons.check_circle,
-                      size: 22, color: Colors.green),
-                )),
-      title: isWarmup
-          ? Row(
-              children: [
-                const _WarmupTag(),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    _titleFor(view, item.values),
-                    style: TextStyle(color: scheme.onSurfaceVariant),
-                  ),
-                ),
-              ],
-            )
-          : Text(_titleFor(view, item.values)),
-      subtitle: (subtitle == null && llmResponse == null && !llmPending)
-          ? null
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (subtitle != null)
-                  Text(
-                    subtitle,
-                    style: isWarmup ? TextStyle(color: scheme.outline) : null,
-                  ),
-                if (llmPending)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      '…',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                            fontStyle: FontStyle.italic,
-                          ),
-                    ),
-                  )
-                else if (llmResponse != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      llmResponse,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                            fontStyle: FontStyle.italic,
-                            height: 1.35,
-                          ),
-                    ),
-                  ),
-              ],
-            ),
-      // Trailing slot: history icon when an opted-in dim has a value and
-      // we're not in selection mode. The leading circle remains the log
-      // button for planned rows.
-      trailing: _buildTrailing(context),
-      onTap: onTap,
-      onLongPress: onLongPress,
-    );
-    // Coach hand-off accent: tinted while highlighted, animating back
-    // to transparent when the screen clears the highlight set.
-    tile = AnimatedContainer(
-      duration: const Duration(milliseconds: 600),
-      color: highlighted
-          ? scheme.tertiaryContainer.withValues(alpha: 0.55)
-          : Colors.transparent,
-      child: tile,
-    );
-    // Swipe-to-delete is disabled in selection mode — too easy to fire
-    // accidentally while scrolling through a long selection. Also
-    // disabled for read-only views.
-    if (selectionMode || view.readOnly) return tile;
-    return Dismissible(
-      key: ValueKey(item.keyString),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        color: Colors.red,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        child: const Icon(Icons.delete, color: Colors.white),
-      ),
-      confirmDismiss: (_) async {
-        onDelete();
-        return false;
-      },
-      child: tile,
-    );
-  }
-}
-
 class _ErrorView extends StatelessWidget {
   final String error;
   const _ErrorView({required this.error});
@@ -2123,38 +2051,6 @@ class _ErrorView extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       child: Center(
         child: Text('Error: $error', textAlign: TextAlign.center),
-      ),
-    );
-  }
-}
-
-/// Tappable empty-circle that fills the row's leading slot for planned
-/// items. Tap = promote-to-logged (calls onLogNow). The Material ink
-/// ripple is what makes the affordance read "this is a button" instead
-/// of "this is a status icon" — the visual is otherwise identical to
-/// the static green check the row flips to once logged.
-class _LogCircle extends StatelessWidget {
-  final VoidCallback onTap;
-  const _LogCircle({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        // 44x44 hit target — Material accessibility minimum — even though
-        // the visual circle is only 22px. The extra padding is invisible
-        // but catches near-misses comfortably.
-        customBorder: const CircleBorder(),
-        child: const Padding(
-          padding: EdgeInsets.all(11),
-          child: Icon(
-            Icons.radio_button_unchecked,
-            size: 22,
-            color: Colors.orange,
-          ),
-        ),
       ),
     );
   }
@@ -2186,6 +2082,9 @@ class _CompletedSection extends StatelessWidget {
   /// When true, swipe-to-delete and the Edit/Move buttons are hidden.
   final bool readOnly;
 
+  /// Per-row trailing extras (clip thumbnail, QBO badge); null = none.
+  final Widget? Function(_Item)? trailingFor;
+
   const _CompletedSection({
     required this.view,
     required this.items,
@@ -2201,6 +2100,7 @@ class _CompletedSection extends StatelessWidget {
     this.revertibleIds = const {},
     required this.onRevert,
     this.readOnly = false,
+    this.trailingFor,
   });
 
   /// Keys of each exercise's best set in this day's logged rows — the
@@ -2243,29 +2143,12 @@ class _CompletedSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final warmups = _warmupKeys();
     final best = _bestKeys(warmups);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-          child: Row(
-            children: [
-              Icon(Icons.check_circle, color: scheme.primary, size: 16),
-              const SizedBox(width: 6),
-              Text(
-                '${items.length} logged',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-        ),
+        SectionHeader(label: 'Logged', count: '${items.length}'),
         for (final item in items)
           _CompactLoggedTile(
             view: view,
@@ -2275,6 +2158,7 @@ class _CompletedSection extends StatelessWidget {
             isBest: best.contains(item.keyString),
             isWarmup: warmups.contains(item.keyString),
             readOnly: readOnly,
+            trailing: trailingFor?.call(item),
             onTap: () => onTap(item),
             onEdit: () => onEdit(item),
             onMove: () => onMove(item),
@@ -2328,6 +2212,9 @@ class _CompactLoggedTile extends StatelessWidget {
   /// "Revert to plan" in the expanded panel.
   final VoidCallback? onRevert;
 
+  /// Optional extras before the expand chevron (clip thumb, QBO badge).
+  final Widget? trailing;
+
   const _CompactLoggedTile({
     required this.view,
     required this.item,
@@ -2342,6 +2229,7 @@ class _CompactLoggedTile extends StatelessWidget {
     required this.onDelete,
     this.onRevert,
     this.readOnly = false,
+    this.trailing,
   });
 
   String? _timeLabel() {
@@ -2432,8 +2320,7 @@ class _CompactLoggedTile extends StatelessWidget {
                     if (subtitle != null)
                       TextSpan(
                         text: '  $subtitle',
-                        style: TextStyle(
-                          fontSize: 13,
+                        style: AppText.meta(context).copyWith(
                           color: isBest
                               ? scheme.onPrimaryContainer
                               : (isWarmup
@@ -2445,6 +2332,7 @@ class _CompactLoggedTile extends StatelessWidget {
                 ),
               ),
             ),
+            ?trailing,
             Icon(
               expanded ? Icons.expand_less : Icons.expand_more,
               size: 18,

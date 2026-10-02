@@ -334,3 +334,33 @@ List<({DateTime day, double value})> tmHistoryPoints(
 
 String _n(num v) =>
     v == v.roundToDouble() ? v.round().toString() : v.toString();
+
+/// Public number formatter: `105.0` → `105`, `161.5` → `161.5`.
+String formatNum(num v) => _n(v);
+
+/// Meta line for [sets] identical sets (the Log timeline's planned rows,
+/// same shape as [formatSessionLine] minus the name): `3×6 · 105 lb`,
+/// `3×8 · BW` for bodyweight movements (a bodyweight load is not a
+/// prescription), bare `3×8` when no load is known.
+String setsRepsLoad({
+  required int sets,
+  num? reps,
+  num? weight,
+  bool bodyweight = false,
+}) {
+  final b = StringBuffer(reps == null ? '$sets sets' : '$sets×${_n(reps)}');
+  if (bodyweight) {
+    b.write(' · BW');
+  } else if (weight != null) {
+    b.write(' · ${_n(weight)} lb');
+  }
+  return b.toString();
+}
+
+/// One set's chip label: `105×6`, `BW×8`, `8 reps` (no load).
+String setChipLabel({num? reps, num? weight, bool bodyweight = false}) {
+  final r = reps == null ? null : _n(reps);
+  if (bodyweight) return r == null ? 'BW' : 'BW×$r';
+  if (weight != null) return r == null ? '${_n(weight)} lb' : '${_n(weight)}×$r';
+  return r == null ? 'Log' : '$r reps';
+}

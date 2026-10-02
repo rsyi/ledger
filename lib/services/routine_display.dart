@@ -11,6 +11,7 @@ library;
 
 import 'package:intl/intl.dart';
 
+import 'bodyweight_cache.dart' show isBodyweightExercise;
 import 'program_current.dart' show CutWaveWeekSpec;
 import 'program_metrics.dart' show mainLiftByExercise;
 import 'wm_tabs.dart' show WorkingMaxRow;
@@ -104,15 +105,55 @@ String exerciseDisplayName(String exercise) {
 /// 69% of the TM); otherwise weight/[tm] when both are known. Rounded
 /// to a whole percent. Accessories (no TM) never get one; a missing
 /// load leaves the row bare after the rep range (never guessed).
-String formatSessionLine(SessionLine l, {double? tm}) {
+///
+/// Bodyweight movements (`isBodyweightExercise`) read `· BW` instead of
+/// a load — the strength log stores the lifter's bodyweight as their
+/// weight, so the planner's "suggestion" (`Pull Up 3×6-10 · 160.5 lb`)
+/// was just last session's scale reading, not a prescription. A row
+/// with no planned weight stays bare, as for any exercise. See
+/// [bodyweightLoadLabel] for the `BW+N` case ([bodyweight] = current
+/// bodyweight in lb, when known).
+String formatSessionLine(SessionLine l, {double? tm, double? bodyweight}) {
   final reps = l.repsHi != null && l.repsHi != l.reps
       ? '${_n(l.reps)}-${_n(l.repsHi!)}'
       : _n(l.reps);
   final b = StringBuffer('${exerciseDisplayName(l.exercise)} ${l.sets}×$reps');
+  if (l.weight != null && isBodyweightExercise(l.exercise)) {
+    b.write(' · ${bodyweightLoadLabel(l.exercise, l.weight, bodyweight: bodyweight)}');
+    return b.toString();
+  }
   if (l.weight != null) b.write(' · ${_n(l.weight!)} lb');
   final pct = _displayPct(l, tm);
   if (pct != null) b.write(' ($pct%)');
   return b.toString();
+}
+
+/// Load label for a bodyweight movement: `BW`, or `BW+N` when the
+/// exercise is explicitly WEIGHTED ("Weighted Pull Up") and the planned
+/// weight carries an added load:
+///   * weight above the known [bodyweight] → the excess (log convention:
+///     weight = bodyweight + added, e.g. a dip at 171.4 on a 161.4 day);
+///   * weight under half of bodyweight (or under 100 lb when bodyweight
+///     is unknown) → it already IS the added load.
+/// Anything else — unweighted movements (band-assisted muscle-ups, dips,
+/// leg raises), no weight, a total with no bodyweight to subtract — is
+/// plain `BW`: never a guessed number. N rounds to 2.5 lb.
+String bodyweightLoadLabel(String exercise, num? weight, {double? bodyweight}) {
+  if (weight == null || weight <= 0) return 'BW';
+  if (!exercise.toLowerCase().contains('weighted')) return 'BW';
+  double? added;
+  if (bodyweight != null && bodyweight > 0) {
+    if (weight > bodyweight) {
+      added = weight - bodyweight;
+    } else if (weight < bodyweight / 2) {
+      added = weight.toDouble();
+    }
+  } else if (weight < 100) {
+    added = weight.toDouble();
+  }
+  if (added == null) return 'BW';
+  final rounded = (added / 2.5).round() * 2.5;
+  return rounded <= 0 ? 'BW' : 'BW+${_n(rounded)} lb';
 }
 
 int? _displayPct(SessionLine l, double? tm) {

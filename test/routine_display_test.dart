@@ -124,6 +124,52 @@ void main() {
       expect(formatSessionLine(l), 'Pull Up 3×6-10');
     });
 
+    test('bodyweight movements read BW, never the logged scale weight '
+        '(audit: "Pull Up 3×6-10 · 160.5 lb")', () {
+      SessionLine bw(String ex, int sets, int reps, {int? hi, num? w}) =>
+          SessionLine(
+              exercise: ex, sets: sets, reps: reps, repsHi: hi, weight: w);
+      expect(formatSessionLine(bw('Pull Up', 3, 6, hi: 10, w: 160.5)),
+          'Pull Up 3×6-10 · BW');
+      expect(formatSessionLine(bw('Muscle Up', 6, 1, hi: 2, w: 161)),
+          'Muscle Up 6×1-2 · BW');
+      expect(formatSessionLine(bw('Muscle Up Green Band', 2, 3, hi: 5, w: 173)),
+          'Muscle Up Green Band 2×3-5 · BW');
+      expect(
+          formatSessionLine(bw('Parallel Bar Triceps Dip', 3, 8, hi: 12, w: 173),
+              bodyweight: 161.4),
+          'Parallel Bar Triceps Dip 3×8-12 · BW');
+      expect(formatSessionLine(bw('Hanging Leg Raise', 3, 8, hi: 15, w: 161)),
+          'Hanging Leg Raise 3×8-15 · BW');
+      // No planned weight → bare, like any other exercise.
+      expect(formatSessionLine(bw('Front Lever', 2, 5)), 'Front Lever 2×5');
+    });
+
+    test('bodyweightLoadLabel: BW+N only for explicitly weighted moves', () {
+      // Total logged (bodyweight + added) → the excess, rounded to 2.5.
+      expect(bodyweightLoadLabel('Weighted Pull Up', 186.4, bodyweight: 161.4),
+          'BW+25 lb');
+      // Added load logged directly.
+      expect(bodyweightLoadLabel('Weighted Pull Up', 25, bodyweight: 161.4),
+          'BW+25 lb');
+      expect(bodyweightLoadLabel('Weighted Pull Up', 20), 'BW+20 lb');
+      // A total with no bodyweight to subtract → never a guess.
+      expect(bodyweightLoadLabel('Weighted Pull Up', 185), 'BW');
+      // ≈ bodyweight → no added load.
+      expect(bodyweightLoadLabel('Weighted Pull Up', 161, bodyweight: 161.4),
+          'BW');
+      // Unweighted names stay BW even above bodyweight (stale scale).
+      expect(bodyweightLoadLabel('Muscle Up Green Band', 173, bodyweight: 161),
+          'BW');
+      expect(bodyweightLoadLabel('Pull Up', null), 'BW');
+      expect(
+          formatSessionLine(
+              const SessionLine(
+                  exercise: 'Weighted Pull Up', sets: 5, reps: 3, weight: 186.4),
+              bodyweight: 161.4),
+          'Weighted Pull Up 5×3 · BW+25 lb');
+    });
+
     test('fractional loads keep their decimals', () {
       const l = SessionLine(
           exercise: 'Lateral Dumbbell Raise',

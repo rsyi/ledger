@@ -35,7 +35,7 @@ class PricedWeek {
   /// Current training max per lift (squat/bench/deadlift/press).
   final Map<String, double> maxes;
 
-  /// `hold ≤8 · drop 2.5-5% if over` — the back-off rule, or null.
+  /// `keep RPE ≤ 8; if higher, drop 2.5–5%` — the back-off rule, or null.
   final String? backoff;
 
   /// The program version in force (accessory rule lookups).

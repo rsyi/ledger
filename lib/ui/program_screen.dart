@@ -29,6 +29,7 @@ import 'package:intl/intl.dart';
 
 import '../models/view_schema.dart';
 import '../services/bodyweight_cache.dart' show BodyweightCache;
+import '../services/display_names.dart' show sentenceCase;
 import '../services/program_current.dart';
 import '../services/program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
@@ -438,7 +439,7 @@ class _RoutineView extends StatelessWidget {
             ),
           ),
         ],
-        const SizedBox(height: AppSpace.sectionGap),
+        const SectionHeader(label: 'Sessions'),
         for (final day in week)
           _DayTile(
             day: day,
@@ -631,70 +632,68 @@ class _TrainingMaxSection extends StatelessWidget {
         ),
       );
     }
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final row in rows)
-            InkWell(
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => _TmTrendScreen(
-                  lift: row.$1,
-                  rows: snap!.workingMax,
-                  signal: row.$2,
-                ),
-              )),
-              child: Container(
-                constraints: const BoxConstraints(minHeight: AppSpace.row),
-                padding: const EdgeInsets.fromLTRB(
-                    AppSpace.gutter, AppSpace.rowV, 8, AppSpace.rowV),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text.rich(
-                        TextSpan(
-                          children: [
-                            TextSpan(
-                                text: '${liftTitle(row.$1)}  ',
-                                style: AppText.row(context)),
-                            TextSpan(
-                              text: fmtLb(row.$2.current),
-                              style: AppText.title(context).copyWith(
-                                fontFeatures: const [
-                                  FontFeature.tabularFigures()
-                                ],
-                              ),
-                            ),
-                            TextSpan(
-                              text: '  ${tmSignalSuffix(row.$2)}',
-                              style: AppText.meta(context),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    if (row.$3)
-                      busy
-                          ? Text('…',
-                              style:
-                                  TextStyle(color: scheme.onSurfaceVariant))
-                          : TextButton(
-                              onPressed: () => onConfirm(row.$1),
-                              child: const Text('Confirm'),
-                            ),
-                  ],
-                ),
+    // ExerciseRow rows, hairline-divided (the Progress lifts pattern):
+    // lift name · "since … · manual/auto" meta · the TM as the trailing
+    // figure; an unconfirmed seed reads amber with its Confirm action.
+    final value = AppText.row(context).copyWith(
+      fontWeight: FontWeight.w600,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < rows.length; i++) ...[
+          if (i > 0) const RowDivider(),
+          ExerciseRow(
+            key: ValueKey('tm-row-${rows[i].$1}'),
+            name: liftTitle(rows[i].$1),
+            status: rows[i].$3 ? ItemStatus.partial : ItemStatus.muted,
+            subtitle: Text(tmSignalSuffix(rows[i].$2)),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => _TmTrendScreen(
+                lift: rows[i].$1,
+                rows: snap!.workingMax,
+                signal: rows[i].$2,
               ),
+            )),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (rows[i].$3)
+                  busy
+                      ? Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Text('…',
+                              style: TextStyle(
+                                  color: scheme.onSurfaceVariant)),
+                        )
+                      : TextButton(
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          onPressed: () => onConfirm(rows[i].$1),
+                          child: const Text('Confirm'),
+                        ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 8, left: 4),
+                  child: Text('${fmtLb(rows[i].$2.current)} lb', style: value),
+                ),
+              ],
             ),
+          ),
         ],
-      ),
+      ],
     );
   }
 
-  /// 'squat' → 'Squat'.
-  static String liftTitle(String lift) =>
-      lift[0].toUpperCase() + lift.substring(1);
+  /// 'squat' → 'Squat', 'press' → 'Overhead press' (the Progress
+  /// tab's lift names).
+  static String liftTitle(String lift) {
+    final n = lift == 'press' ? 'overhead press' : lift;
+    return n[0].toUpperCase() + n.substring(1);
+  }
 
   static String fmtLb(num v) =>
       v == v.roundToDouble() ? v.round().toString() : v.toString();
@@ -942,80 +941,82 @@ class _DayTile extends StatelessWidget {
     // meta role, top sets emphasised in the row colour.
     final meta = AppText.meta(context);
 
-    return Material(
-      color: isToday
-          ? scheme.primaryContainer.withValues(alpha: 0.45)
-          : Colors.transparent,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          vertical: 10,
-          horizontal: AppSpace.gutter,
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 52,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    weekdayLabel,
-                    style: AppText.row(context).copyWith(
-                      fontWeight: isToday ? FontWeight.w700 : FontWeight.w500,
-                      color: isToday ? scheme.primary : scheme.onSurfaceVariant,
+    // One card per day (the shared rows-in-a-card style); today's card
+    // carries the accent outline + accent weekday.
+    return AppCard(
+      key: ValueKey('routine-day-${DateFormat('yyyy-MM-dd').format(date)}'),
+      margin: const EdgeInsets.fromLTRB(
+        AppSpace.gutter,
+        0,
+        AppSpace.gutter,
+        8,
+      ),
+      padding: const EdgeInsets.symmetric(
+        vertical: 12,
+        horizontal: AppSpace.gutter,
+      ),
+      highlighted: isToday,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 52,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  weekdayLabel,
+                  style: AppText.row(context).copyWith(
+                    fontWeight: isToday ? FontWeight.w700 : FontWeight.w500,
+                    color: isToday ? scheme.primary : scheme.onSurfaceVariant,
+                  ),
+                ),
+                Text(dateLabel, style: meta),
+              ],
+            ),
+          ),
+          const SizedBox(width: AppSpace.leadGap),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  sentenceCase(summary),
+                  style: muted
+                      ? meta.copyWith(fontStyle: FontStyle.italic)
+                      : AppText.row(
+                          context,
+                        ).copyWith(fontWeight: FontWeight.w600),
+                ),
+                if (lines.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  for (final l in lines)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 1),
+                      child: Text(
+                        formatSessionLine(
+                          l,
+                          tm: maxes[mainLiftByExercise[l.exercise]],
+                          bodyweight: bodyweight,
+                        ),
+                        style: l.top
+                            ? meta.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: scheme.onSurface,
+                              )
+                            : meta,
+                      ),
                     ),
-                  ),
-                  Text(dateLabel, style: meta),
+                  if (hasTop && backoff != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text('Back-offs: $backoff', style: meta),
+                    ),
                 ],
-              ),
+              ],
             ),
-            const SizedBox(width: AppSpace.leadGap),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    summary,
-                    style: muted
-                        ? meta.copyWith(fontStyle: FontStyle.italic)
-                        : AppText.row(
-                            context,
-                          ).copyWith(fontWeight: FontWeight.w600),
-                  ),
-                  if (lines.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    for (final l in lines)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 1),
-                        child: Text(
-                          formatSessionLine(
-                            l,
-                            tm: maxes[mainLiftByExercise[l.exercise]],
-                            bodyweight: bodyweight,
-                          ),
-                          style: l.top
-                              ? meta.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                  color: scheme.onSurface,
-                                )
-                              : meta,
-                        ),
-                      ),
-                    if (hasTop && backoff != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(
-                          'Back-offs: $backoff',
-                          style: meta.copyWith(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

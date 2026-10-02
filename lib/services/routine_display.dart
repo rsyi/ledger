@@ -245,9 +245,9 @@ String? weekStatusLine({
   };
 }
 
-/// The backoff rule collapsed to one short line:
-/// `hold ≤8 · drop 2.5-5% if over`. Null when the rule is absent or
-/// missing either half — no filler text.
+/// The backoff rule collapsed to one plain-words line:
+/// `keep RPE ≤ 8; if higher, drop 2.5–5%`. Null when the rule is absent
+/// or missing either half — no filler text.
 String? backoffLine(Object? rule) {
   if (rule is! Map) return null;
   final hold = rule['hold_if_rpe_lte'];
@@ -255,14 +255,14 @@ String? backoffLine(Object? rule) {
   if (hold is! num || drop == null) return null;
   final String dropStr;
   if (drop is List) {
-    dropStr = drop.whereType<num>().map(_n).join('-');
+    dropStr = drop.whereType<num>().map(_n).join('–');
   } else if (drop is num) {
     dropStr = _n(drop);
   } else {
     return null;
   }
   if (dropStr.isEmpty) return null;
-  return 'hold ≤${_n(hold)} · drop $dropStr% if over';
+  return 'keep RPE ≤ ${_n(hold)}; if higher, drop $dropStr%';
 }
 
 // ---------------------------------------------------------------------------

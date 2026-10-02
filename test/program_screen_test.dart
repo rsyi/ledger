@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:airledger/ui/design/design.dart' show AppCard;
 
 import 'package:airledger/models/database_config.dart';
 import 'package:airledger/models/view_schema.dart';
@@ -173,16 +174,31 @@ void main() {
 
     // Monday: summary line + bare rows (squat 320 × 0.811 → 260;
     // bench 240 × 0.68 → 165). Warm-ups and prose are not rendered.
-    expect(find.text('squat heavy · bench volume'), findsOneWidget);
+    expect(find.text('Squat heavy · bench volume'), findsOneWidget);
     expect(find.text('Squat 1×5 · 260 lb (81%)'), findsOneWidget);
     expect(find.text('Bench 4×8 · 165 lb (68%)'), findsOneWidget);
     expect(find.text('Bulgarian Split Squat 3×8-12'), findsOneWidget);
     expect(find.textContaining('Squat 1×10'), findsNothing); // no warm-ups
     expect(find.textContaining('Squat heavy: wave top'), findsNothing);
 
-    // Backoff rule collapsed to one short line.
-    expect(find.textContaining('hold ≤8 · drop 2.5-5% if over'),
+    // Backoff rule collapsed to one plain-words line.
+    expect(find.text('Back-offs: keep RPE ≤ 8; if higher, drop 2.5–5%'),
         findsWidgets);
+
+    // Each day is its own card; today's (Wed Sep 30) carries the accent
+    // outline, the others don't.
+    expect(
+        tester
+            .widget<AppCard>(
+                find.byKey(const ValueKey('routine-day-2026-09-30')))
+            .highlighted,
+        isTrue);
+    expect(
+        tester
+            .widget<AppCard>(
+                find.byKey(const ValueKey('routine-day-2026-09-28')))
+            .highlighted,
+        isFalse);
 
     // Jargon audit over everything rendered.
     for (final banned in ['wave', 'Wave', 'Rx', '§']) {
@@ -198,7 +214,7 @@ void main() {
     // to price the SNAPPED window, so Sat Oct 3 rendered as "Rest".
     await pump(tester, _FakeWmStore(_seedRows(confirmed: true)));
 
-    expect(find.text('press heavy'), findsOneWidget);
+    expect(find.text('Press heavy'), findsOneWidget);
     // Wave top: press 140 × 0.811 = 113.5 → 115 (81%).
     expect(find.text('Press 1×5 · 115 lb (81%)'), findsOneWidget);
     // Back-offs 3×6-8 @ 72%: 140 × 0.72 = 100.8 → 100.
@@ -221,6 +237,17 @@ void main() {
     expect(find.textContaining('since Sep 21', findRichText: true),
         findsNWidgets(4));
     expect(find.text('Confirm'), findsNWidgets(4));
+    // ExerciseRow rows: lift name, the TM as the trailing figure, the
+    // since-date as meta; press reads "Overhead press" (Progress names).
+    final squatRow = find.byKey(const ValueKey('tm-row-squat'));
+    expect(find.descendant(of: squatRow, matching: find.text('320 lb')),
+        findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byKey(const ValueKey('tm-row-press')),
+            matching: find.textContaining('Overhead press',
+                findRichText: true)),
+        findsOneWidget);
 
     // Confirm one seed → its button clears, others stay.
     await tester.tap(find.text('Confirm').first);

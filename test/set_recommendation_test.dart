@@ -66,10 +66,10 @@ void main() {
         mainLift: true,
         top: false,
         weighted: true,
-        backoff: 'hold ≤8 · drop 2.5-5% if over',
+        backoff: 'keep RPE ≤ 8; if higher, drop 2.5–5%',
       );
       expect(r.advice, contains('2×4 · 255 lb'));
-      expect(r.advice, contains('hold ≤8 · drop 2.5-5% if over'));
+      expect(r.advice, contains('keep RPE ≤ 8; if higher, drop 2.5–5%'));
       expect(r.lastSessionSummary, isNull);
     });
 

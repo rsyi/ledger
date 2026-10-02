@@ -339,13 +339,13 @@ void main() {
           'drop_pct': [2.5, 5],
           'purpose': 'prevent RPE drift, not normal fatigue',
         }),
-        'hold ≤8 · drop 2.5-5% if over',
+        'keep RPE ≤ 8; if higher, drop 2.5–5%',
       );
     });
 
     test('scalar drop and missing rule degrade honestly', () {
       expect(backoffLine(const {'hold_if_rpe_lte': 7, 'drop_pct': 5}),
-          'hold ≤7 · drop 5% if over');
+          'keep RPE ≤ 7; if higher, drop 5%');
       expect(backoffLine(null), isNull);
       expect(backoffLine('not a map'), isNull);
       expect(backoffLine(const {'drop_pct': 5}), isNull);

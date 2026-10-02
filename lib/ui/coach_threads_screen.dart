@@ -41,6 +41,10 @@ class CoachThreadsScreen extends StatefulWidget {
   /// timeline after scheduling. Null → Schedule shows a snackbar.
   final CoachTimelineOpener? openTimeline;
 
+  /// Passed through to [CoachChatScreen] (moves proposals → program_moves).
+  final ViewSchema? programMovesView;
+  final WarehouseConnector? programMovesRepository;
+
   const CoachThreadsScreen({
     super.key,
     required this.view,
@@ -48,6 +52,8 @@ class CoachThreadsScreen extends StatefulWidget {
     this.ledger,
     this.brain,
     this.openTimeline,
+    this.programMovesView,
+    this.programMovesRepository,
   });
 
   @override
@@ -211,6 +217,8 @@ class _CoachThreadsScreenState extends State<CoachThreadsScreen> {
           ledger: widget.ledger,
           brain: widget.brain,
           openTimeline: widget.openTimeline,
+          programMovesView: widget.programMovesView,
+          programMovesRepository: widget.programMovesRepository,
         ),
       ),
     );

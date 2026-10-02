@@ -14,6 +14,7 @@ import '../services/coach_brain.dart';
 import '../services/coach_proposal_store.dart';
 import '../services/coach_thread_const.dart';
 import '../services/plan_store.dart';
+import '../services/program_moves.dart';
 import '../services/sheets_repository.dart' show Record;
 import '../services/sync_scheduler.dart';
 import '../services/warehouse_connector.dart';
@@ -112,6 +113,12 @@ class CoachChatScreen extends StatefulWidget {
   /// Null → Schedule buttons show a "unavailable" snackbar instead.
   final CoachTimelineOpener? openTimeline;
 
+  /// The synced `program_moves` view + its writable repo — where an
+  /// accepted moves proposal lands. Null → moves cards render with
+  /// Schedule disabled.
+  final ViewSchema? programMovesView;
+  final WarehouseConnector? programMovesRepository;
+
   const CoachChatScreen({
     super.key,
     required this.view,
@@ -121,6 +128,8 @@ class CoachChatScreen extends StatefulWidget {
     this.ledger,
     this.brain,
     this.openTimeline,
+    this.programMovesView,
+    this.programMovesRepository,
   });
 
   @override
@@ -454,8 +463,11 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
 
   Widget _bubbleFor(Record msg) {
     if (msg['kind']?.toString() == 'proposal') {
-      final p = CoachProposal.tryParse(msg['text']?.toString() ?? '');
+      final text = msg['text']?.toString() ?? '';
+      final p = CoachProposal.tryParse(text);
       if (p != null) return _proposalBubble(msg, p);
+      final m = MovesProposal.tryParse(text);
+      if (m != null) return _movesBubble(msg, m);
       // Malformed payload → plain bubble fallback.
     }
     return _ChatBubble(msg: msg);
@@ -495,6 +507,122 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
         ),
       ),
     );
+  }
+
+  Widget _movesBubble(Record msg, MovesProposal p) {
+    final rowId = msg['id']?.toString() ?? '';
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.85,
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (p.summary.isNotEmpty)
+                Text(p.summary,
+                    style: TextStyle(color: scheme.onSurface)),
+              MovesProposalCard(
+                proposal: p,
+                status: _proposalStates[rowId]?.status,
+                busy: _proposalBusy.contains(rowId),
+                canSchedule: widget.programMovesView != null &&
+                    widget.programMovesRepository != null,
+                onSchedule: () => _scheduleMoves(rowId, p),
+                onUndo: () => _undoMoves(rowId),
+                onDismiss: () => _dismissProposal(rowId),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Accept a moves proposal: one `program_moves` row per move (source
+  /// coach). The created row ids ride in the proposal state's localIds
+  /// so Undo can delete exactly those rows.
+  Future<void> _scheduleMoves(String rowId, MovesProposal p) async {
+    final view = widget.programMovesView;
+    final repo = widget.programMovesRepository;
+    if (_proposalBusy.contains(rowId) || view == null || repo == null) return;
+    setState(() => _proposalBusy.add(rowId));
+    final created = <String>[];
+    try {
+      final now = DateTime.now();
+      for (final m in p.moves) {
+        final move = ProgramMove(
+          id: const Uuid().v4(),
+          to: m.to,
+          from: m.from,
+          item: m.item,
+          period: m.period,
+          source: 'coach',
+          createdAt: now,
+          note: m.note,
+        );
+        await repo.create(view, move.toRecord());
+        created.add(move.id);
+      }
+      final st = CoachProposalState(
+          status: CoachProposalStatus.scheduled, localIds: created);
+      await CoachProposalStore.save(rowId, st);
+      unawaited(SyncScheduler.instance?.maybeSync(manual: true));
+      if (!mounted) return;
+      setState(() => _proposalStates[rowId] = st);
+    } catch (e) {
+      // Partial write: roll back what landed so a retry can't duplicate.
+      for (final id in created) {
+        try {
+          await repo.delete(view, <String, Object?>{'id': id});
+        } catch (_) {}
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Schedule failed: $e')));
+    } finally {
+      if (mounted) setState(() => _proposalBusy.remove(rowId));
+    }
+  }
+
+  /// Undo an accepted moves proposal: delete the rows it created (items
+  /// go back to their prescribed days).
+  Future<void> _undoMoves(String rowId) async {
+    final view = widget.programMovesView;
+    final repo = widget.programMovesRepository;
+    final prior = _proposalStates[rowId];
+    if (_proposalBusy.contains(rowId) ||
+        view == null ||
+        repo == null ||
+        prior == null) {
+      return;
+    }
+    setState(() => _proposalBusy.add(rowId));
+    try {
+      for (final id in prior.localIds) {
+        await repo.delete(view, <String, Object?>{'id': id});
+      }
+      const st = CoachProposalState(
+          status: CoachProposalStatus.undone, localIds: []);
+      await CoachProposalStore.save(rowId, st);
+      unawaited(SyncScheduler.instance?.maybeSync(manual: true));
+      if (!mounted) return;
+      setState(() => _proposalStates[rowId] = st);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Undo failed: $e')));
+    } finally {
+      if (mounted) setState(() => _proposalBusy.remove(rowId));
+    }
   }
 
   Future<void> _scheduleProposal(String rowId, CoachProposal p) async {

@@ -706,9 +706,15 @@ class _HomeScreenState extends State<HomeScreen> {
                             v.name != 'program_status')
                         .toList();
               ViewSchema? coachView;
+              // program_moves — where accepted coach moves proposals land.
+              ViewSchema? programMovesView;
               for (final v in data.views) {
                 if (v.name == kCoachChatViewName) coachView = v;
+                if (v.name == 'program_moves') programMovesView = v;
               }
+              final programMovesRepo = programMovesView == null
+                  ? null
+                  : data.registry.forView(programMovesView);
               if (entryViews.isEmpty &&
                   readOnlyViews.isEmpty &&
                   coachView == null) {
@@ -1077,6 +1083,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       ledger: coachLedger,
                       brain: coachBrain,
                       openTimeline: openCoachTimeline,
+                      programMovesView: programMovesView,
+                      programMovesRepository: programMovesRepo,
                     ),
                   ),
                 );
@@ -1098,6 +1106,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         ledger: coachLedger,
                         brain: coachBrain,
                         openTimeline: openCoachTimeline,
+                        programMovesView: programMovesView,
+                        programMovesRepository: programMovesRepo,
                       ),
                     ),
                   ),

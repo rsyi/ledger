@@ -69,4 +69,80 @@ void main() {
     expect(find.textContaining('Dismissed'), findsOneWidget);
     expect(find.text('Schedule again'), findsOneWidget);
   });
+
+  group('MovesProposalCard', () {
+    final moves = MovesProposal(
+      summary: 'Missed Wed bench',
+      moves: [
+        ProposedMove(
+          item: 'Bench heavy',
+          from: DateTime(2026, 9, 30),
+          to: DateTime(2026, 10, 2),
+          note: 'Fri has room',
+        ),
+      ],
+    );
+
+    Future<void> pumpMoves(
+      WidgetTester tester, {
+      CoachProposalStatus? status,
+      bool canSchedule = true,
+      VoidCallback? onSchedule,
+      VoidCallback? onUndo,
+      VoidCallback? onDismiss,
+    }) {
+      return tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: MovesProposalCard(
+            proposal: moves,
+            status: status,
+            busy: false,
+            canSchedule: canSchedule,
+            onSchedule: onSchedule ?? () {},
+            onUndo: onUndo ?? () {},
+            onDismiss: onDismiss ?? () {},
+          ),
+        ),
+      ));
+    }
+
+    testWidgets('pending: move lines + Schedule/Not now fire',
+        (tester) async {
+      var scheduled = false, dismissed = false;
+      await pumpMoves(tester,
+          onSchedule: () => scheduled = true,
+          onDismiss: () => dismissed = true);
+      expect(find.text('Bench heavy: Wed 9/30 → Fri 10/2'), findsOneWidget);
+      expect(find.textContaining('Fri has room'), findsOneWidget);
+      await tester.tap(find.text('Schedule'));
+      await tester.tap(find.text('Not now'));
+      expect(scheduled, isTrue);
+      expect(dismissed, isTrue);
+    });
+
+    testWidgets('canSchedule=false disables Schedule with a hint',
+        (tester) async {
+      var scheduled = false;
+      await pumpMoves(tester,
+          canSchedule: false, onSchedule: () => scheduled = true);
+      await tester.tap(find.text('Schedule'));
+      expect(scheduled, isFalse);
+      expect(find.textContaining('unavailable'), findsOneWidget);
+      // Not now still works.
+      expect(
+          tester
+              .widget<TextButton>(find.widgetWithText(TextButton, 'Not now'))
+              .onPressed,
+          isNotNull);
+    });
+
+    testWidgets('scheduled shows Undo', (tester) async {
+      var undone = false;
+      await pumpMoves(tester,
+          status: CoachProposalStatus.scheduled, onUndo: () => undone = true);
+      expect(find.textContaining('Scheduled'), findsOneWidget);
+      await tester.tap(find.text('Undo'));
+      expect(undone, isTrue);
+    });
+  });
 }

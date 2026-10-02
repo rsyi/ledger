@@ -1,221 +1,107 @@
-import 'dart:typed_data';
-
 import 'package:flutter_test/flutter_test.dart';
-import 'package:airledger/services/integrations/photos_picker_gateway.dart';
 import 'package:airledger/services/video_attach.dart';
+import 'package:airledger/services/video_ref.dart';
 
-// Photos Picker attach flow — pure helpers + the orchestration loop
-// against a fake gateway. Wire shapes follow the Picker API reference
-// (sessions / mediaItems.list / PickedMediaItem; NO productUrl).
+// Local attach flow (Android system photo picker) against a fake
+// picker: cancel, non-video, persisted grant (reference only), and the
+// copy-into-app-storage fallback when the grant can't be persisted.
 
-Map<String, dynamic> _session({
-  String id = 's1',
-  bool set = false,
-  Map<String, dynamic>? polling,
-}) =>
-    {
-      'id': id,
-      'pickerUri': 'https://photos.google.com/picker/abc',
-      'mediaItemsSet': set,
-      'pollingConfig': ?polling,
-    };
+const _uri =
+    'content://media/picker/0/com.android.providers.media.photopicker/media/77';
 
-Map<String, dynamic> _item({
-  String id = 'm1',
-  String type = 'VIDEO',
-  String baseUrl = 'https://lh3.googleusercontent.com/base',
-}) =>
-    {
-      'id': id,
-      'type': type,
-      'createTime': '2026-09-28T10:00:00Z',
-      'mediaFile': {
-        'baseUrl': baseUrl,
-        'mimeType': type == 'VIDEO' ? 'video/mp4' : 'image/jpeg',
-        'filename': type == 'VIDEO' ? 'squat.mp4' : 'pic.jpg',
-      },
-    };
-
-class FakePickerGateway implements PhotosPickerGateway {
-  FakePickerGateway({
-    required this.sessions,
-    this.items = const [],
-    this.createError,
-  });
-
-  /// Successive getSession responses (last one repeats).
-  final List<Map<String, dynamic>> sessions;
-  final List<dynamic> items;
-  final Object? createError;
-
-  int gets = 0;
-  final deleted = <String>[];
+class _FakePicker implements LocalVideoPicker {
+  _FakePicker(this.result, {this.copyError});
+  final PickedLocalVideo? result;
+  final Object? copyError;
+  final copies = <(String, String)>[];
 
   @override
-  Future<Map<String, dynamic>> createSession() async {
-    final err = createError;
-    if (err != null) throw err;
-    return sessions.first;
+  Future<PickedLocalVideo?> pick() async => result;
+
+  @override
+  Future<void> copyTo(String uri, String destPath) async {
+    if (copyError != null) throw copyError!;
+    copies.add((uri, destPath));
   }
-
-  @override
-  Future<Map<String, dynamic>> getSession(String sessionId) async {
-    gets++;
-    final idx = gets < sessions.length ? gets : sessions.length - 1;
-    return sessions[idx];
-  }
-
-  @override
-  Future<List<dynamic>> listMediaItems(String sessionId) async => items;
-
-  @override
-  Future<void> deleteSession(String sessionId) async =>
-      deleted.add(sessionId);
-
-  @override
-  Future<Uint8List> download(String url) async => Uint8List(0);
-
-  @override
-  Future<String?> signedInEmail() async => 'x@y.z';
-
-  @override
-  Future<String> signIn() async => 'x@y.z';
 }
 
-VideoAttachFlow _flow(FakePickerGateway gw) => VideoAttachFlow(
-      gateway: gw,
-      launchPicker: (_) async {},
-      defaultPollInterval: const Duration(milliseconds: 1),
-      maxWait: const Duration(milliseconds: 10),
-    );
-
 void main() {
-  group('parseGoogleDuration', () {
-    test('parses fractional and whole seconds', () {
-      expect(parseGoogleDuration('3.5s'),
-          const Duration(milliseconds: 3500));
-      expect(parseGoogleDuration('300s'), const Duration(seconds: 300));
-    });
+  Future<String> dest(String mediaId) async => '/cache/$mediaId.mp4';
 
-    test('rejects garbage', () {
-      expect(parseGoogleDuration(null), isNull);
-      expect(parseGoogleDuration('5'), isNull);
-      expect(parseGoogleDuration('abcs'), isNull);
-      expect(parseGoogleDuration('-2s'), isNull);
-    });
+  test('cancel → VideoAttachCancelled', () async {
+    final flow = VideoAttachFlow(picker: _FakePicker(null), cachePathFor: dest);
+    expect(flow.pickVideo(), throwsA(isA<VideoAttachCancelled>()));
   });
 
-  group('PickerSession.fromJson', () {
-    test('parses id, uri, pollingConfig', () {
-      final s = PickerSession.fromJson(_session(
-        polling: {'pollInterval': '1.5s', 'timeoutIn': '120s'},
-      ));
-      expect(s.id, 's1');
-      expect(s.pickerUri, contains('picker'));
-      expect(s.mediaItemsSet, isFalse);
-      expect(s.pollInterval, const Duration(milliseconds: 1500));
-      expect(s.timeoutIn, const Duration(seconds: 120));
-    });
-
-    test('missing id throws loudly', () {
-      expect(() => PickerSession.fromJson({'pickerUri': 'x'}),
-          throwsStateError);
-    });
+  test('persisted grant: stores the content URI, derived media id, no copy',
+      () async {
+    final p = _FakePicker(const PickedLocalVideo(
+        uri: _uri, persisted: true, mimeType: 'video/mp4', name: 'a.mp4'));
+    final res = await VideoAttachFlow(picker: p, cachePathFor: dest)
+        .pickVideo();
+    expect(res.url, _uri);
+    expect(res.mediaId, localMediaIdFor(_uri));
+    expect(res.cachedPath, isNull);
+    expect(res.frameSource, _uri);
+    expect(p.copies, isEmpty);
   });
 
-  group('firstVideoItem', () {
-    test('skips photos, returns first video', () {
-      final v = firstVideoItem([
-        _item(id: 'p1', type: 'PHOTO'),
-        _item(id: 'v1'),
-        _item(id: 'v2'),
-      ]);
-      expect(v!.mediaId, 'v1');
-      expect(v.baseUrl, contains('googleusercontent'));
-      expect(v.mimeType, 'video/mp4');
-      expect(v.filename, 'squat.mp4');
-    });
-
-    test('photo-only or empty → null', () {
-      expect(firstVideoItem([_item(type: 'PHOTO')]), isNull);
-      expect(firstVideoItem([]), isNull);
-    });
-
-    test('video without baseUrl is skipped (wire drift guard)', () {
-      final broken = _item();
-      (broken['mediaFile'] as Map).remove('baseUrl');
-      expect(firstVideoItem([broken]), isNull);
-    });
+  test('grant not persistable: copies into app storage, still refs the URI',
+      () async {
+    final p = _FakePicker(const PickedLocalVideo(
+        uri: _uri, persisted: false, mimeType: 'video/mp4'));
+    final res = await VideoAttachFlow(picker: p, cachePathFor: dest)
+        .pickVideo();
+    final mid = localMediaIdFor(_uri);
+    expect(res.url, _uri);
+    expect(p.copies, [(_uri, '/cache/$mid.mp4')]);
+    expect(res.cachedPath, '/cache/$mid.mp4');
+    expect(res.frameSource, '/cache/$mid.mp4');
   });
 
-  test('url builders', () {
-    expect(photosProductUrl('abc'), 'https://photos.google.com/lr/photo/abc');
-    expect(videoDownloadUrl('https://x/base'), 'https://x/base=dv');
+  test('copy failure without a grant is a clear, retryable error', () async {
+    final p = _FakePicker(
+        const PickedLocalVideo(uri: _uri, persisted: false),
+        copyError: Exception('disk full'));
+    expect(
+      VideoAttachFlow(picker: p, cachePathFor: dest).pickVideo(),
+      throwsA(isA<VideoAttachException>()
+          .having((e) => e.message, 'message', contains('try again'))
+          .having((e) => e.message, 'message', contains('disk full'))),
+    );
   });
 
-  group('VideoAttachFlow.pickVideo', () {
-    test('polls until mediaItemsSet, returns deep link + id, deletes '
-        'session', () async {
-      final gw = FakePickerGateway(
-        sessions: [_session(), _session(), _session(set: true)],
-        items: [_item(id: 'p1', type: 'PHOTO'), _item(id: 'vid9')],
-      );
-      final res = await _flow(gw).pickVideo();
-      expect(res.mediaId, 'vid9');
-      expect(res.url, 'https://photos.google.com/lr/photo/vid9');
-      expect(res.baseUrl, contains('googleusercontent'));
-      expect(gw.gets, greaterThanOrEqualTo(2));
-      expect(gw.deleted, ['s1']);
-    });
+  test('a picked photo is refused', () async {
+    final p = _FakePicker(const PickedLocalVideo(
+        uri: _uri, persisted: true, mimeType: 'image/jpeg'));
+    expect(
+      VideoAttachFlow(picker: p, cachePathFor: dest).pickVideo(),
+      throwsA(isA<VideoAttachException>()
+          .having((e) => e.message, 'message', contains('video'))),
+    );
+  });
 
-    test('photo-only pick errors (and still cleans up)', () async {
-      final gw = FakePickerGateway(
-        sessions: [_session(set: true)],
-        items: [_item(type: 'PHOTO')],
-      );
-      await expectLater(
-        _flow(gw).pickVideo(),
-        throwsA(predicate(
-            (e) => '$e'.contains('choose a video'))),
-      );
-      expect(gw.deleted, ['s1']);
-    });
+  test('unknown mime is accepted (some providers omit it)', () async {
+    final p =
+        _FakePicker(const PickedLocalVideo(uri: _uri, persisted: true));
+    final res = await VideoAttachFlow(picker: p, cachePathFor: dest)
+        .pickVideo();
+    expect(res.url, _uri);
+  });
 
-    test('timeout errors after the budget and cleans up', () async {
-      final gw = FakePickerGateway(sessions: [_session()]);
-      await expectLater(
-        _flow(gw).pickVideo(),
-        throwsA(predicate((e) => '$e'.contains('Timed out'))),
-      );
-      expect(gw.deleted, ['s1']);
+  test('PickedLocalVideo.fromChannel parses the platform map', () {
+    final v = PickedLocalVideo.fromChannel({
+      'uri': _uri,
+      'persisted': true,
+      'mimeType': 'video/mp4',
+      'name': 'x.mp4',
+      'size': 1234,
     });
-
-    test('cancel() surfaces VideoAttachCancelled', () async {
-      final gw = FakePickerGateway(sessions: [_session()]);
-      final flow = VideoAttachFlow(
-        gateway: gw,
-        launchPicker: (_) async {},
-        defaultPollInterval: const Duration(milliseconds: 5),
-        maxWait: const Duration(seconds: 1),
-      );
-      final future = flow.pickVideo();
-      flow.cancel();
-      await expectLater(
-          future, throwsA(isA<VideoAttachCancelled>()));
-    });
-
-    test('403 on session create appends the one-time setup hint',
-        () async {
-      final gw = FakePickerGateway(
-        sessions: [_session()],
-        createError: StateError(
-            'Photos Picker API 403: SERVICE_DISABLED'),
-      );
-      await expectLater(
-        _flow(gw).pickVideo(),
-        throwsA(predicate(
-            (e) => '$e'.contains('Google Photos Picker API'))),
-      );
-    });
+    expect(v.uri, _uri);
+    expect(v.persisted, isTrue);
+    expect(v.name, 'x.mp4');
+    expect(v.sizeBytes, 1234);
+    expect(() => PickedLocalVideo.fromChannel({'persisted': true}),
+        throwsA(isA<VideoAttachException>()));
   });
 }

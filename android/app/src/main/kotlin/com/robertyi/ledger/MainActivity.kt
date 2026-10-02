@@ -3,7 +3,11 @@ package com.robertyi.ledger
 // FlutterFragmentActivity (a ComponentActivity), not FlutterActivity:
 // the health plugin registers Health Connect's permission-request
 // ActivityResultContract, which needs a ComponentActivity host.
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
+import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Handler
@@ -15,6 +19,7 @@ import io.flutter.embedding.android.FlutterView
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.concurrent.Executors
 
 // Video frame sampling for the strength form's AI RPE estimate.
@@ -87,7 +92,7 @@ class MainActivity : FlutterFragmentActivity() {
                         runOffMain(result) {
                             val r = MediaMetadataRetriever()
                             try {
-                                r.setDataSource(path)
+                                setSource(r, path)
                                 val ms = r.extractMetadata(
                                     MediaMetadataRetriever.METADATA_KEY_DURATION,
                                 )?.toLongOrNull() ?: 0L
@@ -109,7 +114,7 @@ class MainActivity : FlutterFragmentActivity() {
                         runOffMain(result) {
                             val r = MediaMetadataRetriever()
                             try {
-                                r.setDataSource(path)
+                                setSource(r, path)
                                 val out = ArrayList<ByteArray>()
                                 for (ts in timestamps) {
                                     // OPTION_CLOSEST = exact frame (not just the
@@ -141,6 +146,129 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.robertyi.fitness/video_pick",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "pick" -> startVideoPick(result)
+                "copy" -> {
+                    val uri = call.argument<String>("uri")
+                    val dest = call.argument<String>("dest")
+                    if (uri == null || dest == null) {
+                        result.error("args", "copy needs uri + dest", null)
+                    } else {
+                        runOffMain(result) {
+                            val out = File(dest)
+                            out.parentFile?.mkdirs()
+                            val tmp = File("$dest.part")
+                            contentResolver.openInputStream(Uri.parse(uri)).use { input ->
+                                requireNotNull(input) { "cannot open $uri" }
+                                tmp.outputStream().use { input.copyTo(it) }
+                            }
+                            if (!tmp.renameTo(out)) error("rename failed: $dest")
+                            null
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    // --- Local video attach (strength form `widget: video`) ---
+    //
+    // The Android SYSTEM photo picker (ACTION_PICK_IMAGES, video only — no
+    // runtime permission; on-device Google Photos clips show up there),
+    // falling back to the document picker below API 33. The chosen URI's
+    // read grant is PERSISTED so the row can keep referencing the local
+    // clip across restarts; when Android refuses to persist it, Dart
+    // copies the clip into app storage via "copy" while the one-shot
+    // grant is still live. Replaces the Google Photos Picker API flow
+    // whose ~60-min download URL kept expiring. Dart: video_attach.dart.
+    private var pendingPick: MethodChannel.Result? = null
+
+    private fun startVideoPick(result: MethodChannel.Result) {
+        pendingPick?.error("superseded", "another pick started", null)
+        pendingPick = result
+        val intent = if (Build.VERSION.SDK_INT >= 33) {
+            Intent(MediaStore.ACTION_PICK_IMAGES).setType("video/*")
+        } else {
+            Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("video/*")
+                .addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+                )
+        }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQ_PICK_VIDEO)
+        } catch (e: Exception) {
+            pendingPick = null
+            result.error("video_pick", e.message ?: "$e", null)
+        }
+    }
+
+    @Deprecated("Activity-result API; the plugin-forwarding super still runs")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != REQ_PICK_VIDEO) {
+            @Suppress("DEPRECATION")
+            super.onActivityResult(requestCode, resultCode, data)
+            return
+        }
+        val result = pendingPick ?: return
+        pendingPick = null
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            result.success(null) // cancelled
+            return
+        }
+        val persisted = try {
+            contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
+        var name: String? = null
+        var size: Long? = null
+        try {
+            contentResolver.query(
+                uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null, null, null,
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val si = c.getColumnIndex(OpenableColumns.SIZE)
+                    if (ni >= 0 && !c.isNull(ni)) name = c.getString(ni)
+                    if (si >= 0 && !c.isNull(si)) size = c.getLong(si)
+                }
+            }
+        } catch (e: Exception) { /* metadata is best-effort */ }
+        result.success(
+            mapOf(
+                "uri" to uri.toString(),
+                "persisted" to persisted,
+                "mimeType" to contentResolver.getType(uri),
+                "name" to name,
+                "size" to size,
+            ),
+        )
+    }
+
+    // MediaMetadataRetriever reads a file path OR a content:// URI (local
+    // video refs from the system picker) — no download either way.
+    private fun setSource(r: MediaMetadataRetriever, path: String) {
+        if (path.startsWith("content://")) {
+            r.setDataSource(this, Uri.parse(path))
+        } else if (path.startsWith("file://")) {
+            r.setDataSource(Uri.parse(path).path)
+        } else {
+            r.setDataSource(path)
+        }
     }
 
     // Frame extraction takes seconds on a long clip — never block the
@@ -156,5 +284,9 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
         }
+    }
+
+    companion object {
+        private const val REQ_PICK_VIDEO = 0x7E0
     }
 }

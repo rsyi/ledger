@@ -2,12 +2,12 @@
 ///
 /// Pipeline (all seams injectable, pure parts tested):
 ///
-///   attach (video_attach.dart) → download bytes via the picker baseUrl
-///   (`=dv`, valid ~60 min — done immediately) → sample ~14 evenly
-///   spaced frames (video_frames.dart channel) → Claude vision
+///   attach (video_attach.dart — Android system photo picker, local
+///   content:// URI) → sample ~14 evenly spaced frames straight from the
+///   URI (video_frames.dart channel; no download) → Claude vision
 ///   (LlmClient.completeVision) with set context → parse a strict-JSON
 ///   estimate → persist device-local (shared_preferences, keyed by the
-///   PICKER MEDIA ID — stable before the row exists) + append to the
+///   MEDIA ID — stable before the row exists) + append to the
 ///   ledger meta `video_rpe_log` for coach context.
 ///
 /// PROPOSE-ONLY contract: the estimate renders as a chip in the form;
@@ -18,21 +18,17 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'integrations/photos_picker_gateway.dart' show videoDownloadUrl;
 import 'llm_client.dart';
 import 'video_attach.dart';
-import 'video_file_store.dart';
 import 'video_frames.dart';
 import 'video_thumb_store.dart';
 
-/// Sibling-dim convention for `widget: video` fields: the picker's
-/// persistent media-item id is stored next to the URL dim in
+/// Sibling-dim convention for `widget: video` fields: the clip's stable
+/// media id (localMediaIdFor(uri); legacy rows: the Photos picker
+/// media-item id) is stored next to the URL dim in
 /// `<field minus "_url">_media_id` (video_url → video_media_id). When
 /// the view has no such dim the id is simply not persisted.
 String mediaIdFieldFor(String videoField) {
@@ -374,9 +370,10 @@ class RpeEstimateFailed extends RpeEstimateState {
 
 /// App-global holder for the video pipeline (HeartRateService.instance
 /// precedent — avoids threading a rarely-used dependency through every
-/// screen between home and the form). Null when the Google web client
-/// id isn't configured; the form then renders the attach affordance
-/// disabled with a hint. [llm]/[modelName] null (disable_post_log or no
+/// screen between home and the form). Always set by home on Android
+/// (the system picker needs no config); null only in tests / before
+/// bootstrap, where the form renders the attach affordance disabled.
+/// [llm]/[modelName] null (disable_post_log or no
 /// Anthropic model) = attach works, estimation quietly disabled.
 class VideoRpeService extends ChangeNotifier {
   VideoRpeService({
@@ -429,7 +426,9 @@ class VideoRpeService extends ChangeNotifier {
 
   /// Runs the full estimate pipeline for a freshly attached video.
   /// Never throws — failures land in [stateFor] as [RpeEstimateFailed]
-  /// (the chip shows them; the form stays usable).
+  /// (the chip shows them; the form stays usable). Frames are read
+  /// straight from the local reference (or its app-storage copy) — no
+  /// download, so nothing here can expire.
   Future<void> estimate({
     required VideoAttachResult video,
     required RpeRowContext ctx,
@@ -439,27 +438,15 @@ class VideoRpeService extends ChangeNotifier {
     if (llm == null || model == null) return;
     _states[video.mediaId] = const RpeEstimatePending();
     notifyListeners();
-    File? tmp;
     try {
-      // Immediately — the baseUrl dies ~60 min after the pick.
-      final bytes = await flow.gateway.download(
-        videoDownloadUrl(video.baseUrl),
-      );
-      // Persist the full clip for in-app playback (the picker URL dies
-      // ~60 min from now, so this is our only chance to keep it).
-      await VideoFileStore.save(video.mediaId, bytes);
-      final dir = await getTemporaryDirectory();
-      tmp = File(
-          '${dir.path}/rpe_${video.mediaId.hashCode.toRadixString(16)}.mp4');
-      await tmp.writeAsBytes(bytes, flush: true);
-      final duration = await _extractor.durationMs(tmp.path);
+      final src = video.frameSource;
+      final duration = await _extractor.durationMs(src);
       final timestamps = frameTimestampsMs(duration, count: frameCount);
-      final frames = await _extractor.framesAt(tmp.path, timestamps);
+      final frames = await _extractor.framesAt(src, timestamps);
       if (frames.isEmpty) {
-        throw StateError('No frames could be extracted from the video');
+        throw StateError('No frames could be read from the video');
       }
-      // Cache the middle frame as the clip's thumbnail (the picker URL
-      // dies ~60 min from now, so capture it while we can).
+      // Middle frame doubles as the clip's list thumbnail.
       await VideoThumbStore.save(video.mediaId, frames[frames.length ~/ 2]);
       final raw = await llm.completeVision(
         model,
@@ -475,36 +462,27 @@ class VideoRpeService extends ChangeNotifier {
       _states[video.mediaId] = RpeEstimateReady(est);
     } catch (e) {
       _states[video.mediaId] = RpeEstimateFailed('$e');
-    } finally {
-      try {
-        await tmp?.delete();
-      } catch (_) {/* best-effort */}
     }
     notifyListeners();
   }
 
   /// Caches a thumbnail without running the LLM estimate — used when the
   /// AI estimate is unavailable but we still want an in-app preview.
-  /// Best-effort + quiet; the picker URL is live only right after a pick.
+  /// Best-effort + quiet.
   Future<void> captureThumbnail(VideoAttachResult video) async {
-    File? tmp;
     try {
-      final bytes = await flow.gateway.download(videoDownloadUrl(video.baseUrl));
-      await VideoFileStore.save(video.mediaId, bytes);
-      final dir = await getTemporaryDirectory();
-      tmp = File(
-          '${dir.path}/thumb_${video.mediaId.hashCode.toRadixString(16)}.mp4');
-      await tmp.writeAsBytes(bytes, flush: true);
-      final duration = await _extractor.durationMs(tmp.path);
-      final mid = frameTimestampsMs(duration, count: 1);
-      final frames = await _extractor.framesAt(tmp.path, mid);
-      if (frames.isNotEmpty) {
-        await VideoThumbStore.save(video.mediaId, frames.first);
-      }
-    } catch (_) {/* best-effort — no thumbnail is acceptable */} finally {
-      try {
-        await tmp?.delete();
-      } catch (_) {/* best-effort */}
+      await captureThumbnailFrom(video.mediaId, video.frameSource);
+    } catch (_) {/* best-effort — no thumbnail is acceptable */}
+  }
+
+  /// Mid-frame thumbnail for [mediaId] read from [source] (path or
+  /// content URI). Throws on failure; callers decide how quiet to be.
+  Future<void> captureThumbnailFrom(String mediaId, String source) async {
+    final duration = await _extractor.durationMs(source);
+    final mid = frameTimestampsMs(duration, count: 1);
+    final frames = await _extractor.framesAt(source, mid);
+    if (frames.isNotEmpty) {
+      await VideoThumbStore.save(mediaId, frames.first);
     }
   }
 

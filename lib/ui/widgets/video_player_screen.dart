@@ -3,12 +3,16 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
-/// Minimal in-app player for a locally-cached lift clip: autoplay + loop,
-/// tap to play/pause, a scrubber, and a close button. Black full-screen.
+/// Minimal in-app player for a lift clip on the device — a cached file
+/// in app storage OR a local content:// URI (system photo picker ref):
+/// autoplay + loop, tap to play/pause, a scrubber, and a close button.
+/// Black full-screen.
 class VideoPlayerScreen extends StatefulWidget {
-  final File file;
+  final File? file;
+  final Uri? contentUri;
   final String? title;
-  const VideoPlayerScreen({super.key, required this.file, this.title});
+  const VideoPlayerScreen({super.key, this.file, this.contentUri, this.title})
+      : assert(file != null || contentUri != null);
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -22,7 +26,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   @override
   void initState() {
     super.initState();
-    _c = VideoPlayerController.file(widget.file);
+    _c = widget.file != null
+        ? VideoPlayerController.file(widget.file!)
+        : VideoPlayerController.contentUri(widget.contentUri!);
     _c.initialize().then((_) {
       _c.setLooping(true);
       _c.play();
@@ -55,7 +61,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         child: _error != null
             ? Padding(
                 padding: const EdgeInsets.all(24),
-                child: Text('Couldn\'t play this clip: $_error',
+                child: Text(
+                    widget.file == null
+                        ? 'Couldn\'t play this clip — it may have been '
+                            'deleted from the phone, or access was revoked. '
+                            'Re-attach it from the edit form.\n\n$_error'
+                        : 'Couldn\'t play this clip: $_error',
                     style: const TextStyle(color: Colors.white70),
                     textAlign: TextAlign.center),
               )

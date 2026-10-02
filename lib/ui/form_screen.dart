@@ -10,6 +10,7 @@ import '../services/derive.dart';
 import '../services/sheets_repository.dart';
 import '../services/video_attach.dart';
 import '../services/video_draft_store.dart';
+import '../services/video_file_store.dart';
 import '../services/video_rpe.dart';
 import '../services/warehouse_connector.dart';
 import 'widgets/field_widgets.dart';
@@ -312,10 +313,11 @@ class _FormScreenState extends State<FormScreen> {
     }
   }
 
-  /// Runs the Photos Picker attach flow for a `widget: video` field:
-  /// writes the deep link into the field + the picker media id into the
-  /// sibling `<base>_media_id` dim (when the view has one). Cancel is
-  /// quiet; real failures surface as a snackbar.
+  /// Runs the local-video attach flow (Android system photo picker) for a
+  /// `widget: video` field: writes the content:// reference into the
+  /// field + the derived media id into the sibling `<base>_media_id` dim
+  /// (when the view has one). Cancel is quiet; real failures surface as a
+  /// snackbar with a Retry action.
   Future<void> _attachVideo(Dimension dim) async {
     final svc = VideoRpeService.instance;
     if (svc == null) return;
@@ -333,8 +335,11 @@ class _FormScreenState extends State<FormScreen> {
       // backing out of the form before saving doesn't lose it — restored
       // on the next open of this view's form.
       unawaited(VideoDraftStore.save(widget.view.name, res.url, res.mediaId));
-      // Kick the RPE estimate NOW — the picker's download URL dies
-      // ~60 min after the pick. Fire-and-forget; the chip below the
+      // A copy landed in app storage (grant not persistable) — keep the
+      // clip cache bounded.
+      if (res.cachedPath != null) unawaited(VideoFileStore.prune());
+      // Kick the RPE estimate now (frames read straight from the local
+      // clip — nothing expires). Fire-and-forget; the chip below the
       // field tracks pending/ready/failed via the service listener.
       // PROPOSE-ONLY: nothing here (or in the service) writes rpe.
       if (!svc.canEstimate) {
@@ -364,17 +369,17 @@ class _FormScreenState extends State<FormScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Video attach failed: $e')),
+        SnackBar(
+          content: Text(e is VideoAttachException
+              ? e.message
+              : 'Video attach failed: $e'),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: () => _attachVideo(dim),
+          ),
+        ),
       );
     }
-  }
-
-  @override
-  void dispose() {
-    // Form closed mid-pick: stop the poll loop (best-effort — the flow
-    // is app-global but only one form runs a pick at a time).
-    VideoRpeService.instance?.flow.cancel();
-    super.dispose();
   }
 
   /// Chip row under a `widget: video` field. Null when there's nothing

@@ -1,33 +1,26 @@
-/// Photos Picker attach flow for `widget: video` fields.
+/// Local-video attach flow for `widget: video` fields (2026-10-02).
 ///
-/// Orchestration only — every network/platform touch goes through the
-/// injectable [PhotosPickerGateway] + [launchPicker] seams so the whole
-/// flow is testable with fakes:
+/// Replaces the Google Photos Picker API flow, whose short-lived
+/// baseUrl download (~60 min, and flaky before that) kept failing with
+/// "the picker link may have expired". The lift clips are already on
+/// the phone (Google Photos backs them up FROM the device), so attach
+/// now opens the Android SYSTEM photo picker (video only — no runtime
+/// permission needed) and stores a reference to the local file:
 ///
-///   attach tap → sessions.create → launch pickerUri (Photos app/web)
-///   → poll sessions.get until mediaItemsSet (interval/timeout from the
-///   session's pollingConfig, capped) → mediaItems.list → first VIDEO
-///   → best-effort sessions.delete → [VideoAttachResult].
+///   pick (MainActivity `video_pick` channel) → content:// URI with a
+///   PERSISTED read grant (takePersistableUriPermission) → `video_url`
+///   = the URI, `video_media_id` = localMediaIdFor(uri).
 ///
-/// The stored URL is the constructed Photos deep link (the Picker API
-/// has no productUrl — see photos_picker_gateway.dart); the media id
-/// rides along for re-fetch. The baseUrl is only valid ~60 min, so the
-/// RPE estimator downloads bytes immediately after attach.
+/// When Android won't persist the grant (some providers/cloud items),
+/// the clip is copied into app storage (VideoFileStore path) while the
+/// one-shot grant is still live — playback/frames then read the copy.
+/// Frames for the RPE estimate are read straight from the URI/copy —
+/// nothing is downloaded, nothing expires.
 library;
 
-import 'dart:async';
+import 'package:flutter/services.dart';
 
-import 'package:android_intent_plus/android_intent.dart';
-
-import 'integrations/photos_picker_gateway.dart';
-
-/// Card/snackbar hint when the picker scope/API isn't set up yet.
-const kVideoAttachSetupHint =
-    'Google Photos picker needs one-time setup — GCP console '
-    '(ryi-data-entry): enable the "Google Photos Picker API", add the '
-    'photospicker.mediaitems.readonly scope to the OAuth consent screen, '
-    'and retry. Uses the same OAuth clients as the Kaya Gmail import '
-    '(integrations.kaya_gmail.server_client_id).';
+import 'video_ref.dart';
 
 /// User closed the picker / never picked — not an error.
 class VideoAttachCancelled implements Exception {
@@ -36,122 +29,151 @@ class VideoAttachCancelled implements Exception {
   String toString() => 'Video attach cancelled';
 }
 
+/// A real, user-facing attach failure. [message] is phrased for the
+/// snackbar (what happened + that a retry is reasonable).
+class VideoAttachException implements Exception {
+  const VideoAttachException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// What the platform picker hands back.
+class PickedLocalVideo {
+  const PickedLocalVideo({
+    required this.uri,
+    required this.persisted,
+    this.mimeType,
+    this.name,
+    this.sizeBytes,
+  });
+
+  final String uri;
+
+  /// True when takePersistableUriPermission succeeded (the URI stays
+  /// readable across restarts).
+  final bool persisted;
+  final String? mimeType;
+  final String? name;
+  final int? sizeBytes;
+
+  static PickedLocalVideo fromChannel(Map<Object?, Object?> m) {
+    final uri = m['uri'];
+    if (uri is! String || uri.isEmpty) {
+      throw const VideoAttachException(
+          'The picker returned no video — tap Attach video to try again.');
+    }
+    return PickedLocalVideo(
+      uri: uri,
+      persisted: m['persisted'] == true,
+      mimeType: m['mimeType'] as String?,
+      name: m['name'] as String?,
+      sizeBytes: (m['size'] as num?)?.toInt(),
+    );
+  }
+}
+
+/// Injectable seam over the platform picker.
+abstract class LocalVideoPicker {
+  /// Opens the system picker (video only). Null = cancelled.
+  Future<PickedLocalVideo?> pick();
+
+  /// Streams [uri]'s bytes into [destPath] (native side, no Dart copy).
+  Future<void> copyTo(String uri, String destPath);
+}
+
+class ChannelLocalVideoPicker implements LocalVideoPicker {
+  static const _channel = MethodChannel('com.robertyi.fitness/video_pick');
+
+  @override
+  Future<PickedLocalVideo?> pick() async {
+    final res = await _channel.invokeMapMethod<Object?, Object?>('pick');
+    if (res == null) return null;
+    return PickedLocalVideo.fromChannel(res);
+  }
+
+  @override
+  Future<void> copyTo(String uri, String destPath) =>
+      _channel.invokeMethod<void>('copy', {'uri': uri, 'dest': destPath});
+}
+
 class VideoAttachResult {
   const VideoAttachResult({
     required this.mediaId,
     required this.url,
-    required this.baseUrl,
+    this.cachedPath,
     this.mimeType,
     this.filename,
   });
 
-  /// Persistent picker media-item id (→ `video_media_id`).
+  /// Stable id derived from the URI (→ `video_media_id`; keys the
+  /// thumbnail/clip caches + the RPE estimate).
   final String mediaId;
 
-  /// Google Photos deep link (→ `video_url`).
+  /// The local reference (→ `video_url`): a content:// URI.
   final String url;
 
-  /// Short-lived download base (append `=dv` for bytes; ~60 min).
-  final String baseUrl;
+  /// App-storage copy, set only when the grant couldn't be persisted.
+  final String? cachedPath;
 
   final String? mimeType;
   final String? filename;
+
+  /// What the frame extractor / player should read.
+  String get frameSource => frameSourceFor(ref: url, cachedPath: cachedPath)!;
 }
 
 class VideoAttachFlow {
   VideoAttachFlow({
-    required this.gateway,
-    Future<void> Function(String pickerUri)? launchPicker,
-    this.defaultPollInterval = const Duration(seconds: 3),
-    this.maxWait = const Duration(minutes: 5),
-  }) : _launchPicker = launchPicker ?? _launchViaIntent;
+    LocalVideoPicker? picker,
+    required this.cachePathFor,
+  }) : picker = picker ?? ChannelLocalVideoPicker();
 
-  final PhotosPickerGateway gateway;
-  final Future<void> Function(String pickerUri) _launchPicker;
+  final LocalVideoPicker picker;
 
-  /// Poll cadence when the session's pollingConfig is absent.
-  final Duration defaultPollInterval;
+  /// App-storage path for a clip copy (VideoFileStore.pathFor).
+  final Future<String> Function(String mediaId) cachePathFor;
 
-  /// Hard ceiling on the whole wait, regardless of what pollingConfig
-  /// suggests (mirrors the Kaya guided sync's ~5 min budget).
-  final Duration maxWait;
-
-  bool _cancelled = false;
-
-  /// Abandons the current pickVideo() wait (e.g. the form was closed).
-  /// The in-flight future completes with [VideoAttachCancelled].
-  void cancel() => _cancelled = true;
-
-  /// Runs the full picker flow. Throws [VideoAttachCancelled] on
-  /// cancel, [StateError] on timeout / photo-only pick / API errors
-  /// (a 403 SERVICE_DISABLED-style error gets the setup hint appended).
+  /// Throws [VideoAttachCancelled] on cancel, [VideoAttachException] on
+  /// a non-video pick or when the clip can't be kept readable.
   Future<VideoAttachResult> pickVideo() async {
-    _cancelled = false;
-    final PickerSession session;
+    final PickedLocalVideo? picked;
     try {
-      session = PickerSession.fromJson(await gateway.createSession());
-    } catch (e) {
-      // Most common first-run failure: API not enabled / scope missing
-      // from the consent screen. Surface the one-time setup steps.
-      final s = '$e';
-      if (s.contains('403') || s.contains('SERVICE_DISABLED')) {
-        throw StateError('$e\n\n$kVideoAttachSetupHint');
-      }
+      picked = await picker.pick();
+    } on VideoAttachException {
       rethrow;
+    } catch (e) {
+      throw VideoAttachException(
+          'Couldn\'t open the video picker ($e) — tap Attach video to try '
+          'again.');
     }
-    if (session.pickerUri.isEmpty) {
-      throw StateError('Picker session came back without a pickerUri');
+    if (picked == null) throw const VideoAttachCancelled();
+    final mime = picked.mimeType;
+    if (mime != null && mime.isNotEmpty && !mime.startsWith('video/')) {
+      throw const VideoAttachException(
+          'That\'s not a video — pick a video clip and try again.');
     }
-    await _launchPicker(session.pickerUri);
-
-    final interval = session.pollInterval ?? defaultPollInterval;
-    var budget = session.timeoutIn ?? maxWait;
-    if (budget > maxWait) budget = maxWait;
-
-    var waited = Duration.zero;
-    var set = session.mediaItemsSet;
-    while (!set) {
-      if (_cancelled) {
-        await _cleanup(session.id);
-        throw const VideoAttachCancelled();
+    final mediaId = localMediaIdFor(picked.uri);
+    String? cached;
+    if (!picked.persisted) {
+      // No lasting grant: copy NOW while the one-shot grant is live.
+      final dest = await cachePathFor(mediaId);
+      try {
+        await picker.copyTo(picked.uri, dest);
+        cached = dest;
+      } catch (e) {
+        throw VideoAttachException(
+            'Couldn\'t keep access to this video (Android didn\'t grant '
+            'lasting access and copying it failed: $e) — try again, or pick '
+            'it from the Photos tab of the picker.');
       }
-      if (waited >= budget) {
-        await _cleanup(session.id);
-        throw StateError(
-            'Timed out waiting for a pick — tap Attach to try again.');
-      }
-      await Future<void>.delayed(interval);
-      waited += interval;
-      set = PickerSession.fromJson(await gateway.getSession(session.id))
-          .mediaItemsSet;
-    }
-
-    final items = await gateway.listMediaItems(session.id);
-    final video = firstVideoItem(items);
-    await _cleanup(session.id);
-    if (video == null) {
-      throw StateError(
-          'No video in the pick — choose a video (not a photo).');
     }
     return VideoAttachResult(
-      mediaId: video.mediaId,
-      url: photosProductUrl(video.mediaId),
-      baseUrl: video.baseUrl,
-      mimeType: video.mimeType,
-      filename: video.filename,
+      mediaId: mediaId,
+      url: picked.uri,
+      cachedPath: cached,
+      mimeType: mime,
+      filename: picked.name,
     );
-  }
-
-  Future<void> _cleanup(String sessionId) async {
-    try {
-      await gateway.deleteSession(sessionId);
-    } catch (_) {/* best-effort */}
-  }
-
-  static Future<void> _launchViaIntent(String pickerUri) {
-    return AndroidIntent(
-      action: 'android.intent.action.VIEW',
-      data: pickerUri,
-    ).launch();
   }
 }

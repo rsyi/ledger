@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -8,7 +7,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../models/view_schema.dart';
 import '../../services/heart_rate_service.dart';
 import '../../services/hr_session.dart';
+import '../../services/video_ref.dart';
 import 'hr_max_dialog.dart';
+import 'video_preview.dart';
 
 /// Resolves an input.default value into an actual Dart value at form-creation
 /// time. Supports the strings 'now' (DateTime.now()) and 'today' (date only).
@@ -714,17 +715,18 @@ class _SwitchFieldWidget extends StatelessWidget {
   }
 }
 
-/// Video-attach affordance (`widget: video`). The value is a Google
-/// Photos deep link written by the form's Photos Picker flow — never
-/// typed. States:
+/// Video-attach affordance (`widget: video`). The value is a local
+/// content:// reference written by the form's system-photo-picker flow
+/// (legacy rows: a Google Photos deep link) — never typed. States:
 ///
 ///   - blank + handler present: "Attach video" button (spinner while
-///     the picker flow runs).
-///   - blank + no handler: disabled button + setup hint (picker not
-///     configured — missing Google client id / scope).
-///   - attached: tile with the link host, an open-in-Photos action
-///     (VIEW intent) and a × that clears the field (the form's
-///     onChanged(null) also clears the sibling media-id dim).
+///     the picker is open).
+///   - blank + no handler: disabled button + hint (service not
+///     bootstrapped).
+///   - attached: tile saying where the clip lives, a play action
+///     (in-app for on-device clips, Photos app for legacy links) and a
+///     × that clears the field (the form's onChanged(null) also clears
+///     the sibling media-id dim).
 class _VideoFieldWidget extends StatefulWidget {
   final Dimension dim;
   final Object? value;
@@ -759,19 +761,6 @@ class _VideoFieldWidgetState extends State<_VideoFieldWidget> {
     }
   }
 
-  Future<void> _open(String url) async {
-    try {
-      await AndroidIntent(
-        action: 'android.intent.action.VIEW',
-        data: url,
-      ).launch();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not open video: $e')));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -788,7 +777,7 @@ class _VideoFieldWidgetState extends State<_VideoFieldWidget> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.videocam_outlined, size: 18),
-            label: Text(_busy ? 'Waiting for pick…' : 'Attach video'),
+            label: Text(_busy ? 'Picking…' : 'Attach video'),
             onPressed:
                 widget.onAttachVideo == null || _busy ? null : _attach,
           ),
@@ -797,7 +786,7 @@ class _VideoFieldWidgetState extends State<_VideoFieldWidget> {
               child: Padding(
                 padding: const EdgeInsets.only(left: 12),
                 child: Text(
-                  'Google Photos picker not configured',
+                  'Video attach unavailable',
                   style: TextStyle(
                     fontSize: 12,
                     color: scheme.onSurfaceVariant.withValues(alpha: 0.7),
@@ -814,16 +803,18 @@ class _VideoFieldWidgetState extends State<_VideoFieldWidget> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Video attached — ${Uri.tryParse(url)?.host ?? url}',
+              'Video attached — ${videoRefLabel(url)}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.open_in_new, size: 18),
-            tooltip: 'Open in Google Photos',
+            icon: Icon(
+                isLocalVideoRef(url) ? Icons.play_arrow : Icons.open_in_new,
+                size: 18),
+            tooltip: isLocalVideoRef(url) ? 'Play' : 'Open in Google Photos',
             visualDensity: VisualDensity.compact,
-            onPressed: () => _open(url),
+            onPressed: () => playVideo(context, url, null),
           ),
           IconButton(
             icon: const Icon(Icons.close, size: 18),

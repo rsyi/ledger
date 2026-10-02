@@ -1,7 +1,9 @@
-/// Local cache of the FULL attached video (mp4) per picker media id, so
-/// the clip can play IN-APP later. Saved at attach time because the
-/// Google Photos deep link isn't a streamable media URL and the picker's
-/// download URL expires ~60 min after the pick.
+/// Local cache of the FULL attached video (mp4) per media id, so the clip
+/// can play IN-APP later. Two writers: legacy Google Photos Picker
+/// attaches (downloaded at attach time — the deep link isn't streamable)
+/// and local picks whose read grant couldn't be persisted (copied
+/// natively via [pathFor] while the one-shot grant was live). Local picks
+/// WITH a persisted grant are never copied — they play from their URI.
 ///
 /// Files live under `<appDocs>/video_clips/<mediaId>.mp4`. Capped by count
 /// (oldest evicted) so lift footage doesn't grow without bound.
@@ -31,6 +33,10 @@ class VideoFileStore {
   static Future<File> _file(String mediaId) async =>
       File('${(await _dir()).path}/${_safe(mediaId)}.mp4');
 
+  /// Destination path for [mediaId]'s clip (the native copy target).
+  static Future<String> pathFor(String mediaId) async =>
+      (await _file(mediaId)).path;
+
   /// Writes the clip [bytes] for [mediaId], then prunes old clips beyond
   /// [maxClips]. Best-effort.
   static Future<void> save(String mediaId, Uint8List bytes) async {
@@ -51,6 +57,9 @@ class VideoFileStore {
       return null;
     }
   }
+
+  /// Evicts the oldest clips beyond [maxClips]. Best-effort.
+  static Future<void> prune() => _prune();
 
   static Future<void> _prune() async {
     try {

@@ -1,11 +1,12 @@
 /// Persists the LAST attached video per view so an accidental back-press
-/// (or leaving the form) doesn't throw away the expensive picker + AI-RPE
+/// (or leaving the form) doesn't throw away the picker + AI-RPE
 /// work. Unlike ordinary fields, a video is slow and painful to re-attach,
 /// so it auto-saves the moment it lands and restores when the form reopens.
 ///
 /// Scoped per view name; cleared when the row is saved or the video is
-/// removed. The video_url is a permanent Google Photos deep link, so there
-/// is no expiry.
+/// removed. The video_url is a local content:// reference with a
+/// persisted read grant (or a legacy Google Photos link), so there is no
+/// expiry.
 library;
 
 import 'dart:convert';

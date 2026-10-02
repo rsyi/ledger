@@ -23,8 +23,8 @@ import 'integrations_screen.dart';
 import '../services/heart_rate_service.dart';
 import '../services/integrations/gmail_gateway.dart';
 import '../services/integrations/kaya_gmail.dart';
-import '../services/integrations/photos_picker_gateway.dart';
 import '../services/video_attach.dart';
+import '../services/video_file_store.dart';
 import '../services/video_rpe.dart';
 import '../services/integrations/macrofactor.dart';
 import '../services/integrations/registry.dart';
@@ -483,27 +483,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ? null
         : LlmClient(assetConfig.models);
     final llmCache = assetConfig.disablePostLog ? null : LlmResponseCache();
-    // Video attach (strength form `widget: video`): Photos Picker rides
-    // the SAME web OAuth client id as the Kaya Gmail import — one Google
-    // sign-in, per-scope consent. Unconfigured → the form's attach
-    // affordance renders disabled with a hint.
-    final photosClientId = assetConfig.kayaGmail?.isConfigured == true
-        ? assetConfig.kayaGmail!.serverClientId
-        : null;
+    // Video attach (strength form `widget: video`): the Android system
+    // photo picker over LOCAL clips — no Google config or scopes needed,
+    // so the service is always on (the retired Photos Picker API path
+    // needed the Kaya web client id + a download that expired).
     final engineRepo = repo is EngineLedgerConnector ? repo.repo : null;
-    VideoRpeService.instance = photosClientId == null
-        ? null
-        : VideoRpeService(
-            flow: VideoAttachFlow(
-              gateway: GoogleSignInPhotosPickerGateway(
-                serverClientId: photosClientId,
-              ),
-            ),
-            llm: llm,
-            modelName: llm?.visionModelName(),
-            metaGet: engineRepo?.metaGet,
-            metaSet: engineRepo?.metaSet,
-          );
+    VideoRpeService.instance = VideoRpeService(
+      flow: VideoAttachFlow(cachePathFor: VideoFileStore.pathFor),
+      llm: llm,
+      modelName: llm?.visionModelName(),
+      metaGet: engineRepo?.metaGet,
+      metaSet: engineRepo?.metaSet,
+    );
     // AnalyticsEngine = airlayer compiler + LocalDb SQLite cache. Used by
     // the chat's run_query tool. Best-effort: if the native lib fails to
     // load on this platform, the chat opens without run_query and the

@@ -1,8 +1,9 @@
 /// Local cache of a single representative frame (JPEG) per attached
-/// video, keyed by picker media id. Captured AT ATTACH TIME because the
-/// Google Photos picker's media baseUrl dies ~60 min after the pick —
-/// after that we can't fetch frames again, so the cached thumbnail is the
-/// only way to preview the clip in-app later.
+/// video, keyed by media id. Captured at attach time; for on-device clips
+/// (content:// refs) video_preview re-extracts lazily if it's missing.
+/// Legacy Google Photos rows can't be re-fetched (the picker's baseUrl
+/// died ~60 min after the pick), so their cached frame is the only
+/// preview.
 ///
 /// Files live under `<appDocs>/video_thumbs/<mediaId>.jpg` and persist
 /// across launches.

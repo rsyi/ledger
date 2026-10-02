@@ -56,6 +56,11 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   late Future<_DayData?> _future;
   StreamSubscription<LogEvent>? _logSub;
 
+  /// Strength rows from the last [_load] — reused by the info sheet so a
+  /// tap doesn't re-list the whole table (thousands of rows) before the
+  /// sheet can open. Refreshed with every reload (log events included).
+  List<Map<String, Object?>>? _strengthRows;
+
   @override
   void initState() {
     super.initState();
@@ -118,7 +123,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     if (sv != null && sr != null && items.isNotEmpty) {
       final logged = <String>[];
       try {
-        for (final r in await sr.list(sv)) {
+        final rows = await sr.list(sv);
+        _strengthRows = rows;
+        for (final r in rows) {
           final d = _date(r['date']);
           if (d == null || !_sameDay(d, date)) continue;
           final ex = r['exercise']?.toString().trim();
@@ -244,7 +251,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     final byDay = <DateTime, List<PriorSet>>{};
     String? note;
     try {
-      for (final r in await sr.list(sv)) {
+      for (final r in _strengthRows ?? await sr.list(sv)) {
         final ex = r['exercise']?.toString();
         if (ex == null || !loggedMatchesPrescribed(ex, item.name)) continue;
         final d = _date(r['date']);

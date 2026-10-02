@@ -4,18 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../models/view_schema.dart';
+import '../../services/accessory_progression.dart';
 import '../../services/day_prescription.dart';
+import '../../services/home_synthesis.dart' show strengthRowFromRecord;
 import '../../services/log_event_bus.dart';
 import '../../services/missed_work.dart';
 import '../../services/prescribed_exercises.dart';
+import '../../services/program_item_pricing.dart';
+import '../../services/program_metrics.dart'
+    show StrengthRow, mainLiftByExercise;
 import '../../services/program_moves.dart';
 import '../../services/program_provider.dart' show ProgramProvider;
 import '../../services/program_week.dart' show dayOnly, mondayOf;
+import '../../services/routine_display.dart' show SessionLine;
 import '../../services/set_recommendation.dart';
 import '../../services/sync_scheduler.dart';
 import '../../services/warehouse_connector.dart';
 import '../../services/week_state_loader.dart';
 import '../../services/whoop_activity.dart';
+import '../../services/wm_tabs.dart' show WmSnapshot;
 
 /// The program view for a day: the prescribed session as a CHECKLIST
 /// (every lift and accessory the routine names — squat, muscle-ups,
@@ -62,6 +69,11 @@ class ProgramDayCard extends StatefulWidget {
   final ViewSchema? climbingView;
   final WarehouseConnector? climbingRepo;
 
+  /// Training-max tabs (`WmStore.snapshot`, 3-min cached) — prices each
+  /// item exactly like the Plan tab's Program screen. Null → the
+  /// reference-e1rm fallback (main lifts may then show no load).
+  final Future<WmSnapshot?> Function()? wmSnapshot;
+
   /// Clock for "is this today's card" — tests pin it.
   final DateTime Function() now;
 
@@ -82,6 +94,7 @@ class ProgramDayCard extends StatefulWidget {
     this.cardioRepo,
     this.climbingView,
     this.climbingRepo,
+    this.wmSnapshot,
     this.now = DateTime.now,
   });
 
@@ -103,12 +116,65 @@ class _DayData {
   /// Today's card only; null elsewhere.
   final MissedWork? missed;
 
-  const _DayData(this.prescription, this.items, this.week, this.missed);
+  /// The week priced like the Plan tab + each item's lines, keyed by
+  /// [_itemKey] (home day + name).
+  final PricedWeek priced;
+  final Map<String, List<SessionLine>> lines;
 
-  List<EffectiveItem> get live => [
+  /// The week's skips ([skipKey] → row).
+  final Map<String, ProgramMove> skips;
+
+  /// Strength history (accessory suggestions in the info sheet).
+  final List<StrengthRow> history;
+
+  const _DayData(
+    this.prescription,
+    this.items,
+    this.week,
+    this.missed, {
+    this.priced = PricedWeek.empty,
+    this.lines = const {},
+    this.skips = const {},
+    this.history = const [],
+  });
+
+  List<SessionLine> linesOf(EffectiveItem e) =>
+      lines[_itemKey(e.home, e.item.name)] ?? const [];
+
+  /// The skip row when [e] is skipped on [day] (ghosts never are).
+  ProgramMove? skipOf(EffectiveItem e, DateTime day) =>
+      e.isGhost ? null : skips[skipKey(day, e.item.name)];
+
+  /// Items that live on the card's day and aren't skipped — the "k / N
+  /// done" denominator.
+  List<EffectiveItem> liveOn(DateTime day) => [
         for (final e in items)
-          if (!e.isGhost) e,
+          if (!e.isGhost && skipOf(e, day) == null) e,
       ];
+}
+
+String _itemKey(DateTime home, String name) =>
+    '${dayOnly(home).toIso8601String()}|${name.trim().toLowerCase()}';
+
+/// Each item's priced lines for the effective [week], matched per HOME
+/// day over that day's own items (ghosts included, moved-in excluded) so
+/// a moved item keeps the load its home day priced it at.
+Map<String, List<SessionLine>> _matchWeek(
+    Map<DateTime, List<EffectiveItem>> week, PricedWeek priced) {
+  final out = <String, List<SessionLine>>{};
+  week.forEach((day, entries) {
+    final own = [
+      for (final e in entries)
+        if (e.movedFrom == null) e.item,
+    ];
+    final lines = priced.on(day);
+    if (own.isEmpty || lines.isEmpty) return;
+    final m = matchItemLines(own, lines);
+    for (var i = 0; i < own.length; i++) {
+      if (m[i].isNotEmpty) out[_itemKey(day, own[i].name)] = m[i];
+    }
+  });
+  return out;
 }
 
 const _wdNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -169,17 +235,19 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
-  static DateTime? _date(Object? v) {
-    if (v is DateTime) return v;
-    if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
-    return null;
-  }
-
   Future<_DayData?> _load() async {
     final provider = widget.provider;
     if (provider == null) return null;
     final date = dayOnly(widget.date);
     final isToday = date == dayOnly(widget.now());
+    // The TM snapshot is read alongside the week (WmStore caches it).
+    final wmFuture = () async {
+      try {
+        return await widget.wmSnapshot?.call();
+      } catch (_) {
+        return null; // honest: reference fallback
+      }
+    }();
     // One shared loader (card, coach, synthesis, carryover check): the
     // effective week + logged work, each source read ONCE per load.
     final state = await WeekStateLoader(
@@ -235,7 +303,26 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     if (day.isNotEmpty) {
       entries = mapLive((items) => creditClimbItems(items, day));
     }
-    return _DayData(state.prescription, entries, state.week, state.missed);
+
+    // Plan-tab pricing (training max / wave / %TM / double progression).
+    final wm = await wmFuture;
+    var priced = PricedWeek.empty;
+    var lines = const <String, List<SessionLine>>{};
+    var history = const <StrengthRow>[];
+    final program = state.docs.program;
+    if (program != null) {
+      try {
+        history = [
+          for (final r in state.strengthRows ?? const <Map<String, Object?>>[])
+            ?strengthRowFromRecord(r),
+        ];
+        priced = pricedWeek(program, state.docs.phase, mondayOf(date),
+            wm: wm, history: history, today: dayOnly(widget.now()));
+        lines = _matchWeek(state.week, priced);
+      } catch (_) {/* honest: prose schemes */}
+    }
+    return _DayData(state.prescription, entries, state.week, state.missed,
+        priced: priced, lines: lines, skips: state.skips, history: history);
   }
 
   bool get _canMove =>
@@ -349,14 +436,62 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     await _write(() => repo.create(view, back.toRecord()));
   }
 
-  Future<void> _write(Future<Object?> Function() op) async {
+  /// Skip… — asks for a (required) reason, then records the item as
+  /// intentionally skipped on [day]: a `program_moves` row with source
+  /// `skip`, date == from_date == [day], note = the reason. Not a move,
+  /// not missed; the coach sees the reason.
+  Future<void> _skipItem(
+      BuildContext context, PrescribedItem item, DateTime day) async {
+    final view = widget.programMovesView;
+    final repo = widget.programMovesRepo;
+    if (view == null || repo == null) return;
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) => _SkipDialog(itemName: item.name, day: day),
+    );
+    if (reason == null || reason.trim().isEmpty) return;
+    final skip = ProgramMove(
+      id: const Uuid().v4(),
+      to: dayOnly(day),
+      from: dayOnly(day),
+      item: item.name,
+      period: item.period,
+      source: skipSource,
+      createdAt: DateTime.now(),
+      note: reason.trim(),
+    );
+    await _write(() => repo.create(view, skip.toRecord()), what: 'Skip');
+  }
+
+  /// Undo skip — deletes every skip row of the item on [day] (a stale
+  /// duplicate would keep it skipped).
+  Future<void> _undoSkip(String itemName, DateTime day) async {
+    final view = widget.programMovesView;
+    final repo = widget.programMovesRepo;
+    if (view == null || repo == null) return;
+    await _write(() async {
+      final rows = await repo.list(view);
+      final ids = {
+        for (final m in skipRowsFor(
+            [for (final r in rows) ?ProgramMove.fromRecord(r)], day, itemName))
+          m.id,
+      };
+      for (final r in rows) {
+        if (ids.contains(r['id']?.toString())) await repo.delete(view, r);
+      }
+      return null;
+    }, what: 'Undo skip');
+  }
+
+  Future<void> _write(Future<Object?> Function() op,
+      {String what = 'Move'}) async {
     try {
       await op();
       unawaited(SyncScheduler.instance?.maybeSync(manual: true));
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)
-            ?.showSnackBar(SnackBar(content: Text('Move failed: $e')));
+            ?.showSnackBar(SnackBar(content: Text('$what failed: $e')));
       }
     }
     reload();
@@ -384,7 +519,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
         final muted = theme.colorScheme.onSurfaceVariant;
         final p = data.prescription;
         final showChecks = widget.strengthView != null;
-        final live = data.live;
+        final live = data.liveOn(dayOnly(widget.date));
         final doneCount = live.where((e) => e.item.done).length;
         final missed = data.missed;
 
@@ -459,32 +594,47 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                   ?.copyWith(letterSpacing: 0.8, color: muted)),
         ),
       for (final e in group)
-        _ExerciseRow(
-          item: e.item,
-          showCheck: showChecks,
-          movedTo: e.movedTo,
-          movedFrom: e.movedFrom,
-          onTap: widget.strengthView == null
-              ? null
-              : () => _showExerciseInfo(context, e.item),
-          menu: !_canMove
-              ? null
-              : e.isGhost
-                  // Moved-out origin: undo from here too (no Move to… —
-                  // the item lives on its target day).
-                  ? (e.move == null
-                      ? null
-                      : _RowMenu(onUndo: () => _undoMove(e.move!)))
-                  : _RowMenu(
-                      onMove: () => _moveItem(context, data,
-                          item: e.item,
-                          home: e.home,
-                          current: dayOnly(widget.date)),
-                      onUndo: e.movedFrom == null || e.move == null
-                          ? null
-                          : () => _undoMove(e.move!),
-                    ),
-        ),
+        () {
+          final day = dayOnly(widget.date);
+          final skip = data.skipOf(e, day);
+          final lines = data.linesOf(e);
+          return _ExerciseRow(
+            item: e.item,
+            showCheck: showChecks,
+            movedTo: e.movedTo,
+            movedFrom: e.movedFrom,
+            pricedLines: [
+              for (final l in lines)
+                (
+                  itemLineText(l, e.item, tm: data.priced.tmFor(l)),
+                  l.top,
+                ),
+            ],
+            skipReason: skip?.note,
+            onTap: widget.strengthView == null
+                ? null
+                : () => _showExerciseInfo(context, e, data),
+            menu: !_canMove
+                ? null
+                : e.isGhost
+                    // Moved-out origin: undo from here too (no Move to… —
+                    // the item lives on its target day).
+                    ? (e.move == null
+                        ? null
+                        : _RowMenu(onUndo: () => _undoMove(e.move!)))
+                    : skip != null
+                        ? _RowMenu(
+                            onUndoSkip: () => _undoSkip(e.item.name, day))
+                        : _RowMenu(
+                            onMove: () => _moveItem(context, data,
+                                item: e.item, home: e.home, current: day),
+                            onSkip: () => _skipItem(context, e.item, day),
+                            onUndo: e.movedFrom == null || e.move == null
+                                ? null
+                                : () => _undoMove(e.move!),
+                          ),
+          );
+        }(),
     ];
   }
 
@@ -512,7 +662,15 @@ class ProgramDayCardState extends State<ProgramDayCard> {
               Expanded(
                 child: Text(missedLine(m), style: theme.textTheme.bodyMedium),
               ),
-              if (_canMove)
+              if (_canMove) ...[
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: () => _skipItem(context, m.item, m.day),
+                  child: const Text('Skip…'),
+                ),
                 TextButton(
                   style: TextButton.styleFrom(
                     visualDensity: VisualDensity.compact,
@@ -522,48 +680,93 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                       item: m.item, home: m.home, current: m.day),
                   child: const Text('Move to…'),
                 ),
+              ],
             ],
           ),
         ),
     ];
   }
 
-  /// Tap a prescribed movement → how last week's comparable session went
-  /// (sets, reps, load, RPE, notes) + a recommendation for today.
+  /// Tap a prescribed movement → TODAY's priced prescription (the Plan
+  /// tab's numbers) + a recommendation consistent with it, with the last
+  /// comparable session as context. Unpriced items fall back to the
+  /// last-session heuristic ([recommendSet]).
   Future<void> _showExerciseInfo(
-      BuildContext context, PrescribedItem item) async {
+      BuildContext context, EffectiveItem e, _DayData data) async {
     final sv = widget.strengthView;
     final sr = widget.strengthRepo;
     if (sv == null || sr == null) return;
-    final today =
-        DateTime(widget.date.year, widget.date.month, widget.date.day);
+    final item = e.item;
+    final today = dayOnly(widget.date);
+    final lines = data.linesOf(e);
 
-    // Latest comparable session strictly before the shown day.
-    final byDay = <DateTime, List<PriorSet>>{};
-    String? note;
+    List<Map<String, Object?>> rows = const [];
     try {
-      for (final r in _strengthRows ?? await sr.list(sv)) {
-        final ex = r['exercise']?.toString();
-        if (ex == null || !loggedMatchesPrescribed(ex, item.name)) continue;
-        final d = _date(r['date']);
-        if (d == null) continue;
-        final day = DateTime(d.year, d.month, d.day);
-        if (!day.isBefore(today)) continue;
-        (byDay[day] ??= []).add(PriorSet(
-          reps: _int(r['reps']),
-          weight: _numOf(r['weight']),
-          rpe: _numOf(r['rpe']),
-        ));
-        final n = r['notes']?.toString().trim();
-        if (n != null && n.isNotEmpty) note = n;
-      }
+      rows = _strengthRows ?? await sr.list(sv);
     } catch (_) {/* honest empty */}
 
-    DateTime? lastDay;
-    for (final d in byDay.keys) {
-      if (lastDay == null || d.isAfter(lastDay)) lastDay = d;
+    String? todayText;
+    late final SetRecommendation rec;
+    LastSession? last;
+    if (lines.isNotEmpty) {
+      // Same lift, same role: a top-set item compares against the last
+      // session's top set, back-offs against its back-offs.
+      final exercises = {for (final l in lines) l.exercise};
+      final main = lines.any((l) => mainLiftByExercise[l.exercise] != null);
+      final allTop = lines.every((l) => l.top);
+      last = lastComparableSession(rows,
+          matches: exercises.contains,
+          before: today,
+          role: !main
+              ? SetRole.all
+              : allTop
+                  ? SetRole.top
+                  : lines.any((l) => l.top)
+                      ? SetRole.all
+                      : SetRole.backoff);
+      final cut = data.priced.cutWave[dayOnly(e.home)];
+      final texts = [
+        for (final l in lines)
+          itemLineText(l, item, tm: data.priced.tmFor(l)),
+      ];
+      todayText = [
+        for (var i = 0; i < lines.length; i++)
+          () {
+            final ctx = lineContext(lines[i],
+                cutWaveWeek: cut?.week, cutDeload: cut?.deload ?? false);
+            return '${texts[i]}${ctx == null ? '' : ' ($ctx)'}';
+          }(),
+      ].join('\n');
+      AccessorySuggestion? acc;
+      if (!main) {
+        final l = lines.first;
+        acc = suggestAccessoryLoad(
+          exercise: l.exercise,
+          history: data.history,
+          asOf: e.home,
+          repRangeHigh: l.repsHi?.toInt(),
+          rule: AccessoryRule.fromVersion(data.priced.version),
+        );
+      }
+      rec = recommendForPrescription(
+        lines: texts,
+        mainLift: main,
+        top: lines.any((l) => l.top),
+        weighted: lines.any((l) => l.weight != null),
+        last: last,
+        accessory: acc,
+        backoff: data.priced.backoff,
+      );
+    } else {
+      final names = {
+        for (final r in rows) (r['exercise'] ?? '').toString().trim(),
+      }..remove('');
+      last = lastComparableSession(rows,
+          matches: historyMatcher(item.name, names), before: today);
+      rec = recommendSet(last?.sets ?? const []);
     }
-    final rec = recommendSet(lastDay == null ? const [] : byDay[lastDay]!);
+    final note = last?.note;
+    final lastDay = last?.day;
 
     if (!context.mounted) return;
     await showModalBottomSheet<void>(
@@ -572,6 +775,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       builder: (ctx) {
         final theme = Theme.of(ctx);
         final muted = theme.colorScheme.onSurfaceVariant;
+        Text label(String t) => Text(t,
+            style: theme.textTheme.labelSmall
+                ?.copyWith(letterSpacing: 0.8, color: muted));
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
@@ -585,11 +791,19 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                   Text('Prescribed: ${item.scheme}',
                       style: theme.textTheme.bodySmall?.copyWith(color: muted)),
                 ],
+                if (todayText != null) ...[
+                  const SizedBox(height: 14),
+                  label('TODAY'),
+                  const SizedBox(height: 3),
+                  Text(todayText,
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600)),
+                ],
                 const SizedBox(height: 14),
                 if (rec.lastSessionSummary != null) ...[
-                  Text('LAST SESSION',
-                      style: theme.textTheme.labelSmall
-                          ?.copyWith(letterSpacing: 0.8, color: muted)),
+                  label(lastDay == null
+                      ? 'LAST SESSION'
+                      : 'LAST SESSION · ${_dayLabel(lastDay)}'),
                   const SizedBox(height: 3),
                   Text(rec.lastSessionSummary!,
                       style: theme.textTheme.bodyMedium),
@@ -601,9 +815,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                   ],
                   const SizedBox(height: 14),
                 ],
-                Text('RECOMMENDATION',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(letterSpacing: 0.8, color: muted)),
+                label('RECOMMENDATION'),
                 const SizedBox(height: 3),
                 Text(rec.advice, style: theme.textTheme.bodyMedium),
               ],
@@ -613,25 +825,90 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       },
     );
   }
-
-  static int? _int(Object? v) {
-    if (v is int) return v;
-    if (v is num) return v.round();
-    if (v is String) return int.tryParse(v) ?? double.tryParse(v)?.round();
-    return null;
-  }
-
-  static double? _numOf(Object? v) {
-    if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v);
-    return null;
-  }
 }
 
 class _RowMenu {
   final VoidCallback? onMove;
   final VoidCallback? onUndo;
-  const _RowMenu({this.onMove, this.onUndo});
+  final VoidCallback? onSkip;
+  final VoidCallback? onUndoSkip;
+  const _RowMenu({this.onMove, this.onUndo, this.onSkip, this.onUndoSkip});
+}
+
+/// Skip… dialog: a required short reason (for the coach), with quick
+/// chips. Pops the reason, or null on cancel.
+class _SkipDialog extends StatefulWidget {
+  final String itemName;
+  final DateTime day;
+  const _SkipDialog({required this.itemName, required this.day});
+
+  @override
+  State<_SkipDialog> createState() => _SkipDialogState();
+}
+
+class _SkipDialogState extends State<_SkipDialog> {
+  static const _quick = ['time', 'pain', 'fatigue', 'equipment'];
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _chip(String c) {
+    final t = _ctrl.text.trim();
+    _ctrl.text = t.isEmpty ? c : '$c — $t';
+    _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ok = _ctrl.text.trim().isNotEmpty;
+    return AlertDialog(
+      title: Text('Skip ${widget.itemName}?'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('${_dayLabel(widget.day)} — the coach sees the reason; a '
+              'skipped item is not counted as missed.'),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 6,
+            children: [
+              for (final c in _quick)
+                ActionChip(label: Text(c), onPressed: () => _chip(c)),
+            ],
+          ),
+          TextField(
+            controller: _ctrl,
+            autofocus: true,
+            maxLength: 120,
+            decoration: const InputDecoration(
+              labelText: 'Reason (required)',
+              hintText: 'e.g. elbow sore, gym closed',
+            ),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (v) {
+              if (v.trim().isNotEmpty) Navigator.pop(context, v.trim());
+            },
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: ok ? () => Navigator.pop(context, _ctrl.text.trim()) : null,
+          child: const Text('Skip'),
+        ),
+      ],
+    );
+  }
 }
 
 class _ExerciseRow extends StatelessWidget {
@@ -646,8 +923,15 @@ class _ExerciseRow extends StatelessWidget {
   /// Moved-in: a small "from Wed" chip.
   final DateTime? movedFrom;
 
-  /// Trailing overflow menu (Move to… / Undo move); null → none.
+  /// Trailing overflow menu (Move to… / Skip… / Undo); null → none.
   final _RowMenu? menu;
+
+  /// The Plan tab's priced lines (text, is-top-set) — replace the prose
+  /// scheme when present.
+  final List<(String, bool)> pricedLines;
+
+  /// Non-null when the item was skipped that day (muted, "skipped — …").
+  final String? skipReason;
 
   const _ExerciseRow({
     required this.item,
@@ -656,6 +940,8 @@ class _ExerciseRow extends StatelessWidget {
     this.movedTo,
     this.movedFrom,
     this.menu,
+    this.pricedLines = const [],
+    this.skipReason,
   });
 
   @override
@@ -664,9 +950,12 @@ class _ExerciseRow extends StatelessWidget {
     final scheme = theme.colorScheme;
     final muted = scheme.onSurfaceVariant;
     final ghost = movedTo != null;
-    final done = !ghost && item.done;
-    final partial = !ghost && !done && item.loggedSets > 0;
-    final (icon, markColor) = !showCheck
+    final skipped = !ghost && skipReason != null;
+    final done = !ghost && !skipped && item.done;
+    final partial = !ghost && !skipped && !done && item.loggedSets > 0;
+    final (icon, markColor) = skipped
+        ? (Icons.block, muted)
+        : !showCheck
         ? (Icons.fitness_center, muted)
         : done
             ? (Icons.check_circle, scheme.primary)
@@ -676,6 +965,8 @@ class _ExerciseRow extends StatelessWidget {
     // Whoop credit note ("strain 14.8") wins over the set counter.
     final counter = ghost
         ? '→ ${_wd(movedTo!)}'
+        : skipped
+        ? null
         : item.creditNote ??
             (showCheck && (item.loggedSets > 0 || item.targetSets > 1)
                 ? '${item.loggedSets}/${item.targetSets}'
@@ -701,15 +992,29 @@ class _ExerciseRow extends StatelessWidget {
                   Text(
                     item.name,
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: ghost ? FontWeight.w400 : FontWeight.w600,
-                      color: done || ghost ? muted : scheme.onSurface,
+                      fontWeight:
+                          ghost || skipped ? FontWeight.w400 : FontWeight.w600,
+                      color: done || ghost || skipped ? muted : scheme.onSurface,
                       decoration: done ? TextDecoration.lineThrough : null,
                     ),
                   ),
-                  if (item.scheme.isNotEmpty)
+                  if (pricedLines.isNotEmpty)
+                    for (final (text, top) in pricedLines)
+                      Text(text,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: muted,
+                            fontWeight:
+                                top && !skipped ? FontWeight.w600 : null,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ))
+                  else if (item.scheme.isNotEmpty)
                     Text(item.scheme,
                         style:
                             theme.textTheme.bodySmall?.copyWith(color: muted)),
+                  if (skipped)
+                    Text('skipped — $skipReason',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                            color: muted, fontStyle: FontStyle.italic)),
                   if (movedFrom != null)
                     Container(
                       margin: const EdgeInsets.only(top: 3),
@@ -745,21 +1050,28 @@ class _ExerciseRow extends StatelessWidget {
                 width: 28,
                 height: 20,
                 child: PopupMenuButton<String>(
-                  tooltip: 'Move',
+                  tooltip: 'Move / skip',
                   padding: EdgeInsets.zero,
                   iconSize: 18,
                   icon: Icon(Icons.more_vert, size: 18, color: muted),
                   onSelected: (v) {
                     if (v == 'move') menu!.onMove?.call();
                     if (v == 'undo') menu!.onUndo?.call();
+                    if (v == 'skip') menu!.onSkip?.call();
+                    if (v == 'unskip') menu!.onUndoSkip?.call();
                   },
                   itemBuilder: (_) => [
                     if (menu!.onMove != null)
                       const PopupMenuItem(
                           value: 'move', child: Text('Move to…')),
+                    if (menu!.onSkip != null)
+                      const PopupMenuItem(value: 'skip', child: Text('Skip…')),
                     if (menu!.onUndo != null)
                       const PopupMenuItem(
                           value: 'undo', child: Text('Undo move')),
+                    if (menu!.onUndoSkip != null)
+                      const PopupMenuItem(
+                          value: 'unskip', child: Text('Undo skip')),
                   ],
                 ),
               ),

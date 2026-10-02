@@ -231,6 +231,18 @@ bool loggedCoversPrescribed(String loggedName, String prescribedName) {
   return false;
 }
 
+/// True when the logged name carries a variant qualifier ("romanian",
+/// "bulgarian", "bench", …) that NO alternative of the prescribed name
+/// has — "Romanian Deadlift" adds one to "Deadlift back-offs".
+bool loggedAddsVariant(String loggedName, String prescribedName) {
+  final a = _tokens(loggedName);
+  for (final alt
+      in prescribedName.split(RegExp(r'\s+or\s+', caseSensitive: false))) {
+    if (!a.difference(_tokens(alt)).any(_variant.contains)) return false;
+  }
+  return true;
+}
+
 /// Shared significant tokens between a logged and a prescribed name — the
 /// loose phase's tie-breaker (more shared words = better fit).
 int sharedTokenCount(String loggedName, String prescribedName) =>

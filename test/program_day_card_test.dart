@@ -15,6 +15,7 @@ import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/log_event_bus.dart';
 import 'package:airledger/services/warehouse_connector.dart';
 import 'package:airledger/services/week_state_loader.dart';
+import 'package:airledger/services/wm_tabs.dart';
 import 'package:airledger/ui/widgets/program_day_card.dart';
 
 const _fitness = '../airledger-fitness';
@@ -115,6 +116,7 @@ void main() {
     required _FakeRepo moves,
     _FakeRepo? strength,
     _FakeRepo? climbing,
+    WmSnapshot? wm,
   }) async {
     tester.view.physicalSize = const Size(1200, 4000);
     tester.view.devicePixelRatio = 1;
@@ -137,6 +139,7 @@ void main() {
               climbingRepo: climbing ?? _FakeRepo(),
               cardioView: cardioView,
               cardioRepo: _FakeRepo(),
+              wmSnapshot: wm == null ? null : () async => wm,
             ),
           ),
         ),
@@ -409,5 +412,155 @@ void main() {
     await tester.pumpAndSettle();
     expect(strength.lists, strengthLists + 1);
     expect(climbing.lists, 1, reason: 'Kaya climb days cached');
+  });
+
+  // ---- Plan-tab pricing + skips (2026-10-02) ----
+
+  WmSnapshot tms() => (
+        workingMax: [
+          for (final (lift, v) in [
+            ('squat', 320.0),
+            ('bench', 245.0),
+            ('deadlift', 340.0),
+            ('press', 145.0),
+          ])
+            WorkingMaxRow(
+              lift: lift,
+              variant: '',
+              valueLb: v,
+              effectiveFrom: DateTime(2026, 9, 1),
+              source: 'manual',
+              reason: 'test',
+            ),
+        ],
+        readings: const <ReadingRow>[],
+      );
+
+  testWidgets('rows show the Plan tab\'s priced sets × reps @ load', (
+    tester,
+  ) async {
+    if (!hasFitness) return;
+    await pump(tester, date: fri, moves: _FakeRepo(), wm: tms());
+    // Deadlift TM 340 × wave wk1 81% = 275; back-offs 75% = 255.
+    expect(find.text('1×5 · 275 lb (81%)'), findsOneWidget);
+    expect(find.text('2×4 · 255 lb (75%)'), findsOneWidget);
+    expect(find.text('Romanian Deadlift 2×8-12'), findsOneWidget);
+    // One line per item; climb keeps its prose.
+    expect(find.text('Deadlift heavy'), findsOneWidget);
+    expect(find.textContaining('technique/volume'), findsOneWidget);
+  });
+
+  testWidgets('a moved-in item keeps its home day\'s priced load', (
+    tester,
+  ) async {
+    if (!hasFitness) return;
+    await pump(tester, date: fri, moves: _FakeRepo([benchMove()]), wm: tms());
+    // Wed bench top: 245 × 0.811 → 200.
+    expect(find.text('1×5 · 200 lb (81%)'), findsOneWidget);
+  });
+
+  testWidgets('info sheet leads with the program; no "+5 lb" over it', (
+    tester,
+  ) async {
+    if (!hasFitness) return;
+    final strength = _FakeRepo([
+      {'id': 'w', 'date': DateTime(2026, 9, 25), 'exercise': 'Barbell Deadlift', 'weight': 225, 'reps': 3},
+      {'id': 'a', 'date': DateTime(2026, 9, 25), 'exercise': 'Barbell Deadlift', 'weight': 315, 'reps': 1, 'rpe': 7.5},
+      {'id': 'b', 'date': DateTime(2026, 9, 25), 'exercise': 'Barbell Deadlift', 'weight': 275, 'reps': 3, 'rpe': 7},
+      {'id': 'r', 'date': DateTime(2026, 9, 28), 'exercise': 'Romanian Deadlift', 'weight': 135, 'reps': 10, 'rpe': 6},
+    ]);
+    await pump(tester,
+        date: fri, moves: _FakeRepo(), strength: strength, wm: tms());
+    await tester.tap(find.text('Deadlift heavy'));
+    await tester.pumpAndSettle();
+    expect(find.text('TODAY'), findsOneWidget);
+    expect(find.text('1×5 · 275 lb (81%) (wave wk1, 81% TM)'), findsOneWidget);
+    expect(find.text('LAST SESSION · Fri 9/25'), findsOneWidget);
+    expect(find.text('1 set · 1 reps · top 315 lb · RPE 7.5'), findsOneWidget);
+    expect(find.textContaining('Add ~5 lb'), findsNothing);
+    expect(find.textContaining("don't add load"), findsOneWidget);
+  });
+
+  testWidgets('Skip… writes a skip row; the row reads "skipped — reason"', (
+    tester,
+  ) async {
+    if (!hasFitness) return;
+    final moves = _FakeRepo();
+    await pump(tester, date: fri, moves: moves);
+    expect(find.text('0 / 5 done'), findsOneWidget);
+    await tester.tap(menuOf('Deadlift heavy'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(PopupMenuItem<String>, 'Skip…'));
+    await tester.pumpAndSettle();
+    // Reason is required.
+    final skipBtn = find.widgetWithText(FilledButton, 'Skip');
+    expect(tester.widget<FilledButton>(skipBtn).onPressed, isNull);
+    await tester.tap(find.widgetWithText(ActionChip, 'pain'));
+    await tester.enterText(find.byType(TextField), 'pain');
+    await tester.pumpAndSettle();
+    await tester.tap(skipBtn);
+    await tester.pumpAndSettle();
+
+    final m = ProgramMove.fromRecord(moves.created.single)!;
+    expect(m.source, 'skip');
+    expect(m.isSkip, isTrue);
+    expect(m.item, 'Deadlift heavy');
+    expect(m.from, fri);
+    expect(m.to, fri);
+    expect(m.note, 'pain');
+    expect(find.text('skipped — pain'), findsOneWidget);
+    expect(find.text('0 / 4 done'), findsOneWidget, reason: 'not counted');
+    expect(find.text('→ Fri'), findsNothing, reason: 'a skip is not a move');
+  });
+
+  testWidgets('Undo skip deletes the skip row', (tester) async {
+    if (!hasFitness) return;
+    final moves = _FakeRepo([
+      ProgramMove(
+        id: 's1',
+        to: fri,
+        from: fri,
+        item: 'Deadlift heavy',
+        period: 'AM',
+        source: 'skip',
+        note: 'time',
+      ).toRecord(),
+    ]);
+    await pump(tester, date: fri, moves: moves);
+    expect(find.text('skipped — time'), findsOneWidget);
+    await tester.tap(menuOf('Deadlift heavy'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(PopupMenuItem<String>, 'Move to…'),
+        findsNothing);
+    await tester.tap(find.text('Undo skip'));
+    await tester.pumpAndSettle();
+    expect([for (final r in moves.deleted) r['id']], ['s1']);
+    expect(find.text('skipped — time'), findsNothing);
+    expect(find.text('0 / 5 done'), findsOneWidget);
+  });
+
+  testWidgets('Skip… on a missed row clears it from MISSED THIS WEEK', (
+    tester,
+  ) async {
+    if (!hasFitness) return;
+    final moves = _FakeRepo();
+    await pump(tester, date: fri, moves: moves);
+    expect(find.text('Squat heavy — Mon, 0/1 sets'), findsOneWidget);
+    final row = find.ancestor(
+      of: find.text('Squat heavy — Mon, 0/1 sets'),
+      matching: find.byType(Row),
+    );
+    await tester.tap(find.descendant(
+        of: row.first, matching: find.widgetWithText(TextButton, 'Skip…')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'fatigue');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Skip'));
+    await tester.pumpAndSettle();
+    final m = ProgramMove.fromRecord(moves.created.single)!;
+    expect(m.source, 'skip');
+    expect(m.to, DateTime(2026, 9, 28));
+    expect(m.from, DateTime(2026, 9, 28));
+    expect(find.text('Squat heavy — Mon, 0/1 sets'), findsNothing);
   });
 }

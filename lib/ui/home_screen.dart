@@ -1395,6 +1395,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                         programMovesView: programMovesView,
                         programMovesRepo: programMovesRepo,
+                        wmSnapshot: data.wmStore?.snapshot,
                         cardioView: dashCardioView,
                         cardioRepo: dashboardRepoFor(
                           dashCardioView,
@@ -1642,6 +1643,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                           programMovesView: programMovesView,
                           programMovesRepo: programMovesRepo,
+                          wmSnapshot: data.wmStore?.snapshot,
                           cardioView: dashCardioView,
                           cardioRepo: dashboardRepoFor(
                             dashCardioView,

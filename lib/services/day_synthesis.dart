@@ -12,6 +12,8 @@
 /// come — so the model can't call it a rest day.
 library;
 
+import 'whoop_activity.dart';
+
 /// A meal eaten today (macros already summed per record; nulls = not
 /// reported). [atHour] is the local hour it was eaten (0–23), or null.
 class SynthMeal {
@@ -198,6 +200,10 @@ class DaySynthesisContext {
   /// recovery data is available — the prompt then omits the line.
   final SynthRecovery recovery;
 
+  /// Today's Whoop workouts (local time) — a session Whoop saw counts as
+  /// done even if not logged anywhere else in the app.
+  final List<WhoopActivity> activities;
+
   const DaySynthesisContext({
     required this.hour,
     required this.phase,
@@ -205,6 +211,7 @@ class DaySynthesisContext {
     required this.logged,
     required this.targets,
     this.recovery = const SynthRecovery(),
+    this.activities = const [],
   });
 
   double get proteinSoFar => _sum(logged.meals, (m) => m.proteinG);
@@ -238,8 +245,12 @@ class DaySynthesisContext {
     return [for (final l in liftsPlanned) if (!done.contains(l)) l];
   }
 
-  /// True when the routine wants a climb today and none is logged yet.
-  bool get climbToCome => program.climbCall != null && logged.climbCount == 0;
+  /// True when the routine wants a climb today and none is logged yet nor
+  /// seen by Whoop.
+  bool get climbToCome =>
+      program.climbCall != null &&
+      logged.climbCount == 0 &&
+      !activities.any((a) => a.kind == ActivityKind.climb);
 
   /// True when the routine wants a 4x4 and none is logged yet.
   bool get cardioToCome => program.wants4x4 && !logged.did4x4;
@@ -269,7 +280,7 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
     'session). The macros/calories are already shown as bars, so do not '
     'recite every number — add judgment, not a recap. Advise only from the '
     'facts below — never invent numbers and never claim work that is not '
-    'logged.',
+    'logged (Whoop-detected sessions below count as done).',
   );
   b.writeln();
   b.writeln('Local time: ${_fmtHour(c.hour)}.');
@@ -283,6 +294,20 @@ String buildDaySynthesisPrompt(DaySynthesisContext c) {
     b.writeln('  Factor readiness into today\'s training advice — if '
         'recovery/sleep is low, bias toward keeping it easy; if it\'s '
         'strong, it\'s fine to push the hard work.');
+    b.writeln();
+  }
+
+  if (c.activities.isNotEmpty) {
+    b.writeln('ACTIVITY (Whoop, today — counts as done even if not logged):');
+    for (final a in c.activities) {
+      final t = a.start == null
+          ? ''
+          : ' ${a.start!.hour.toString().padLeft(2, '0')}:'
+              '${a.start!.minute.toString().padLeft(2, '0')}';
+      b.writeln('- ${a.sport}$t'
+          '${a.strain == null ? '' : ' · strain ${a.strain!.toStringAsFixed(1)}'}'
+          '${a.durationMin == null ? '' : ' · ${a.durationMin!.round()} min'}');
+    }
     b.writeln();
   }
 

@@ -14,6 +14,7 @@ import 'program_provider.dart';
 import 'today_program_call.dart';
 import 'warehouse_connector.dart';
 import 'weight_series.dart' show loadDailyWeighIns;
+import 'whoop_activity.dart';
 import 'wilks.dart' show contemporaneousBodyweightLbs;
 
 /// The synthesis plus the small tally the post-log notification reads. The
@@ -93,6 +94,13 @@ class DaySynthesisService {
   final WarehouseConnector? weightRepo;
   final AnalyticsEngine? analytics;
 
+  /// Whoop workouts (`whoop_workouts` view): today's Whoop-detected
+  /// activity (climbs/runs/lifts/etc), so the synthesis can say a session
+  /// happened even when nothing else logged it. Null → the ACTIVITY line
+  /// is omitted.
+  final ViewSchema? workoutsView;
+  final WarehouseConnector? workoutsRepo;
+
   final ProgramProvider? provider;
   final DateTime Function() now;
 
@@ -112,6 +120,8 @@ class DaySynthesisService {
     this.weightView,
     this.weightRepo,
     this.analytics,
+    this.workoutsView,
+    this.workoutsRepo,
     required this.provider,
     this.now = DateTime.now,
   });
@@ -127,8 +137,9 @@ class DaySynthesisService {
   /// 2026-09-30): busts caches written before the cut macro-target fix
   /// (commit 7573f0c) that still say "no macro targets set today". v3
   /// (bump 2026-09-30): the prompt now carries a recovery/sleep line, so
-  /// caches written without it are regenerated to factor readiness.
-  static const _cacheVersion = 3;
+  /// caches written without it are regenerated to factor readiness. v4
+  /// (2026-10-01): Whoop activity line + climb credit.
+  static const _cacheVersion = 4;
 
   static String _dayKey(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
@@ -227,6 +238,19 @@ class DaySynthesisService {
       } catch (_) {/* honest empty */}
     }
 
+    // Whoop-detected activity (climbs/runs/lifts/etc) for today — a
+    // session Whoop saw counts as done even if nothing else logged it.
+    var activities = const <WhoopActivity>[];
+    if (workoutsView != null && workoutsRepo != null) {
+      try {
+        activities = [
+          for (final a in whoopActivitiesFromRecords(
+              await workoutsRepo!.list(workoutsView!)))
+            if (_sameDay(a.date, dayStart)) a,
+        ];
+      } catch (_) {/* honest empty */}
+    }
+
     // Objective recovery (Whoop): last night's row (the most recent
     // recovery date at/ before today) + a 7-day-average recovery score
     // trend anchor. Read like the dashboard reads it.
@@ -321,6 +345,7 @@ class DaySynthesisService {
       ),
       targets: targets,
       recovery: recovery,
+      activities: activities,
     );
   }
 

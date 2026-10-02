@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/services/day_synthesis.dart';
+import 'package:airledger/services/whoop_activity.dart';
 
 void main() {
   DaySynthesisContext ctx({
@@ -271,6 +272,32 @@ void main() {
       expect(p, contains('RECOVERY'));
       expect(p, contains('slept 6h'));
       expect(p, isNot(contains('(green)')));
+    });
+  });
+
+  group('Whoop activity in the prompt', () {
+    test('prompt lists Whoop activity and counts a Whoop climb', () {
+      final c = DaySynthesisContext(
+        hour: 20,
+        phase: 'cut',
+        program: const SynthProgramDay(climbCall: 'LIGHT'),
+        logged: const SynthLogged(),
+        targets: const SynthTargets(),
+        activities: [
+          WhoopActivity(
+            date: DateTime(2026, 10, 1),
+            start: DateTime(2026, 10, 1, 14, 58),
+            sport: 'rock-climbing',
+            kind: ActivityKind.climb,
+            strain: 14.8,
+            durationMin: 86,
+          ),
+        ],
+      );
+      expect(c.climbToCome, isFalse);
+      final p = buildDaySynthesisPrompt(c);
+      expect(p, contains('ACTIVITY (Whoop'));
+      expect(p, contains('rock-climbing 14:58 · strain 14.8 · 86 min'));
     });
   });
 }

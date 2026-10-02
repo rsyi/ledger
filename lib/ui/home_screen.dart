@@ -834,6 +834,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     ? null
                     : data.registry.forView(weightView),
                 analytics: data.analytics,
+                // Whoop activity (climbs/runs/lifts) — a session Whoop
+                // saw counts as done even if not logged.
+                workoutsView: dashWorkoutsView,
+                workoutsRepo: dashboardRepoFor(
+                  dashWorkoutsView,
+                  readOnlyRepo: data.readOnlyRepo,
+                  forView: data.registry.forView,
+                ),
                 provider: programProvider,
               );
               // Feature 3: post-log notification driver — one boot-time

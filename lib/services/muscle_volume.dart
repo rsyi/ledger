@@ -5,9 +5,10 @@
 ///
 /// Credits come from the program's declared `exercise_muscle_map`
 /// (program.yaml v9+): every logged SET credits its exercise's
-/// fractional per-group credits ("Flat Barbell Bench Press" → chest 1,
-/// triceps 0.5, shoulders 0.25), and every climbing SESSION credits the
-/// map's `climbing_session` block (back 3, forearms 3, ...). Callers
+/// fractional per-group credits (v16: "Flat Barbell Bench Press" →
+/// chest 1, triceps 0.5), and every climbing SESSION credits the map's
+/// `climbing_session` block (v16: lats 1.5, biceps 0.5, forearms 2,
+/// core 0.5). Callers
 /// decide WHICH sets count (window, warm-up rule) — this file only
 /// credits them.
 ///
@@ -25,7 +26,7 @@ class MuscleMap {
   /// skill aliases ([calisthenicsSkillAliases]).
   final Map<String, Map<String, double>> exercises;
 
-  /// One climbing session's credits ({back: 3, forearms: 3, ...}).
+  /// One climbing session's credits ({lats: 1.5, forearms: 2, ...}).
   final Map<String, double> climbingSession;
 
   const MuscleMap({
@@ -102,6 +103,16 @@ MuscleMap? parseExerciseMuscleMap(Map<Object?, Object?>? version) {
 List<String> hypertrophyMuscleGroups(Map<Object?, Object?>? version) {
   final t = version?['hypertrophy_targets'];
   final g = t is Map ? t['muscle_groups'] : null;
+  return g is List ? [for (final x in g) x.toString()] : const [];
+}
+
+/// The program version's TRACKED-ONLY groups
+/// (`hypertrophy_targets.tracked_groups`, v16: lower_back, front_delts,
+/// forearms, core) — counted and shown, never held to the band. Empty
+/// for older versions (they declare none).
+List<String> hypertrophyTrackedGroups(Map<Object?, Object?>? version) {
+  final t = version?['hypertrophy_targets'];
+  final g = t is Map ? t['tracked_groups'] : null;
   return g is List ? [for (final x in g) x.toString()] : const [];
 }
 

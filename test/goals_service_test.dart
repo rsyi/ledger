@@ -927,9 +927,67 @@ phases:
       expect(e.status, GoalStatus.unknown);
     });
 
-    test('muscleDisplayName spells groups out', () {
-      expect(muscleDisplayName('hamstrings_glutes'), 'hamstrings and glutes');
-      expect(muscleDisplayName('back'), 'back');
+    test('muscleDisplayName spells groups out, sentence case', () {
+      expect(muscleDisplayName('hamstrings_glutes'), 'Hamstrings and glutes');
+      expect(muscleDisplayName('lats'), 'Lats');
+      expect(muscleDisplayName('upper_back'), 'Upper back');
+      expect(muscleDisplayName('lower_back'), 'Lower back');
+      expect(muscleDisplayName('side_delts'), 'Side delts');
+      expect(muscleDisplayName('rear_delts'), 'Rear delts');
+      expect(muscleDisplayName('front_delts'), 'Front delts');
+    });
+
+    test('v16 tracked_groups: counted + listed, never banded or judged', () {
+      const m16 = MuscleMap(
+        exercises: {
+          'Barbell Deadlift': {'hamstrings_glutes': 1.0, 'lower_back': 1.0},
+          'Pull Up': {'lats': 1.0, 'biceps': 0.25},
+          'Calf Raise': {'calves': 1.0},
+        },
+        climbingSession: {'lats': 1.5, 'forearms': 2.0},
+      );
+      final e = evaluateGoals(
+        configs: const [GoalConfig(id: 'muscle_stimulus')],
+        inputs: GoalInputs(
+          muscleMap: m16,
+          muscleGroups: const ['hamstrings_glutes', 'lats'],
+          trackedGroups: const ['lower_back', 'forearms', 'core'],
+          weekWorkingSets: [
+            ...sets(d(0), 'Barbell Deadlift', 14),
+            ...sets(d(1), 'Pull Up', 8),
+            ...sets(d(1), 'Calf Raise', 5),
+          ],
+          climbingDates: [d(2)],
+        ),
+        today: d(6),
+        weekStartDay: satStart,
+      ).single;
+      // Banded rows only decide status: hams 14 (over), lats 9.5.
+      expect(
+        [for (final r in e.muscles) r.group],
+        ['hamstrings_glutes', 'lats'],
+      );
+      expect(e.value, '1 of 2 groups in 8–12');
+      final tracked = {for (final r in e.trackedMuscles) r.group: r};
+      expect(tracked.keys, ['lower_back', 'forearms', 'core']);
+      expect(tracked['lower_back']!.sets, 14);
+      expect(tracked['forearms']!.sets, 2);
+      expect(tracked['core']!.sets, 0);
+      // 14 > 12 but tracked: never over / under / behind pace.
+      expect(tracked['lower_back']!.over, isFalse);
+      expect(tracked['core']!.under, isFalse);
+      expect(tracked['core']!.behindPace, isFalse);
+      expect(tracked['lower_back']!.state, 'tracked');
+      expect(e.detail, contains('1 over the range')); // hams only
+    });
+
+    test('parses tracked_groups', () {
+      final g = parseGoals('phases:\n'
+          '  cut:\n'
+          '    goals:\n'
+          '      - id: muscle_stimulus\n'
+          '        tracked_groups: [core]\n')!['cut']!.single;
+      expect(g.trackedGroups, ['core']);
     });
   });
 

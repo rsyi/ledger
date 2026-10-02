@@ -24,7 +24,10 @@ import '../services/goals_service.dart';
 import '../services/heart_rate_service.dart';
 import '../services/home_synthesis.dart' show asNum, strengthRowFromRecord;
 import '../services/muscle_volume.dart'
-    show hypertrophyMuscleGroups, parseExerciseMuscleMap;
+    show
+        hypertrophyMuscleGroups,
+        hypertrophyTrackedGroups,
+        parseExerciseMuscleMap;
 import '../services/nutrition_model.dart'
     show buildNutritionForecast, mealRowsFromRecords;
 import '../services/phase_eigenvectors.dart' show effectivePhaseKey;
@@ -310,6 +313,7 @@ class GoalsScreenState extends State<GoalsScreen> {
         weekWorkingSets: state?.weekSets ?? const [],
         muscleMap: parseExerciseMuscleMap(version),
         muscleGroups: hypertrophyMuscleGroups(version),
+        trackedGroups: hypertrophyTrackedGroups(version),
       ),
       today: _today,
       weekStartDay: weekStartDay,
@@ -759,6 +763,12 @@ class GoalDetail extends StatelessWidget {
             const SizedBox(height: 6),
             for (final m in g.muscles) _MuscleDetail(row: m),
           ],
+          if (g.trackedMuscles.isNotEmpty) ...[
+            const SizedBox(height: AppSpace.sectionGap),
+            Text('Tracked only (no target)', style: meta),
+            const SizedBox(height: 2),
+            for (final m in g.trackedMuscles) _TrackedMuscleDetail(row: m),
+          ],
         ],
       ),
     );
@@ -839,6 +849,36 @@ class _MuscleDetail extends StatelessWidget {
           const SizedBox(height: 4),
           _MiniBar(line: GoalBarLine.muscle(row), height: 6),
           const SizedBox(height: 2),
+          Text('from: $from', style: AppText.meta(context)),
+        ],
+      ),
+    );
+  }
+}
+
+/// One tracked-only muscle group in the sheet (v16 tracked_groups):
+/// its sets and contributors in neutral text — no band, no bar colour,
+/// never red.
+class _TrackedMuscleDetail extends StatelessWidget {
+  final GoalMuscleRow row;
+  const _TrackedMuscleDetail({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final from = row.contributors.isEmpty
+        ? 'nothing logged yet'
+        : row.contributors
+              .map((e) => '${e.key} ${_sets1(e.value)}')
+              .join(' · ');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${muscleDisplayName(row.group)}: ${_sets1(row.sets)} sets',
+            style: AppText.row(context),
+          ),
           Text('from: $from', style: AppText.meta(context)),
         ],
       ),

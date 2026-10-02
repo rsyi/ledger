@@ -971,7 +971,10 @@ phases:
       expect(recomp[0].hypSetsMin, 3);
       expect(recomp[0].hypReps, [3, 8]);
       expect(recomp[1].band, [8, 12]);
-      expect(recomp[1].muscleGroups, contains('back'));
+      expect(
+        recomp[1].muscleGroups,
+        containsAll(['lats', 'upper_back', 'side_delts', 'rear_delts']),
+      );
       expect(recomp[2].floorG, 160);
       expect(recomp[2].bandG, [160, 175]);
       // The ship gate: every driver names the outcome it drives and

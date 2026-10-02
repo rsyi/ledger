@@ -29,7 +29,7 @@ const muscleEval = GoalEval(
       contributors: [MapEntry('Romanian Deadlift', 2.0)],
     ),
     GoalMuscleRow(
-      group: 'back',
+      group: 'lats',
       sets: 9.25,
       lo: 8,
       hi: 12,
@@ -38,6 +38,17 @@ const muscleEval = GoalEval(
         MapEntry('Climbing sessions', 6.0),
         MapEntry('Pull Up', 3.25),
       ],
+    ),
+  ],
+  trackedMuscles: [
+    GoalMuscleRow(
+      group: 'lower_back',
+      sets: 14,
+      lo: 8,
+      hi: 12,
+      pace: 5.7,
+      tracked: true,
+      contributors: [MapEntry('Barbell Deadlift', 14.0)],
     ),
   ],
 );
@@ -107,11 +118,13 @@ void main() {
       );
       expect(find.textContaining('Sets per muscle group'), findsOneWidget);
       expect(find.textContaining('1 of 2 groups in 8–12'), findsOneWidget);
-      expect(find.text('hamstrings and glutes'), findsOneWidget);
+      expect(find.text('Hamstrings and glutes'), findsOneWidget);
       expect(find.text('2.5'), findsOneWidget);
-      expect(find.text('back'), findsOneWidget);
+      expect(find.text('Lats'), findsOneWidget);
       expect(find.text('9.3'), findsOneWidget);
       expect(find.textContaining('hamstrings_glutes'), findsNothing);
+      // Tracked-only groups never get a summary bar.
+      expect(find.textContaining('Lower back'), findsNothing);
       expect(find.byIcon(Icons.chevron_right), findsOneWidget);
       await tester.tap(find.textContaining('Sets per muscle group'));
       expect(tapped, isTrue);
@@ -123,10 +136,16 @@ void main() {
   ) async {
     await tester.pumpWidget(host(const GoalDetail(goal: muscleEval)));
     expect(
-      find.text('hamstrings and glutes: 2.5 sets · under (8–12) · behind pace'),
+      find.text('Hamstrings and glutes: 2.5 sets · under (8–12) · behind pace'),
       findsOneWidget,
     );
-    expect(find.text('back: 9.3 sets · in range (8–12)'), findsOneWidget);
+    expect(find.text('Lats: 9.3 sets · in range (8–12)'), findsOneWidget);
+    // Tracked-only: sets + contributors, no band state — 14 sets is
+    // above 12 but never reads "over".
+    expect(find.text('Tracked only (no target)'), findsOneWidget);
+    expect(find.text('Lower back: 14.0 sets'), findsOneWidget);
+    expect(find.text('from: Barbell Deadlift 14.0'), findsOneWidget);
+    expect(find.textContaining('over'), findsNothing);
     expect(
       find.text('from: Climbing sessions 6.0 · Pull Up 3.3'),
       findsOneWidget,

@@ -38,6 +38,9 @@
 ///                    exercise_muscle_map (muscle_volume.dart — the same
 ///                    counter as the hypertrophy_volume driver), climbing
 ///                    sessions credited per session. Pacing-aware.
+///                    v16 `tracked_groups` (lower back, front delts,
+///                    forearms, core) are counted + listed in the
+///                    detail, never banded or judged.
 ///   4. climbing      distinct climb-session days (Whoop ∪ Kaya, counted
 ///                    once) vs a weekly target.
 ///   5. cardio_4x4    distinct 4x4 cardio days vs a weekly target.
@@ -125,6 +128,11 @@ class GoalConfig {
   /// hypertrophy_targets.muscle_groups (GoalInputs.muscleGroups).
   final List<String> muscleGroups;
 
+  /// Tracked-only groups (v16 `tracked_groups`): counted and shown in
+  /// the detail sheet, never banded or judged. Empty → the program's
+  /// hypertrophy_targets.tracked_groups (GoalInputs.trackedGroups).
+  final List<String> trackedGroups;
+
   // --- climbing / cardio_4x4 / zone2_run ---
   final double? target;
 
@@ -155,6 +163,7 @@ class GoalConfig {
     this.accessories = const {},
     this.band,
     this.muscleGroups = const [],
+    this.trackedGroups = const [],
     this.target,
     this.optional = false,
     this.minMinutes,
@@ -197,6 +206,7 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
       final acc = gg['accessories'];
       final perLift = gg['hard_set_targets'];
       final groups = gg['muscle_groups'];
+      final tracked = gg['tracked_groups'];
       parsed.add(
         GoalConfig(
           id: id,
@@ -232,6 +242,9 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
           band: _numPair(gg['band']),
           muscleGroups: groups is List
               ? [for (final g in groups) g.toString()]
+              : const [],
+          trackedGroups: tracked is List
+              ? [for (final g in tracked) g.toString()]
               : const [],
           target: (gg['target'] as num?)?.toDouble(),
           optional: gg['optional'] == true,
@@ -336,6 +349,11 @@ class GoalMuscleRow {
   /// "Climbing sessions"), largest first.
   final List<MapEntry<String, double>> contributors;
 
+  /// A tracked-only group (v16 `tracked_groups`: lower back, front
+  /// delts, forearms, core): sets are shown, but it has no band — never
+  /// over / in range / under, never behind pace, never red.
+  final bool tracked;
+
   const GoalMuscleRow({
     required this.group,
     required this.sets,
@@ -343,17 +361,24 @@ class GoalMuscleRow {
     required this.hi,
     required this.pace,
     this.contributors = const [],
+    this.tracked = false,
   });
 
-  bool get over => sets > hi + 1e-9;
-  bool get inBand => !over && sets >= lo - 1e-9;
-  bool get under => sets < lo - 1e-9;
+  bool get over => !tracked && sets > hi + 1e-9;
+  bool get inBand => !tracked && !over && sets >= lo - 1e-9;
+  bool get under => !tracked && sets < lo - 1e-9;
 
   /// Under the band AND under the even-pace line.
   bool get behindPace => under && sets < pace - 1e-9;
 
-  /// 'under' | 'in range' | 'over'.
-  String get state => over ? 'over' : inBand ? 'in range' : 'under';
+  /// 'under' | 'in range' | 'over' | 'tracked'.
+  String get state => tracked
+      ? 'tracked'
+      : over
+          ? 'over'
+          : inBand
+              ? 'in range'
+              : 'under';
 }
 
 /// One evaluated goal, preformatted for the row.
@@ -371,8 +396,13 @@ class GoalEval {
   /// Per-lift ticks (hard_sets only; empty otherwise).
   final List<GoalLiftTick> ticks;
 
-  /// Per-muscle rows (muscle_stimulus only; empty otherwise).
+  /// Per-muscle rows (muscle_stimulus only; empty otherwise) — the
+  /// BANDED groups only; these alone decide status and counts.
   final List<GoalMuscleRow> muscles;
+
+  /// Tracked-only muscle rows (muscle_stimulus; [GoalMuscleRow.tracked])
+  /// — shown in the detail sheet, never counted toward status.
+  final List<GoalMuscleRow> trackedMuscles;
 
   const GoalEval({
     required this.config,
@@ -381,6 +411,7 @@ class GoalEval {
     this.detail = '',
     this.ticks = const [],
     this.muscles = const [],
+    this.trackedMuscles = const [],
   });
 
   static const _defaultLabels = {
@@ -470,6 +501,10 @@ class GoalInputs {
   /// The program's hypertrophy muscle groups (hypertrophy_targets).
   final List<String> muscleGroups;
 
+  /// The program's tracked-only groups (hypertrophy_targets
+  /// .tracked_groups, v16) — counted + shown, never banded.
+  final List<String> trackedGroups;
+
   const GoalInputs({
     this.graded = const [],
     this.strengthRows = const [],
@@ -490,6 +525,7 @@ class GoalInputs {
     this.weekWorkingSets = const [],
     this.muscleMap,
     this.muscleGroups = const [],
+    this.trackedGroups = const [],
   });
 }
 
@@ -972,18 +1008,27 @@ GoalEval _muscleStimulus(
   final band = c.band ?? const [8.0, 12.0];
   final lo = band[0] <= band[1] ? band[0] : band[1];
   final hi = band[0] <= band[1] ? band[1] : band[0];
+  final trackedDeclared =
+      c.trackedGroups.isNotEmpty ? c.trackedGroups : inputs.trackedGroups;
   final groups = c.muscleGroups.isNotEmpty
       ? c.muscleGroups
       : inputs.muscleGroups.isNotEmpty
           ? inputs.muscleGroups
-          : {for (final m in map.exercises.values) ...m.keys}.toList();
+          : {for (final m in map.exercises.values) ...m.keys}
+              .where((g) => !trackedDeclared.contains(g))
+              .toList();
+  // A group declared both ways stays banded.
+  final tracked = [
+    for (final g in trackedDeclared)
+      if (!groups.contains(g)) g,
+  ];
   final climbSessions = climbDaysUnion(
     inputs.climbingDates,
     whoopClimbDays(inputs.activities),
   ).where(inWeek).length;
   final volume = weeklyMuscleVolume(
     map: map,
-    groups: groups,
+    groups: [...groups, ...tracked],
     setNames: [
       for (final s in inputs.weekWorkingSets)
         if (inWeek(s.date)) s.exercise,
@@ -999,6 +1044,19 @@ GoalEval _muscleStimulus(
         lo: lo,
         hi: hi,
         pace: pace,
+        contributors: volume[g]!.byExercise.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value)),
+      ),
+  ];
+  final trackedRows = <GoalMuscleRow>[
+    for (final g in tracked)
+      GoalMuscleRow(
+        group: g,
+        sets: volume[g]!.sets,
+        lo: lo,
+        hi: hi,
+        pace: pace,
+        tracked: true,
         contributors: volume[g]!.byExercise.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value)),
       ),
@@ -1023,6 +1081,7 @@ GoalEval _muscleStimulus(
     value: '$inBand of ${rows.length} groups in ${_fmtNum(lo)}–${_fmtNum(hi)}',
     detail: parts.join(' · '),
     muscles: rows,
+    trackedMuscles: trackedRows,
   );
 }
 
@@ -1035,12 +1094,16 @@ String liftDisplayName(String key) => switch (key) {
       _ => key,
     };
 
-/// Plain muscle-group name ('hamstrings_glutes' → 'hamstrings and
-/// glutes') — no abbreviations on the Week tab.
-String muscleDisplayName(String key) => switch (key) {
-      'hamstrings_glutes' => 'hamstrings and glutes',
-      _ => key.replaceAll('_', ' '),
-    };
+/// Plain sentence-case muscle-group name ('hamstrings_glutes' →
+/// 'Hamstrings and glutes', 'upper_back' → 'Upper back', 'side_delts' →
+/// 'Side delts') — no abbreviations on the Week tab.
+String muscleDisplayName(String key) {
+  final s = switch (key) {
+    'hamstrings_glutes' => 'hamstrings and glutes',
+    _ => key.replaceAll('_', ' ').trim(),
+  };
+  return s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+}
 
 /// "1,850 kcal" with a thousands separator.
 String _kcal(double v) {

@@ -1,5 +1,8 @@
 // muscle_volume.dart — the shared per-muscle weekly set counter.
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:yaml/yaml.dart';
 
 import 'package:airledger/services/muscle_volume.dart';
 
@@ -78,5 +81,77 @@ void main() {
       ['quads', 'back'],
     );
     expect(hypertrophyMuscleGroups(null), isEmpty);
+  });
+
+  test('hypertrophyTrackedGroups reads the version (absent → empty)', () {
+    expect(
+      hypertrophyTrackedGroups({
+        'hypertrophy_targets': {
+          'tracked_groups': ['lower_back', 'core'],
+        },
+      }),
+      ['lower_back', 'core'],
+    );
+    expect(
+      hypertrophyTrackedGroups({
+        'hypertrophy_targets': {
+          'muscle_groups': ['quads'],
+        },
+      }),
+      isEmpty,
+    );
+  });
+
+  test('real program.yaml v16: split groups + stimulus-tier credits; '
+      'v15 history still resolves with back/shoulders', () {
+    final file = File('../airledger-fitness/coach/program.yaml');
+    if (!file.existsSync()) {
+      markTestSkipped('no airledger-fitness checkout');
+      return;
+    }
+    final doc = loadYaml(file.readAsStringSync()) as Map;
+    final versions = doc['versions'] as List;
+    Map<Object?, Object?> ver(int n) =>
+        versions.firstWhere((v) => (v as Map)['version'] == n) as Map;
+    final v16 = ver(16);
+    expect(hypertrophyMuscleGroups(v16), [
+      'quads', 'hamstrings_glutes', 'chest', 'lats', 'upper_back',
+      'side_delts', 'rear_delts', 'biceps', 'triceps',
+    ]);
+    expect(hypertrophyTrackedGroups(v16),
+        ['lower_back', 'front_delts', 'forearms', 'core']);
+    final m = parseExerciseMuscleMap(v16)!;
+    expect(m.creditsFor('Pull Up'), {'lats': 1.0, 'biceps': 0.25});
+    expect(m.creditsFor('Chin Up'), {'lats': 1.0, 'biceps': 0.5});
+    expect(m.creditsFor('Seated Cable Row'),
+        {'upper_back': 1.0, 'lats': 0.5});
+    expect(m.creditsFor('Cable Face Pull'),
+        {'upper_back': 0.5, 'rear_delts': 0.5});
+    expect(m.creditsFor('Barbell Deadlift'),
+        {'hamstrings_glutes': 1.0, 'lower_back': 1.0});
+    expect(m.creditsFor('Flat Barbell Bench Press'),
+        {'chest': 1.0, 'triceps': 0.5});
+    expect(m.creditsFor('Overhead Press'),
+        {'front_delts': 1.0, 'side_delts': 0.25, 'triceps': 0.5});
+    expect(m.creditsFor('Muscle Up Green Band'),
+        {'lats': 0.75, 'triceps': 0.25});
+    expect(m.creditsFor('Barbell Squat'),
+        {'quads': 1.0, 'hamstrings_glutes': 0.5});
+    expect(m.climbingSession,
+        {'lats': 1.5, 'biceps': 0.5, 'forearms': 2.0, 'core': 0.5});
+    // No credit names a group outside banded + tracked except calves.
+    final known = {
+      ...hypertrophyMuscleGroups(v16),
+      ...hypertrophyTrackedGroups(v16),
+      'calves',
+    };
+    for (final c in [...m.exercises.values, m.climbingSession]) {
+      expect(known.containsAll(c.keys), isTrue, reason: '$c');
+    }
+    // Append-only: v15 keeps the old groups.
+    final v15 = ver(15);
+    expect(hypertrophyMuscleGroups(v15), contains('back'));
+    expect(hypertrophyTrackedGroups(v15), isEmpty);
+    expect(parseExerciseMuscleMap(v15)!.creditsFor('Pull Up')!['back'], 1.0);
   });
 }

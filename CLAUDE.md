@@ -659,6 +659,23 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     coach/{goals,routine,metrics,PROMPT}.md` — goals: CUT active;
     routine.md is a DEPRECATED readable fallback (program.yaml `routine:`
     is authoritative; templates retired 2026-09-30).
+- **UI redesign (2026-10-02, spec docs/superpowers/specs/2026-10-02-ui-
+  redesign-design.md)**: ALL new UI uses `lib/ui/design/` (design.dart:
+  tokens AppText title/row/meta/section, AppSpace, AppRadius, ItemStatus +
+  StatusColors theme ext, AppCard; components StatusMark, SetChip,
+  ExerciseRow, SectionHeader, StatStrip, StatusChip, QuickPicks,
+  showDetailSheet). Log timeline planned work = one row per exercise+slot
+  with tap-to-log set chips (pure grouping lib/services/planned_slots.dart;
+  warm-ups one muted line). Today = recovery StatStrip + coach read +
+  macros + ProgramDayCard as the ONE training surface (Trained list and
+  Clips strip removed; clips inline per item; done items show achievement
+  "top 275×6"; "Also logged" group). Week = one card, per-lift thin bars.
+  Plan = verdict first, model internals behind "Model details". Bodyweight
+  moves format as BW (routine_display formatSessionLine). Readable names
+  everywhere via lib/services/display_names.dart (+ dashboards.yaml
+  `label:`/`description:` per domain). Principle (user): the screen should
+  make finished work feel like an accomplishment and show what's
+  reviewable (clips visible at a glance).
 - **Missed-work carryover + manual moves (2026-10-02, Part 2; spec/plan
   docs/superpowers/{specs,plans}/2026-10-02-missed-work-carryover*)**:
   ONE synced engine view `program_moves` (id, date=TARGET day, from_date,

@@ -5,14 +5,15 @@
 /// separate Program screen (program_screen.dart, the app-bar action
 /// here); this tab deliberately carries NO day-to-day surface.
 ///
-/// Default view (decluttered per user feedback — the old Program tab
-/// was "overwrought"): the phase declaration + block timeline with the
-/// you-are-here marker, then the SINGLE-TRAJECTORY forecast (2026-09-28
-/// directive): the NUTRITION card (Macrofactor intake → adaptive
-/// maintenance → the sim's rate; calorie-delta what-if is the ONLY
-/// lever), the summary + model-tracking line, ONE combined progress
-/// chart, and the verdict banner. Body comp / climbing / VO2 / fatigue
-/// and the provenance parameter sheet fold behind expandables.
+/// Default view (UI redesign phase 6, 2026-10-02 — plain-language
+/// summaries first): the VERDICT (is the declared phase working?), the
+/// phase declaration + block timeline with the you-are-here marker,
+/// then the SINGLE-TRAJECTORY forecast (2026-09-28 directive): the
+/// plain projection summary + ONE combined strength chart, the
+/// NUTRITION card (Macrofactor intake → adaptive maintenance → the
+/// sim's rate; calorie-delta what-if is the ONLY lever), body comp /
+/// climbing / VO2 / fatigue folds, and ONE "Model details" disclosure
+/// holding every model internal (tracking, caveats, parameter sheet).
 library;
 
 import 'package:flutter/material.dart';
@@ -34,7 +35,7 @@ import '../services/sim2_harness.dart'
     show sim2BlocksFromProgramDocs, sim2ExpectationsFromProgramDocs;
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
-import 'app_text.dart';
+import 'design/design.dart';
 import 'widgets/forecast_section.dart';
 
 class PlanScreen extends StatefulWidget {
@@ -340,63 +341,59 @@ class _PlanView extends StatelessWidget {
             bw3wkChange: stats.bw3wkChange,
           );
 
+    const gutter = EdgeInsets.symmetric(horizontal: AppSpace.gutter);
     return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.only(bottom: 24),
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
-        _SectionLabel('Declared'),
-        _DeclaredCard(phaseVersion: phaseVersion, targetRate: targetRate),
-        const SizedBox(height: 8),
-        _BlockTimeline(
-          programVersion: programVersion,
-          slice: slice,
-          today: today,
+        // Plain-language answer first: is the declared phase working?
+        const SectionHeader(label: 'Verdict'),
+        Padding(
+          padding: gutter,
+          child: _VerdictCard(
+            phase: phase,
+            targetRate: targetRate,
+            verdict: verdict,
+            stats: stats,
+          ),
         ),
-        const SizedBox(height: 16),
-        _SectionLabel('Progress'),
+        const SectionHeader(label: 'Phase'),
+        Padding(
+          padding: gutter,
+          child: _DeclaredCard(
+            phaseVersion: phaseVersion,
+            targetRate: targetRate,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: gutter,
+          child: _BlockTimeline(
+            programVersion: programVersion,
+            slice: slice,
+            today: today,
+          ),
+        ),
         if (data.forecast != null)
-          // Single trajectory: nutrition card + summary + the ONE
-          // progress chart up front; body/climbing/VO2/fatigue fold.
+          // Single trajectory: summary + chart, nutrition lever, folds,
+          // one Model details disclosure.
           ForecastSection(inputs: data.forecast!, today: today)
-        else
-          Card(
-            elevation: 0,
-            margin: EdgeInsets.zero,
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
+        else ...[
+          const SectionHeader(label: 'Projection'),
+          Padding(
+            padding: gutter,
+            child: AppCard(
               child: Text(
                 data.observedError ??
                     'Forecast unavailable — needs the program block '
                         'calendar (coach/program.yaml; pull to refresh '
                         'once online).',
-                style: Theme.of(context).textTheme.bodySmall,
+                style: AppText.meta(context),
               ),
             ),
           ),
-        const SizedBox(height: 16),
-        _SectionLabel('Verdict'),
-        _VerdictCard(
-          phase: phase,
-          targetRate: targetRate,
-          verdict: verdict,
-          stats: stats,
-        ),
-        const SizedBox(height: 24),
+        ],
       ],
-    );
-  }
-}
-
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6, left: 4),
-      child: Text(text.toUpperCase(), style: AppText.title(context)),
     );
   }
 }
@@ -416,12 +413,10 @@ class _DeclaredCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final p = phaseVersion;
     if (p == null) {
-      return Card(
-        elevation: 0,
-        color: scheme.surfaceContainerHighest,
-        child: const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text('No phase declared (coach/phase.yaml missing).'),
+      return AppCard(
+        child: Text(
+          'No phase declared (coach/phase.yaml missing).',
+          style: AppText.meta(context),
         ),
       );
     }
@@ -431,62 +426,52 @@ class _DeclaredCard extends StatelessWidget {
     final reason = p['reason']?.toString();
     final exit = p['exit_criteria']?.toString();
 
-    final small = Theme.of(
-      context,
-    ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
+    final small = AppText.meta(context);
 
-    return Card(
-      elevation: 0,
-      color: scheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: scheme.primary,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    value.toUpperCase(),
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: scheme.onPrimary,
-                      fontWeight: FontWeight.w700,
-                    ),
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: scheme.primary,
+                  borderRadius: BorderRadius.circular(AppRadius.chip),
+                ),
+                child: Text(
+                  value.toUpperCase(),
+                  style: AppText.section(context).copyWith(
+                    color: scheme.onPrimary,
                   ),
                 ),
-                const SizedBox(width: 10),
-                if (since != null)
-                  Text('since ${_fmtIso(since)}', style: small),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              [
-                if (targetWt != null) 'Target $targetWt lb',
-                if (targetRate != null) '${_fmtSigned(targetRate!)} lb/wk',
-              ].join(' · '),
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
-            ),
-            if (reason != null) ...[
-              const SizedBox(height: 6),
-              Text(reason, style: small?.copyWith(fontStyle: FontStyle.italic)),
+              ),
+              const SizedBox(width: 10),
+              if (since != null)
+                Text('since ${_fmtIso(since)}', style: small),
             ],
-            if (exit != null) ...[
-              const SizedBox(height: 6),
-              Text('Exit: $exit', style: small),
-            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            [
+              if (targetWt != null) 'Target $targetWt lb',
+              if (targetRate != null) '${_fmtSigned(targetRate!)} lb/wk',
+            ].join(' · '),
+            style: AppText.title(context),
+          ),
+          if (reason != null) ...[
+            const SizedBox(height: 6),
+            Text(reason, style: small.copyWith(fontStyle: FontStyle.italic)),
           ],
-        ),
+          if (exit != null) ...[
+            const SizedBox(height: 6),
+            Text('Exit: $exit', style: small),
+          ],
+        ],
       ),
     );
   }
@@ -519,20 +504,15 @@ class _BlockTimeline extends StatelessWidget {
   Widget build(BuildContext context) {
     final blocks = programVersion?['blocks'];
     if (blocks is! List) return const SizedBox.shrink();
-    final scheme = Theme.of(context).colorScheme;
     final currentN = slice?.block['number'] as int?;
 
-    return Card(
-      elevation: 0,
-      color: scheme.surfaceContainerLow,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Column(
-          children: [
-            for (final b in blocks)
-              if (b is Map) _blockRow(context, b, currentN),
-          ],
-        ),
+    return AppCard(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Column(
+        children: [
+          for (final b in blocks)
+            if (b is Map) _blockRow(context, b, currentN),
+        ],
       ),
     );
   }
@@ -586,7 +566,7 @@ class _BlockTimeline extends StatelessWidget {
                 child: Text(
                   'B$n',
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  style: AppText.meta(context).copyWith(
                     fontWeight: FontWeight.w700,
                     color: isCurrent ? scheme.surface : color,
                   ),
@@ -597,26 +577,16 @@ class _BlockTimeline extends StatelessWidget {
                 width: 68,
                 child: Text(
                   emphasis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  style: AppText.meta(context).copyWith(
+                    color: scheme.onSurface,
                     fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
                   ),
                 ),
               ),
               Expanded(
-                child: Text(
-                  dateStr,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
+                child: Text(dateStr, style: AppText.meta(context)),
               ),
-              Text(
-                wtStr,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
+              Text(wtStr, style: AppText.meta(context)),
             ],
           ),
           if (isCurrent && progress != null) ...[
@@ -647,7 +617,7 @@ class _BlockTimeline extends StatelessWidget {
                   child: Text(
                     'You are here — week ${slice?.weekInBlock} of block $n'
                     '${slice?.weekType != 'normal' ? ' (${slice?.weekType} week)' : ''}',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    style: AppText.meta(context).copyWith(
                       color: color,
                       fontWeight: FontWeight.w600,
                     ),
@@ -664,7 +634,7 @@ class _BlockTimeline extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.chip),
       ),
       child: row,
     );
@@ -690,41 +660,25 @@ class _VerdictCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final v = verdict;
     if (phase == null || v == null) {
-      return Card(
-        elevation: 0,
-        color: scheme.surfaceContainerHighest,
-        child: const Padding(
-          padding: EdgeInsets.all(16),
-          child: Text('No declared phase — nothing to compare against.'),
+      return AppCard(
+        child: Text(
+          'No declared phase — nothing to compare against.',
+          style: AppText.meta(context),
         ),
       );
     }
 
-    final (bg, fg, icon) = switch (v.state) {
-      VerdictState.agree => (
-        Colors.green.withValues(alpha: 0.15),
-        Colors.green.shade800,
-        Icons.check_circle_outline,
-      ),
-      VerdictState.drift => (
-        Colors.amber.withValues(alpha: 0.2),
-        Colors.orange.shade900,
-        Icons.warning_amber_outlined,
-      ),
-      VerdictState.mismatch => (
-        scheme.errorContainer,
-        scheme.onErrorContainer,
-        Icons.error_outline,
-      ),
-      VerdictState.unknown => (
-        scheme.surfaceContainerHighest,
-        scheme.onSurfaceVariant,
-        Icons.help_outline,
-      ),
+    // Shared status palette: green agree, amber drift, red only for a
+    // real mismatch, muted when unknown.
+    final (status, icon) = switch (v.state) {
+      VerdictState.agree => (ItemStatus.done, Icons.check_circle_outline),
+      VerdictState.drift => (ItemStatus.partial, Icons.warning_amber_outlined),
+      VerdictState.mismatch => (ItemStatus.problem, Icons.error_outline),
+      VerdictState.unknown => (ItemStatus.muted, Icons.help_outline),
     };
+    final fg = StatusColors.of(context).forStatus(context, status);
 
     final declared =
         'Declared $phase'
@@ -733,39 +687,23 @@ class _VerdictCard extends StatelessWidget {
         ? 'no observed rate yet'
         : 'observed ${_fmtSigned(v.observedRateLbWk!)} lb/wk over 3 wks';
 
-    return Card(
-      elevation: 0,
-      color: bg,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: fg, size: 22),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    v.label,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      color: fg,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '$declared · $observed',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: fg),
-                  ),
-                ],
-              ),
+    return AppCard(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: fg, size: 22),
+          const SizedBox(width: AppSpace.leadGap),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(v.label, style: AppText.title(context).copyWith(color: fg)),
+                const SizedBox(height: 4),
+                Text('$declared · $observed', style: AppText.meta(context)),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

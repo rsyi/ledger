@@ -5,6 +5,11 @@
 // calendar extends past the declared blocks as a flat recomp
 // steady-state, and the model-tracking line reflects the nightly
 // recalibration state.
+//
+// UI redesign phase 6 (2026-10-02): plain-language summary first; every
+// model internal (tracking line, single-trajectory note, per-chart
+// caveats, parameter sheet) sits behind ONE collapsed "Model details"
+// disclosure, and no visible label carries section-number jargon.
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -124,6 +129,14 @@ Future<void> scrollTo(WidgetTester tester, Finder finder) async {
   await tester.pump();
 }
 
+/// Expands the ONE "Model details" disclosure.
+Future<void> openModelDetails(WidgetTester tester) async {
+  final tile = find.byKey(const ValueKey('forecast-model-details'));
+  await scrollTo(tester, tile);
+  await tester.tap(tile);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('single trajectory: nutrition card, extended horizon, '
       'tracking on, P(V8)', (tester) async {
@@ -140,11 +153,9 @@ void main() {
     final summary = summaryText(tester);
     expect(summary, contains("Dec 3 '28"));
     expect(summary, isNot(contains("Dec 5 '27")));
-    expect(summary, contains('P(V8)')); // MC landed
-    expect(textOf(tester, 'forecast-tracking'),
-        contains('model tracking: on'));
-    expect(textOf(tester, 'forecast-tracking'),
-        contains('rate from logged intake'));
+    expect(summary, contains('chance of a V8 send')); // MC landed
+    expect(textOf(tester, 'forecast-basis'),
+        contains('from your logged intake'));
 
     // Expressed chart: capacity (in-cut default ON) + index + true.
     final expressed = chartData(tester, 'sim2-expressed-chart');
@@ -152,11 +163,54 @@ void main() {
     final idxLine = expressed.lineBarsData[1];
     final trueLine = expressed.lineBarsData[2];
     expect(idxLine.spots.first.y, lessThan(trueLine.spots.first.y - 4));
+
+    // Model tracking lives behind Model details now.
+    expect(find.byKey(const ValueKey('forecast-tracking')), findsNothing);
+    await openModelDetails(tester);
+    expect(textOf(tester, 'forecast-tracking'),
+        contains('model tracking: on'));
+    expect(textOf(tester, 'forecast-tracking'),
+        contains('rate from logged intake'));
+  });
+
+  testWidgets('model internals collapse behind ONE "Model details" '
+      'disclosure; visible labels carry no jargon', (tester) async {
+    await pumpSection(tester);
+    // Collapsed by default: none of the internals are on screen.
+    for (final internal in [
+      'sim2 two-layer',
+      'S_obs',
+      'attempt gate',
+      'model tracking',
+      'One trajectory',
+      'L_cap',
+      'μ=',
+    ]) {
+      expect(find.textContaining(internal), findsNothing, reason: internal);
+    }
+    expect(find.byKey(const ValueKey('sim2-params-tile')), findsNothing);
+    // No section-number jargon anywhere visible.
+    for (final banned in ['§', 'MODEL PARAMETERS', 'P(V8)', 'EXPRESSED']) {
+      expect(find.textContaining(banned, findRichText: true), findsNothing,
+          reason: banned);
+    }
+    expect(find.text('Model details'), findsOneWidget);
+
+    // Expanded: the provenance content is all still there.
+    await openModelDetails(tester);
+    expect(find.byKey(const ValueKey('forecast-model-note')), findsOneWidget);
+    expect(find.textContaining('sim2 two-layer §2 (S_obs'), findsOneWidget);
+    expect(find.textContaining('the index lags through the attempt gate'),
+        findsOneWidget);
+    expect(find.textContaining('model tracking: on'), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-params-tile')), findsOneWidget);
+    expect(find.text('Model parameters'), findsOneWidget);
   });
 
   testWidgets('no lever UI: presets, dials, compare card and μ toggle '
       'are gone', (tester) async {
     await pumpSection(tester);
+    await openModelDetails(tester); // nothing hides behind it either
     expect(find.byKey(const ValueKey('sim2-preset-baseline')), findsNothing);
     expect(find.byKey(const ValueKey('sim2-preset-bulk_plan')), findsNothing);
     expect(find.byKey(const ValueKey('sim2-dial-n')), findsNothing);
@@ -201,6 +255,9 @@ void main() {
       (tester) async {
     await pumpSection(tester, section: inputs(n: null));
     expect(find.byKey(const ValueKey('nutrition-empty')), findsOneWidget);
+    expect(textOf(tester, 'forecast-basis'),
+        contains("program's declared rates (no nutrition data yet)"));
+    await openModelDetails(tester);
     expect(textOf(tester, 'forecast-tracking'),
         contains('declared rates (no nutrition data)'));
     expect(find.byKey(const ValueKey('nutrition-delta-plus')), findsNothing);
@@ -216,6 +273,7 @@ void main() {
       events: [RecalEvent(DateTime.utc(2026, 9, 25), 'capacity gain ×0.80')],
     );
     await pumpSection(tester, section: inputs(n: nutrition(), meta: meta));
+    await openModelDetails(tester);
     final tracking = textOf(tester, 'forecast-tracking');
     expect(tracking, contains('adjusted Sep 25'));
     expect(tracking, contains('capacity gain ×0.80'));
@@ -236,13 +294,15 @@ void main() {
     ];
     expect(red, isNotEmpty,
         reason: 'the cut runs over the deficit budget → red spans');
-    expect(find.textContaining('over-budget weeks:'), findsOneWidget);
+    expect(find.textContaining('Over-budget weeks:'), findsOneWidget);
+    expect(find.textContaining('exceeds the recovery budget'), findsOneWidget);
     expect(find.textContaining('confidence'), findsOneWidget);
   });
 
-  testWidgets('§9.5 parameter sheet stays as PROVENANCE: edit re-runs, '
-      'reset restores (incl. recal scales)', (tester) async {
+  testWidgets('parameter sheet stays as PROVENANCE (inside Model details): '
+      'edit re-runs, reset restores (incl. recal scales)', (tester) async {
     await pumpSection(tester);
+    await openModelDetails(tester);
     await scrollTo(tester, find.byKey(const ValueKey('sim2-params-tile')));
     await tester.tap(find.byKey(const ValueKey('sim2-params-tile')));
     await tester.pumpAndSettle();
@@ -257,7 +317,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(summaryText(tester), isNot(before));
-    expect(find.textContaining('EDITED'), findsOneWidget);
+    expect(find.text('Model parameters — edited'), findsOneWidget);
 
     await scrollTo(tester, find.byKey(const ValueKey('sim2-params-reset')));
     await tester.tap(find.byKey(const ValueKey('sim2-params-reset')));

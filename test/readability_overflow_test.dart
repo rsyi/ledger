@@ -211,21 +211,25 @@ domains:
     ));
     await tester.pumpAndSettle();
 
-    // Top sections up at 360dp: declared card + block timeline (the
-    // "You are here" row wraps instead of overflowing).
-    expect(find.text('DECLARED'), findsOneWidget);
+    // Top sections up at 360dp, plain-language summary FIRST (UI
+    // redesign phase 6): verdict above the phase card + block timeline
+    // (the "You are here" row wraps instead of overflowing).
+    expect(find.text('VERDICT'), findsOneWidget);
+    expect(find.text('PHASE'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('VERDICT')).dy,
+        lessThan(tester.getTopLeft(find.text('PHASE')).dy));
     expect(find.textContaining('You are here'), findsOneWidget);
 
-    // Scroll the rest of the lazy ListView into layout — observed
-    // stats row (16sp values), Wilks block, verdict banner — so every
-    // section gets overflow-checked at this width.
+    // Scroll the rest of the lazy ListView into layout — projection
+    // summary, strength chart, nutrition card, folds, the Model details
+    // disclosure — so every section gets overflow-checked at this width.
     await tester.dragUntilVisible(
-      find.text('VERDICT'),
+      find.text('Model details'),
       find.byType(ListView),
       const Offset(0, -200),
     );
     await tester.pumpAndSettle();
-    expect(find.text('VERDICT'), findsOneWidget);
+    expect(find.text('Model details'), findsOneWidget);
     // Reaching here without a RenderFlex overflow report = pass.
   });
 

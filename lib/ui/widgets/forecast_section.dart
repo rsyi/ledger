@@ -23,10 +23,16 @@
 ///     via the forecast_meta tab) surfaces as "model tracking: on /
 ///     adjusted `<date>` (`<what moved>`)"; its guarded scales/offset are
 ///     applied to the local run so app and nightly agree.
-///   * The §9.5 parameter sheet STAYS behind its expandable — it is
-///     PROVENANCE (every constant with value/prior/source), not a
-///     lever; edits remain possible for inspection but there is no
-///     scenario machinery around them.
+///   * The parameter sheet (§9.5) STAYS — it is PROVENANCE (every
+///     constant with value/prior/source), not a lever; edits remain
+///     possible for inspection but there is no scenario machinery
+///     around them.
+///   * UI redesign phase 6 (2026-10-02): plain-language summary first
+///     (Projection → Nutrition → More projections); every model
+///     internal — tracking status, the single-trajectory note, the
+///     per-chart caveats (index lag, §5 lean-loss, MC paths, L_cap) and
+///     the parameter sheet — sits behind ONE "Model details"
+///     disclosure. Visible labels carry no section numbers.
 library;
 
 import 'dart:math' as math;
@@ -42,7 +48,7 @@ import '../../services/program_observed.dart'
     show ObservedWeightStats, sevenDayAvgSeries;
 import '../../services/sim2_harness.dart';
 import '../../services/sim2_model.dart';
-import '../app_text.dart';
+import '../design/design.dart';
 import 'chart_bottom_axis.dart';
 
 // ---------------------------------------------------------------------------
@@ -337,64 +343,157 @@ class _ForecastSectionState extends State<ForecastSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _NutritionCard(
-          key: const ValueKey('nutrition-card'),
-          nutrition: _nutrition,
-          delta: _calorieDelta,
-          onDelta: _setDelta,
-          stepKcal: _deltaStepKcal,
-        ),
-        const SizedBox(height: 8),
-        _SummaryLine(
-          key: const ValueKey('sim2-summary'),
-          run: _run,
-          mc: _mc,
-          horizonLabel: horizonLabel,
-          meta: widget.inputs.meta,
-          nutritionDriven: _nutritionDriven,
-        ),
-        const SizedBox(height: 8),
-        _card(
-          context,
-          title: 'STRENGTH — EXPRESSED TOTAL',
-          trailing: FilterChip(
-            key: const ValueKey('sim2-capacity-toggle'),
-            label: const Text('capacity'),
-            visualDensity: VisualDensity.compact,
-            selected: _showCapacity,
-            onSelected: (v) => setState(() => _showCapacity = v),
+        // Plain-language answer first: where the program lands.
+        const SectionHeader(label: 'Projection'),
+        _gutter(
+          _SummaryLine(
+            key: const ValueKey('sim2-summary'),
+            run: _run,
+            mc: _mc,
+            horizonLabel: horizonLabel,
+            nutritionDriven: _nutritionDriven,
           ),
-          child: _strengthBody(context, horizonLabel),
+        ),
+        const SizedBox(height: AppSpace.sectionGap),
+        _gutter(
+          _card(
+            context,
+            title: 'Strength total',
+            trailing: FilterChip(
+              key: const ValueKey('sim2-capacity-toggle'),
+              label: const Text('capacity'),
+              visualDensity: VisualDensity.compact,
+              selected: _showCapacity,
+              onSelected: (v) => setState(() => _showCapacity = v),
+            ),
+            child: _strengthBody(context, horizonLabel),
+          ),
+        ),
+        // The input + the ONE lever.
+        const SectionHeader(label: 'Nutrition'),
+        _gutter(
+          _NutritionCard(
+            key: const ValueKey('nutrition-card'),
+            nutrition: _nutrition,
+            delta: _calorieDelta,
+            onDelta: _setDelta,
+            stepKcal: _deltaStepKcal,
+          ),
+        ),
+        const SectionHeader(label: 'More projections'),
+        _gutter(
+          _foldout(
+            context,
+            key: 'sim2-fold-body',
+            title: 'Body composition',
+            child: _bodyCompBody(context),
+          ),
         ),
         const SizedBox(height: 8),
-        _foldout(
-          context,
-          key: 'sim2-fold-body',
-          title: 'BODY COMPOSITION',
-          child: _bodyCompBody(context),
+        _gutter(
+          _foldout(
+            context,
+            key: 'sim2-fold-climb',
+            title: 'Climbing',
+            child: _climbBody(context, horizonLabel),
+          ),
         ),
         const SizedBox(height: 8),
-        _foldout(
-          context,
-          key: 'sim2-fold-climb',
-          title: 'CLIMBING',
-          child: _climbBody(context, horizonLabel),
+        _gutter(
+          _foldout(
+            context,
+            key: 'sim2-fold-vo2',
+            title: 'VO2 max',
+            child: _vo2Body(context),
+          ),
         ),
         const SizedBox(height: 8),
-        _foldout(
-          context,
-          key: 'sim2-fold-vo2',
-          title: 'VO2 MAX',
-          child: _vo2Body(context),
+        _gutter(
+          _foldout(
+            context,
+            key: 'sim2-fold-fatigue',
+            title: 'Fatigue budget',
+            child: _fatigueBody(context),
+          ),
         ),
         const SizedBox(height: 8),
-        _foldout(
-          context,
-          key: 'sim2-fold-fatigue',
-          title: 'FATIGUE BUDGET',
-          child: _fatigueBody(context),
+        // Model internals (provenance) — ONE disclosure, collapsed.
+        _gutter(
+          _foldout(
+            context,
+            key: 'forecast-model-details',
+            title: 'Model details',
+            child: _modelDetails(context),
+          ),
         ),
-        const SizedBox(height: 8),
+      ],
+    );
+  }
+
+  static Widget _gutter(Widget child) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: AppSpace.gutter),
+    child: child,
+  );
+
+  String _tracking() {
+    final m = widget.inputs.meta;
+    if (m == null || !m.adjusted || m.lastEvent == null) {
+      return 'model tracking: on';
+    }
+    final e = m.lastEvent!;
+    return 'model tracking: adjusted '
+        '${DateFormat('MMM d').format(e.date)} (${e.what})';
+  }
+
+  /// Everything a reader doesn't need to judge the plan but the model
+  /// owes as provenance: the nightly-tracking status, the
+  /// single-trajectory note, per-chart model caveats, and the
+  /// parameter sheet.
+  Widget _modelDetails(BuildContext context) {
+    final meta = AppText.meta(context);
+    Widget note(String text, {Key? key}) => Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(text, key: key, style: meta),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        note(
+          '${_tracking()}'
+          '${_nutritionDriven ? ' · rate from logged intake' : ' · declared rates (no nutrition data)'}',
+          key: const ValueKey('forecast-tracking'),
+        ),
+        note(
+          'One trajectory: the declared program calendar, then a flat '
+          'recomp steady-state (no auto bulk/cut cycles). '
+          '${_nutritionDriven ? 'r and protein come from logged '
+                    'Macrofactor intake (adaptive maintenance); the calorie '
+                    'delta is the only lever.' : 'No projectable '
+                    'nutrition data yet — running the declared block rates.'} '
+          'sim2 two-layer §2 (S_obs = capacity × expression); the log '
+          'calibrates strength + the recovery budget, §3-§6 are priors. '
+          'Nightly tracking recalibrates within ±50% (guarded).',
+          key: const ValueKey('forecast-model-note'),
+        ),
+        note(
+          'Strength: true expressed ${_lb(_run.last.sTrue)} vs app index '
+          '${_lb(_run.last.sIdx)} — the index lags through the attempt '
+          'gate; the catch-up is measurement, not physiology.',
+        ),
+        note(
+          'Body fat: deficit lean-loss per the §5 rule (μ=0.30 at the cut '
+          'rate; branch resolution waits on the Nov DEXA).',
+        ),
+        note(
+          _mc == null
+              ? 'Climbing: P(V8) from 200 Monte Carlo paths, computed '
+                    'off-thread — the deterministic line shows meanwhile.'
+              : 'Climbing: P(V8) from ${_mc!.paths} Monte Carlo paths, +'
+                    '${_params.sendMargin.toStringAsFixed(1)} send margin '
+                    '[log]; C p20 ${_mc!.p20C.toStringAsFixed(1)}.',
+        ),
+        note('Fatigue: red spans are weeks with L > L_cap.'),
+        const SizedBox(height: 4),
         _ParamSheet(
           params: _params,
           edited: _paramsEdited,
@@ -403,19 +502,6 @@ class _ForecastSectionState extends State<ForecastSection> {
             _params = _recalibratedFitted();
             _recompute();
           }),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          'ONE trajectory: the declared program calendar, then a flat '
-          'recomp steady-state (no auto bulk/cut cycles). '
-          '${_nutritionDriven ? 'r and protein come from logged '
-                    'Macrofactor intake (adaptive maintenance); the calorie '
-                    'delta above is the only lever.' : 'No projectable '
-                    'nutrition data yet — running the declared block rates.'} '
-          'sim2 two-layer §2 (S_obs = capacity × expression); the log '
-          'calibrates strength + the recovery budget, §3-§6 are priors. '
-          'Nightly tracking recalibrates within ±50% (guarded).',
-          style: AppText.micro(context),
         ),
       ],
     );
@@ -453,19 +539,19 @@ class _ForecastSectionState extends State<ForecastSection> {
         ),
         const SizedBox(height: 4),
         Text(
-          'true expressed (solid) ${_lb(_run.last.sTrue)} vs app '
-          'index (dashed) ${_lb(_run.last.sIdx)} — the index lags '
-          'through the attempt gate; the catch-up is measurement, '
-          'not physiology${_showCapacity ? ' · capacity (dotted) '
+          key: const ValueKey('sim2-strength-legend'),
+          'solid: expected total ${_lb(_run.last.sTrue)} · dashed: what '
+          'your logged e1RMs will show ${_lb(_run.last.sIdx)}'
+          '${_showCapacity ? ' · dotted: capacity '
                     '${_lb(_run.last.sCap)}' : ''}',
-          style: AppText.micro(context),
+          style: AppText.meta(context),
         ),
         const SizedBox(height: 2),
         Text(
           'Squat ${_lb(_run.last.squat)} · Bench ${_lb(_run.last.bench)} · '
           'Deadlift ${_lb(_run.last.deadlift)} · '
-          'Press ${_lb(_run.last.press)} at $horizonLabel',
-          style: AppText.tag(context),
+          'Press ${_lb(_run.last.press)} by $horizonLabel',
+          style: AppText.row(context),
         ),
         if (widget.inputs.expectations?.sbdTotalLb != null)
           Text(
@@ -477,7 +563,7 @@ class _ForecastSectionState extends State<ForecastSection> {
                       '${_lb(widget.inputs.expectations!.ohpLb![0])}–'
                       '${_lb(widget.inputs.expectations!.ohpLb![1])}' : ''}'
             ' — expectation range, not target',
-            style: AppText.micro(context),
+            style: AppText.meta(context),
           ),
       ],
     );
@@ -503,11 +589,11 @@ class _ForecastSectionState extends State<ForecastSection> {
             '${widget.inputs.expectations!.bodyweightLb![0].toStringAsFixed(0)}–'
             '${widget.inputs.expectations!.bodyweightLb![1].toStringAsFixed(0)} lb'
             ' — expectation range, not target',
-            style: AppText.micro(context),
+            style: AppText.meta(context),
           ),
         _StatsRow(stats: widget.inputs.stats),
         const SizedBox(height: 10),
-        Text('BF%', style: AppText.tag(context)),
+        Text('Body fat %', style: AppText.meta(context)),
         _Sim2Chart(
           key: const ValueKey('sim2-bf-chart'),
           run: _run,
@@ -525,11 +611,10 @@ class _ForecastSectionState extends State<ForecastSection> {
         ),
         const SizedBox(height: 4),
         Text(
-          'deficit lean-loss per the §5 rule (μ=0.30 at the cut rate; '
-          'branch resolution waits on the Nov DEXA) · horizon BF '
-          '${_run.last.bfPct.toStringAsFixed(1)}% at '
-          '${_run.last.bw.toStringAsFixed(1)} lb',
-          style: AppText.micro(context),
+          'Body fat ${_run.last.bfPct.toStringAsFixed(1)}% at '
+          '${_run.last.bw.toStringAsFixed(1)} lb by the end of the '
+          'projection',
+          style: AppText.meta(context),
         ),
       ],
     );
@@ -537,6 +622,7 @@ class _ForecastSectionState extends State<ForecastSection> {
 
   Widget _climbBody(BuildContext context, String horizonLabel) {
     final scheme = Theme.of(context).colorScheme;
+    final grade = 'Grade ~V${_run.last.c.toStringAsFixed(1)} by $horizonLabel';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -557,17 +643,11 @@ class _ForecastSectionState extends State<ForecastSection> {
         Text(
           key: const ValueKey('sim2-pv8'),
           _mc == null
-              ? 'C ${_run.last.c.toStringAsFixed(1)} at horizon · '
-                    'P(V8) computing (200 MC paths, off-thread) — '
-                    'deterministic line shown'
-              : 'C ${_run.last.c.toStringAsFixed(1)} at horizon · '
-                    'P(V8 sent by $horizonLabel) '
-                    '${(_mc!.pV8Sent * 100).round()}% '
-                    '(MC ${_mc!.paths} paths, +'
-                    '${_params.sendMargin.toStringAsFixed(1)} send '
-                    'margin [log]) · C p20 '
-                    '${_mc!.p20C.toStringAsFixed(1)}',
-          style: AppText.micro(context),
+              ? '$grade · V8 send chance still computing'
+              : '$grade · ${(_mc!.pV8Sent * 100).round()}% chance of '
+                    'sending V8 · pessimistic case '
+                    'V${_mc!.p20C.toStringAsFixed(1)}',
+          style: AppText.meta(context),
         ),
       ],
     );
@@ -604,14 +684,14 @@ class _ForecastSectionState extends State<ForecastSection> {
           'with body weight alone. Doing more work at the same heart '
           'rate is real progress the weekly review tracks — this '
           'projection does not claim it.',
-          style: AppText.micro(context),
+          style: AppText.meta(context),
         ),
       ],
     );
   }
 
   Widget _fatigueBody(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final problem = StatusColors.of(context).problem;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -624,43 +704,45 @@ class _ForecastSectionState extends State<ForecastSection> {
           series: [
             _ChartSeries(
               [for (final w in _run.weeks) (w.monday, w.f)],
-              scheme.error,
+              Theme.of(context).colorScheme.error,
               width: 2.2,
             ),
           ],
         ),
         const SizedBox(height: 4),
         Text(
-          'over-budget weeks: ${_run.overBudgetWeeks}'
-          ' — red spans are L > L_cap: the model\'s confidence '
-          'collapses there (it is extrapolating into the pattern '
-          'that failed).',
-          style: AppText.micro(context)?.copyWith(color: scheme.error),
+          'Over-budget weeks: ${_run.overBudgetWeeks} — red spans are '
+          'weeks where training load exceeds the recovery budget; the '
+          "model's confidence collapses there (it is extrapolating into "
+          'the pattern that failed).',
+          style: AppText.meta(context).copyWith(color: problem),
         ),
       ],
     );
   }
 
-  /// One collapsed expandable section.
+  /// One collapsed disclosure in the shared card style.
   Widget _foldout(
     BuildContext context, {
     required String key,
     required String title,
     required Widget child,
   }) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      elevation: 0,
-      margin: EdgeInsets.zero,
-      color: scheme.surfaceContainerHighest,
-      clipBehavior: Clip.antiAlias,
+    return AppCard(
+      padding: EdgeInsets.zero,
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           key: ValueKey(key),
-          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          title: Text(title, style: AppText.title(context)),
+          tilePadding: const EdgeInsets.symmetric(horizontal: AppSpace.gutter),
+          childrenPadding: const EdgeInsets.fromLTRB(
+            AppSpace.gutter,
+            0,
+            AppSpace.gutter,
+            AppSpace.gutter,
+          ),
+          expandedCrossAxisAlignment: CrossAxisAlignment.start,
+          title: Text(title, style: AppText.row(context)),
           children: [child],
         ),
       ),
@@ -673,26 +755,20 @@ class _ForecastSectionState extends State<ForecastSection> {
     required Widget child,
     Widget? trailing,
   }) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      elevation: 0,
-      margin: EdgeInsets.zero,
-      color: scheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(child: Text(title, style: AppText.title(context))),
-                ?trailing,
-              ],
-            ),
-            const SizedBox(height: 6),
-            child,
-          ],
-        ),
+    return AppCard(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(title, style: AppText.title(context))),
+              ?trailing,
+            ],
+          ),
+          const SizedBox(height: 6),
+          child,
+        ],
       ),
     );
   }
@@ -737,135 +813,130 @@ class _NutritionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final n = nutrition;
     final m = n?.maintenance;
 
     Widget row(String label, String value, {Key? key}) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1),
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 92, child: Text(label, style: AppText.tag(context))),
-          Expanded(child: Text(value, key: key, style: AppText.value(context))),
+          SizedBox(width: 92, child: Text(label, style: AppText.meta(context))),
+          Expanded(child: Text(value, key: key, style: AppText.row(context))),
         ],
       ),
     );
 
-    return Card(
-      elevation: 0,
-      margin: EdgeInsets.zero,
-      color: scheme.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+    return AppCard(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Logged in Macrofactor — the input that drives the '
+            'projection',
+            style: AppText.meta(context),
+          ),
+          const SizedBox(height: 6),
+          if (n == null || (n.avg7 == null && n.avg14 == null))
             Text(
-              'NUTRITION — THE INPUT (MACROFACTOR)',
-              style: AppText.title(context),
+              'No logged nutrition yet — the projection runs the '
+              'program\'s declared block rates until Macrofactor '
+              'days land in meals.',
+              key: const ValueKey('nutrition-empty'),
+              style: AppText.meta(context),
+            )
+          else ...[
+            row('7d avg', _avg(n.avg7)),
+            row('14d avg', _avg(n.avg14)),
+            row(
+              'maintenance',
+              m == null
+                  ? 'not enough paired days yet (needs $minPairedDays '
+                        'logged days with weigh-ins)'
+                  : '~${n.effectiveMaintenanceKcal!.round()} ± '
+                        '${m.bandKcal.round()} kcal '
+                        '(${m.method == 'regression' ? 'regression' : 'energy balance'}, '
+                        '${m.pairedDays}d'
+                        '${n.maintenanceOffsetKcal != 0 ? ', recal '
+                                  '${_signed(n.maintenanceOffsetKcal, decimals: 0)}' : ''})',
+              key: const ValueKey('nutrition-maintenance'),
+            ),
+            row(
+              'implied rate',
+              n.rCurrentLbWk == null
+                  ? '—'
+                  : '${_signed(n.rCurrentLbWk!)} lb/wk at current intake',
+              key: const ValueKey('nutrition-rate'),
             ),
             const SizedBox(height: 6),
-            if (n == null || (n.avg7 == null && n.avg14 == null))
+            // The ONE what-if lever: calorie delta on the projection.
+            // Wrap, not Row — the reset chip overflows at 360dp.
+            Wrap(
+              spacing: 2,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text('what-if', style: AppText.meta(context)),
+                const SizedBox(width: 8),
+                IconButton(
+                  key: const ValueKey('nutrition-delta-minus'),
+                  icon: const Icon(Icons.remove_circle_outline, size: 20),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => onDelta(delta - stepKcal),
+                ),
+                Text(
+                  '${_signed(delta, decimals: 0)} kcal/day',
+                  key: const ValueKey('nutrition-delta-value'),
+                  style: AppText.row(context),
+                ),
+                IconButton(
+                  key: const ValueKey('nutrition-delta-plus'),
+                  icon: const Icon(Icons.add_circle_outline, size: 20),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => onDelta(delta + stepKcal),
+                ),
+                if (delta != 0)
+                  ActionChip(
+                    key: const ValueKey('nutrition-delta-reset'),
+                    label: const Text('reset'),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => onDelta(0),
+                  ),
+              ],
+            ),
+            if (delta != 0 && n.canProject)
               Text(
-                'No logged nutrition yet — the projection runs the '
-                'program\'s declared block rates until Macrofactor '
-                'days land in meals.',
-                key: const ValueKey('nutrition-empty'),
-                style: AppText.micro(context),
-              )
-            else ...[
-              row('7d avg', _avg(n.avg7)),
-              row('14d avg', _avg(n.avg14)),
-              row(
-                'maintenance',
-                m == null
-                    ? 'not enough paired days yet (needs $minPairedDays '
-                          'logged days with weigh-ins)'
-                    : '~${n.effectiveMaintenanceKcal!.round()} ± '
-                          '${m.bandKcal.round()} kcal '
-                          '(${m.method == 'regression' ? 'regression' : 'energy balance'}, '
-                          '${m.pairedDays}d'
-                          '${n.maintenanceOffsetKcal != 0 ? ', recal '
-                                    '${_signed(n.maintenanceOffsetKcal, decimals: 0)}' : ''})',
-                key: const ValueKey('nutrition-maintenance'),
+                'projection at ${n.projectedIntakeKcal!.round()} kcal: '
+                '${_signed(n.rProjectedLbWk!)} lb/wk · '
+                'protein ${n.projectedProteinG!.round()} g · '
+                'carbs ${n.projectedCarbsG!.round()} g '
+                '(macros scaled proportionally)',
+                key: const ValueKey('nutrition-whatif'),
+                style: AppText.meta(context),
               ),
-              row(
-                'implied rate',
-                n.rCurrentLbWk == null
-                    ? '—'
-                    : '${_signed(n.rCurrentLbWk!)} lb/wk at current intake',
-                key: const ValueKey('nutrition-rate'),
+            if (!n.canProject)
+              Text(
+                'Projection still runs the declared block rates — the '
+                'maintenance estimate needs more paired days.',
+                key: const ValueKey('nutrition-fallback'),
+                style: AppText.meta(context),
               ),
-              const SizedBox(height: 6),
-              // The ONE what-if lever: calorie delta on the projection.
-              // Wrap, not Row — the reset chip overflows at 360dp.
-              Wrap(
-                spacing: 2,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text('what-if', style: AppText.tag(context)),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    key: const ValueKey('nutrition-delta-minus'),
-                    icon: const Icon(Icons.remove_circle_outline, size: 20),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => onDelta(delta - stepKcal),
-                  ),
-                  Text(
-                    '${_signed(delta, decimals: 0)} kcal/day',
-                    key: const ValueKey('nutrition-delta-value'),
-                    style: AppText.value(context),
-                  ),
-                  IconButton(
-                    key: const ValueKey('nutrition-delta-plus'),
-                    icon: const Icon(Icons.add_circle_outline, size: 20),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => onDelta(delta + stepKcal),
-                  ),
-                  if (delta != 0)
-                    ActionChip(
-                      key: const ValueKey('nutrition-delta-reset'),
-                      label: const Text('reset'),
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () => onDelta(0),
-                    ),
-                ],
-              ),
-              if (delta != 0 && n.canProject)
-                Text(
-                  'projection at ${n.projectedIntakeKcal!.round()} kcal: '
-                  '${_signed(n.rProjectedLbWk!)} lb/wk · '
-                  'protein ${n.projectedProteinG!.round()} g · '
-                  'carbs ${n.projectedCarbsG!.round()} g '
-                  '(macros scaled proportionally)',
-                  key: const ValueKey('nutrition-whatif'),
-                  style: AppText.micro(context),
-                ),
-              if (!n.canProject)
-                Text(
-                  'Projection still runs the declared block rates — the '
-                  'maintenance estimate needs more paired days.',
-                  key: const ValueKey('nutrition-fallback'),
-                  style: AppText.micro(context),
-                ),
-            ],
           ],
-        ),
+        ],
       ),
     );
   }
 }
 
 // ---------------------------------------------------------------------------
-// Summary line + model-tracking status
+// Summary — the plain-language answer (model tracking lives in the
+// Model details disclosure)
 // ---------------------------------------------------------------------------
 
 class _SummaryLine extends StatelessWidget {
   final Sim2Run run;
   final Sim2McSummary? mc;
   final String horizonLabel;
-  final ForecastMeta? meta;
   final bool nutritionDriven;
 
   const _SummaryLine({
@@ -873,52 +944,44 @@ class _SummaryLine extends StatelessWidget {
     required this.run,
     required this.mc,
     required this.horizonLabel,
-    required this.meta,
     required this.nutritionDriven,
   });
 
-  String _tracking() {
-    final m = meta;
-    if (m == null || !m.adjusted || m.lastEvent == null) {
-      return 'model tracking: on';
-    }
-    final e = m.lastEvent!;
-    return 'model tracking: adjusted '
-        '${DateFormat('MMM d').format(e.date)} (${e.what})';
-  }
-
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      elevation: 0,
-      margin: EdgeInsets.zero,
-      color: scheme.primaryContainer.withValues(alpha: 0.45),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Program → $horizonLabel: '
-              'total ${_lb(run.last.sTrue)} (index ${_lb(run.last.sIdx)}) · '
-              '${run.last.bw.toStringAsFixed(0)} lb · '
-              'C ${run.last.c.toStringAsFixed(1)} · '
-              'VO2 ${run.last.vo2.toStringAsFixed(0)}'
-              '${mc != null ? ' · P(V8) ${(mc!.pV8Sent * 100).round()}%' : ''}',
-              style: AppText.value(context),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                '${_tracking()}'
-                '${nutritionDriven ? ' · rate from logged intake' : ' · declared rates (no nutrition data)'}',
-                key: const ValueKey('forecast-tracking'),
-                style: AppText.tag(context),
-              ),
-            ),
-          ],
-        ),
+    final row = AppText.row(context);
+    return AppCard(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Staying on this program, by $horizonLabel',
+            style: AppText.title(context),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Strength total ${_lb(run.last.sTrue)} lb · bodyweight '
+            '${run.last.bw.toStringAsFixed(0)} lb',
+            style: row,
+          ),
+          Text(
+            'Climbing ~V${run.last.c.toStringAsFixed(1)} · VO2 max '
+            '${run.last.vo2.toStringAsFixed(0)}'
+            '${mc != null ? ' · ${(mc!.pV8Sent * 100).round()}% chance of '
+                      'a V8 send' : ''}',
+            style: row,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            nutritionDriven
+                ? 'Weight rate from your logged intake'
+                : "Weight rate from the program's declared rates (no "
+                      'nutrition data yet)',
+            key: const ValueKey('forecast-basis'),
+            style: AppText.meta(context),
+          ),
+        ],
       ),
     );
   }
@@ -1265,8 +1328,8 @@ class _StatsRow extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(value, style: AppText.value(context)),
-          Text(label, style: AppText.micro(context)),
+          Text(value, style: AppText.row(context)),
+          Text(label, style: AppText.meta(context)),
         ],
       ),
     );
@@ -1292,7 +1355,7 @@ class _StatsRow extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// §9.5 parameter sheet — PROVENANCE, not a lever (kept per directive:
+// Model parameter sheet (§9.5) — PROVENANCE, not a lever (kept per directive:
 // every constant with value + prior + source tag stays inspectable).
 // ---------------------------------------------------------------------------
 
@@ -1324,20 +1387,20 @@ class _ParamSheet extends StatelessWidget {
       groups.putIfAbsent(d.group, () => []).add(d);
     }
 
-    return Card(
-      elevation: 0,
-      margin: EdgeInsets.zero,
-      color: scheme.surfaceContainerLow,
-      clipBehavior: Clip.antiAlias,
+    // Nested inside the Model details disclosure — no card chrome of
+    // its own, just the expandable row.
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
         key: const ValueKey('sim2-params-tile'),
         shape: const Border(),
-        tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+        collapsedShape: const Border(),
+        tilePadding: EdgeInsets.zero,
         title: Text(
-          'MODEL PARAMETERS (§9.5)${edited ? ' — EDITED' : ''}',
-          style: AppText.title(context),
+          'Model parameters${edited ? ' — edited' : ''}',
+          style: AppText.row(context),
         ),
-        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+        childrenPadding: const EdgeInsets.only(bottom: 4),
         children: [
           if (edited)
             Align(
@@ -1354,7 +1417,7 @@ class _ParamSheet extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: Padding(
                 padding: const EdgeInsets.only(top: 8, bottom: 2),
-                child: Text(e.key.toUpperCase(), style: AppText.micro(context)),
+                child: Text(e.key.toUpperCase(), style: AppText.section(context)),
               ),
             ),
             for (final d in e.value)
@@ -1366,14 +1429,14 @@ class _ParamSheet extends StatelessWidget {
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text(d.label, style: AppText.tag(context)),
+                        child: Text(d.label, style: AppText.meta(context)),
                       ),
                       if (d.get(params) != d.prior)
                         Padding(
                           padding: const EdgeInsets.only(right: 6),
                           child: Text(
                             'prior ${_fmtParam(d.prior)}',
-                            style: AppText.micro(context),
+                            style: AppText.meta(context),
                           ),
                         ),
                       Container(
@@ -1391,7 +1454,7 @@ class _ParamSheet extends StatelessWidget {
                         ),
                         child: Text(
                           d.tag,
-                          style: AppText.micro(context)?.copyWith(
+                          style: AppText.meta(context).copyWith(
                             color: _tagColor(scheme, d.tag),
                             fontWeight: FontWeight.w700,
                           ),
@@ -1399,7 +1462,7 @@ class _ParamSheet extends StatelessWidget {
                       ),
                       Text(
                         _fmtParam(d.get(params)),
-                        style: AppText.value(context),
+                        style: AppText.row(context),
                       ),
                     ],
                   ),
@@ -1416,7 +1479,7 @@ class _ParamSheet extends StatelessWidget {
             'priors). eDep is pinned by the §9.2 replay checkpoints, '
             'NOT the window fit — editing it moves the horizon but is '
             'not re-validated in-app (tool/sim2_replay.dart).',
-            style: AppText.micro(context),
+            style: AppText.meta(context),
           ),
         ],
       ),

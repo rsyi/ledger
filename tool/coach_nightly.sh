@@ -5,6 +5,11 @@
 # Disable: launchctl unload ~/Library/LaunchAgents/com.robertyi.airledger-coach.plist
 set -euo pipefail
 
+# launchd's `zsh -lc` doesn't load Homebrew's shellenv (it lives in
+# .zshrc), so dart/flutter/claude were "command not found" every night
+# from 2026-09-12 to 2026-10-01. Pin the PATH here.
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$HOME/.local/bin:$PATH"
+
 APP="$HOME/repos/ledger"
 FIT="$HOME/repos/airledger-fitness"
 LOGDIR="$HOME/.config/airledger/coach/logs"
@@ -74,7 +79,9 @@ PROMPT="$(
 # --split-moves, validated against TARGET's week (invalid moves dropped +
 # logged) and posted as a kind=proposal card AFTER the briefing (a bad
 # block is stripped + logged, never blocks the briefing).
-OUT="$(claude -p "$PROMPT" --model sonnet --output-format text)"
+# env -u: an exported ANTHROPIC_API_KEY would bill API credits instead of
+# the Max plan (the interactive shell wraps claude the same way).
+OUT="$(env -u ANTHROPIC_API_KEY claude -p "$PROMPT" --model sonnet --output-format text)"
 
 printf '%s' "$OUT" | (cd "$APP" && dart run tool/coach_msg.dart post --role coach --kind briefing --split-moves --target "$TARGET" --thread briefings)
 echo "=== coach run done $(date) ==="

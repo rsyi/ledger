@@ -3,6 +3,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:airledger/services/briefing_target.dart';
 import 'package:airledger/models/coach_proposal.dart';
 import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/moves_block.dart';
@@ -265,9 +266,17 @@ Future<void> briefingExists(List<String> args) async {
   }
   final messages = await readMessages();
   // Only briefings posted to the 'briefings' thread count; blank thread = general.
-  final found = messages.any(
-    (m) => m.role == 'coach' && m.kind == 'briefing' && m.date == date && m.thread == 'briefings',
-  );
+  // Rows carry the POSTING day in `date`; a 23:30 run plans tomorrow, so
+  // compare on the planning target derived from `ts` (legacy rows with an
+  // unparseable ts fall back to `date`).
+  final target = DateTime.parse(date);
+  final found = messages.any((m) {
+    if (m.role != 'coach' || m.kind != 'briefing' || m.thread != 'briefings') {
+      return false;
+    }
+    final ts = DateTime.tryParse(m.ts);
+    return ts == null ? m.date == date : briefingTargetDay(ts) == target;
+  });
   exit(found ? 0 : 3);
 }
 

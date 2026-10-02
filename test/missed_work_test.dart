@@ -457,4 +457,20 @@ void main() {
       expect(out.single.loggedSets, 0);
     });
   });
+
+  group('expiryLabel (nightly)', () {
+    final sat = DateTime(2026, 10, 3);
+    final sun = DateTime(2026, 10, 4);
+    test('Saturday-night run planning Sunday → expires end of Sunday, '
+        'not tonight', () {
+      expect(expiryLabel(sun, sat), 'expires end of Sun 10/4');
+    });
+    test('Sunday-morning run planning Sunday → tonight', () {
+      expect(expiryLabel(sun, sun), 'expires end of Sun 10/4 (tonight)');
+    });
+    test('non-Sunday targets → null', () {
+      expect(expiryLabel(sat, DateTime(2026, 10, 2)), isNull);
+      expect(expiryLabel(DateTime(2026, 10, 5), sun), isNull);
+    });
+  });
 }

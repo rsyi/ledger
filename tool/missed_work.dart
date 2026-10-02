@@ -30,8 +30,9 @@ import 'coach_dump.dart' as dump;
 ///                       from_date / period a ```moves block must copy
 ///   MOVES THIS WEEK:    active moves (item: Wed 9/30 → Fri 10/2 (source))
 ///   REMAINING DAYS:     each day --date..Sun with its effective items
-///   EXPIRING TONIGHT:   (Sunday only) what expires at the end of the week
-///   EXPIRED LAST WEEK:  (Monday only) last week's unplaced misses —
+///   EXPIRING END OF WEEK: (--date a Sunday) what expires at the end of
+///                       that Sunday — "(tonight)" only when run ON it
+///   EXPIRED LAST WEEK:  (--date a Monday) last week's unplaced misses —
 ///                       judged through Saturday (Sunday = rest day)
 final coachDir = '${dump.home}/repos/airledger-fitness/coach';
 
@@ -151,11 +152,13 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  if (date.weekday == DateTime.sunday) {
-    print('\nEXPIRING TONIGHT:');
-    print('(unplaced work expires at the end of ${_label(date)}; next week '
-        'starts clean)');
-    _printMissed(r.missed, withKeys: false);
+  // Keyed off the RUN day vs --date: a Saturday-night run planning
+  // Sunday must not say "tonight".
+  final expiry = expiryLabel(date, DateTime.now());
+  if (expiry != null) {
+    print('\nEXPIRING END OF WEEK:');
+    print('(unplaced work $expiry; next week starts clean)');
+    _printMissed(r.missed, withKeys: false, suffix: ' — $expiry');
   }
   if (date.weekday == DateTime.monday) {
     final lastSunday = DateTime(date.year, date.month, date.day - 1);
@@ -169,7 +172,7 @@ Future<void> main(List<String> args) async {
 /// Missed lines: the compact prompt line, then the exact keys a moves
 /// block must copy (from_date = the program's ORIGINAL day, which is
 /// what program_moves keys on).
-void _printMissed(MissedWork mw, {bool withKeys = true}) {
+void _printMissed(MissedWork mw, {bool withKeys = true, String suffix = ''}) {
   if (mw.isEmpty) {
     print('none');
     return;
@@ -178,7 +181,7 @@ void _printMissed(MissedWork mw, {bool withKeys = true}) {
   for (var i = 0; i < mw.missed.length; i++) {
     final m = mw.missed[i];
     final moved = m.day == m.home ? '' : ' (moved from ${_label(m.home)})';
-    print('${lines[i]}$moved');
+    print('${lines[i]}$moved$suffix');
     if (withKeys) {
       print('    item="${m.item.name}" from_date=${_ymd(m.home)} '
           'period=${m.item.period.isEmpty ? '-' : m.item.period}');

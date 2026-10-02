@@ -80,6 +80,16 @@ const _wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 String _dayLabel(DateTime d) => '${_wd[d.weekday - 1]} ${d.month}/${d.day}';
 
+/// The nightly's expiry wording for a planning [target] planned on
+/// [runDay] (spec §3: unplaced work expires at the end of Sunday). Null
+/// unless [target] is a Sunday — a Saturday-night run planning Sunday
+/// says "expires end of Sun 10/4"; a Sunday run adds "(tonight)".
+String? expiryLabel(DateTime target, DateTime runDay) {
+  if (target.weekday != DateTime.sunday) return null;
+  final tonight = dayOnly(runDay) == dayOnly(target);
+  return 'expires end of ${_dayLabel(target)}${tonight ? ' (tonight)' : ''}';
+}
+
 /// Scheme without parentheticals, whitespace-collapsed, capped at 24
 /// chars; '' (no parens at all) when nothing remains.
 String _schemePart(String scheme) {

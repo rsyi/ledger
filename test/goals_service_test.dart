@@ -371,6 +371,29 @@ phases:
       expect(r.status, GoalStatus.partial);
     });
 
+    test('I1: a Kaya export on D+1 folds into a Whoop climb on D — one '
+        'session, not two', () {
+      final whoopDay = inWeek; // Mon 2026-09-28
+      final kayaDayPlus1 = inWeek.add(const Duration(days: 1)); // Tue 09-29
+      final r = evaluateGoals(
+        configs: const [GoalConfig(id: 'climbing', target: 2)],
+        inputs: GoalInputs(
+          climbingDates: [kayaDayPlus1],
+          activities: [
+            WhoopActivity(
+              date: whoopDay,
+              sport: 'rock-climbing',
+              kind: ActivityKind.climb,
+            ),
+          ],
+        ),
+        today: today,
+        weekStartDay: satStart,
+      ).single;
+      expect(r.value, '1/2 sessions');
+      expect(r.status, GoalStatus.partial);
+    });
+
     test('cardio 1/1 → met, 0/1 → unmet', () {
       GoalEval eval(List<DateTime> dates) => evaluateGoals(
             configs: const [GoalConfig(id: 'cardio_4x4', target: 1)],

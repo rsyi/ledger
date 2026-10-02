@@ -533,13 +533,14 @@ List<GoalEval> evaluateGoals({
 
       case 'climbing':
         // Whoop says a climb happened even when Kaya hasn't exported
-        // yet; counting distinct DAYS means a day in both counts once.
-        final sessions = <DateTime>{
-          for (final d in inputs.climbingDates)
-            if (inWeek(d)) _day(d),
-          for (final d in whoopClimbDays(inputs.activities))
-            if (inWeek(d)) d,
-        }.length;
+        // yet; climbDaysUnion (I1) also folds a Kaya D+1 export into a
+        // Whoop climb on D — Kaya's export date can be the UTC date, so
+        // an evening session would otherwise count twice. Filter to the
+        // accounting week AFTER the fold.
+        final sessions = climbDaysUnion(
+          inputs.climbingDates,
+          whoopClimbDays(inputs.activities),
+        ).where(inWeek).length;
         final t = (c.target ?? 2).round();
         out.add(GoalEval(
           config: c,

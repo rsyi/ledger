@@ -114,17 +114,20 @@ bool isZone2Run(
     a.avgHr! <= maxHr * maxAvgPct;
 
 /// True when nothing else in the app records this session: a climb with
-/// no Kaya ascents that day, a lift with no logged strength sets that day,
-/// and every other kind (never logged in-app).
+/// no Kaya ascents that day, a lift with no logged strength sets that
+/// day, a run/other with no logged cardio row that day (M1), and a walk
+/// (never logged in-app).
 bool isUnlogged(
   WhoopActivity a, {
   required Set<DateTime> strengthDays,
   required Set<DateTime> climbDays,
+  Set<DateTime> cardioDays = const {},
 }) =>
     switch (a.kind) {
       ActivityKind.climb => !climbDays.contains(a.date),
       ActivityKind.lift => !strengthDays.contains(a.date),
-      _ => true,
+      ActivityKind.run || ActivityKind.other => !cardioDays.contains(a.date),
+      ActivityKind.walk => true,
     };
 
 /// Distinct local days with a Whoop climb.
@@ -132,6 +135,27 @@ Set<DateTime> whoopClimbDays(Iterable<WhoopActivity> acts) => {
       for (final a in acts)
         if (a.kind == ActivityKind.climb) a.date,
     };
+
+/// Distinct climbing days from Kaya ascent dates ∪ Whoop climb days.
+/// A Kaya day K is folded into a Whoop climb on K-1 when K itself has no
+/// Whoop climb (Kaya's export date can be the UTC date — an evening
+/// session would otherwise count twice).
+Set<DateTime> climbDaysUnion(
+  Iterable<DateTime> kayaDates,
+  Set<DateTime> whoopDays,
+) {
+  final out = <DateTime>{...whoopDays};
+  for (final k in kayaDates) {
+    final day = DateTime(k.year, k.month, k.day);
+    if (whoopDays.contains(day)) {
+      out.add(day);
+      continue;
+    }
+    final prev = day.subtract(const Duration(days: 1));
+    out.add(whoopDays.contains(prev) ? prev : day);
+  }
+  return out;
+}
 
 /// A prescribed climbing item. The prose parser puts "PM: Climb — …" as
 /// name "PM" + scheme "Climb — …", so match on both.

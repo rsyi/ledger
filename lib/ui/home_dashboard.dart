@@ -559,11 +559,14 @@ class HomeDashboardState extends State<HomeDashboard> {
     }
   }
 
-  /// Climbing ledger → ascent dates, plus Whoop climb days. Errors /
-  /// missing plumbing degrade to an empty list (the strip's climb count
-  /// falls back to the row).
+  /// Climbing ledger → ascent dates, unioned with Whoop climb days via
+  /// [climbDaysUnion] (I1 — folds a Kaya D+1 export into a Whoop climb on
+  /// D, since Kaya's export date can be the UTC date and an evening
+  /// session would otherwise count twice). Errors / missing plumbing
+  /// degrade to an empty list (the strip's climb count falls back to the
+  /// row).
   Future<List<DateTime>> _loadClimbDates() async {
-    final out = <DateTime>[];
+    final kaya = <DateTime>[];
     try {
       if (widget.climbingRepo != null && widget.climbingView != null) {
         for (final r
@@ -572,19 +575,18 @@ class HomeDashboardState extends State<HomeDashboard> {
           final d = raw is DateTime
               ? raw
               : DateTime.tryParse(raw?.toString() ?? '');
-          if (d != null) out.add(d);
+          if (d != null) kaya.add(d);
         }
       }
     } catch (_) {/* honest: Whoop-only */}
-    // Whoop climbs (Kaya exports lag ~weekly) — distinct-day counting
-    // downstream dedups a day present in both.
+    var whoopDays = const <DateTime>{};
     if (widget.workoutsRepo != null && widget.workoutsView != null) {
       try {
-        out.addAll(whoopClimbDays(whoopActivitiesFromRecords(
-            await widget.workoutsRepo!.list(widget.workoutsView!))));
+        whoopDays = whoopClimbDays(whoopActivitiesFromRecords(
+            await widget.workoutsRepo!.list(widget.workoutsView!)));
       } catch (_) {/* honest: Kaya-only */}
     }
-    return out;
+    return climbDaysUnion(kaya, whoopDays).toList();
   }
 
   /// Accounting-week start day (program.yaml v7 `week_start` —

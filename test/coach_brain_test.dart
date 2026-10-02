@@ -235,4 +235,52 @@ void main() {
     expect(s, contains('2026-09-28 weightlifting · strain 11.8'));
     expect(s, isNot(contains('11.8 [unlogged]')));
   });
+
+  test('activity section (I1): a Kaya climbing day D+1 counts a Whoop '
+      'climb on D as logged (Kaya/Whoop date-skew fold)', () async {
+    final b = brain(
+      rows: {
+        'whoop_workouts': [
+          {'date': DateTime(2026, 9, 12), 'sport': 'rock-climbing',
+            'strain': 10.0},
+        ],
+        'climbing': [
+          {'date': DateTime(2026, 9, 13)}, // Kaya's export date, D+1
+        ],
+      },
+      views: {
+        'whoop_workouts':
+            _view('whoop_workouts', ['date', 'sport', 'strain']),
+        'climbing': _view('climbing', ['date']),
+      },
+    );
+    final s = await b.buildSystemPrompt(today);
+    expect(s, contains('rock-climbing'));
+    expect(s, isNot(contains('rock-climbing \u{b7} strain 10.0 [unlogged]')));
+  });
+
+  test('activity section (M1): a logged cardio row un-flags a same-day '
+      'Whoop run/other; walk stays [unlogged]', () async {
+    final b = brain(
+      rows: {
+        'whoop_workouts': [
+          {'date': DateTime(2026, 9, 12), 'sport': 'running',
+            'strain': 9.0},
+          {'date': DateTime(2026, 9, 12), 'sport': 'walking',
+            'strain': 3.0},
+        ],
+        'cardio': [
+          {'date': DateTime(2026, 9, 12)},
+        ],
+      },
+      views: {
+        'whoop_workouts':
+            _view('whoop_workouts', ['date', 'sport', 'strain']),
+        'cardio': _view('cardio', ['date']),
+      },
+    );
+    final s = await b.buildSystemPrompt(today);
+    expect(s, isNot(contains('running \u{b7} strain 9.0 [unlogged]')));
+    expect(s, contains('walking \u{b7} strain 3.0 [unlogged]'));
+  });
 }

@@ -330,6 +330,7 @@ in a desktop Claude session — you cannot edit files from here.''';
     required Set<DateTime> strengthDays,
     required Set<DateTime> climbDays,
     required DateTime today,
+    Set<DateTime> cardioDays = const {},
   }) {
     final from = DateTime(today.year, today.month, today.day)
         .subtract(const Duration(days: 13));
@@ -349,10 +350,14 @@ in a desktop Claude session — you cannot edit files from here.''';
         if (a.avgHr != null && a.maxHr != null)
           'HR ${a.avgHr!.round()}/${a.maxHr!.round()}',
       ];
-      final flag =
-          isUnlogged(a, strengthDays: strengthDays, climbDays: climbDays)
-              ? ' [unlogged]'
-              : '';
+      final flag = isUnlogged(
+        a,
+        strengthDays: strengthDays,
+        climbDays: climbDays,
+        cardioDays: cardioDays,
+      )
+          ? ' [unlogged]'
+          : '';
       lines.add('- ${parts.join(' \u{b7} ')}$flag');
     }
     if (lines.isEmpty) return null;
@@ -384,10 +389,20 @@ in a desktop Claude session — you cannot edit files from here.''';
         };
       }
 
+      // I1: a Whoop climb on day D counts as logged when Kaya has D OR
+      // D+1 — Kaya's export date can be the UTC date, so an evening
+      // local-day session can land a day late in the export. Expand
+      // each Kaya day k to {k, k-1} so a Whoop climb on k-1 matches.
+      final kayaDays = await days('climbing');
+      final expandedClimbDays = <DateTime>{
+        for (final k in kayaDays) ...[k, k.subtract(const Duration(days: 1))],
+      };
+
       return renderActivitySection(
         activities: acts,
         strengthDays: await days('strength'),
-        climbDays: await days('climbing'),
+        climbDays: expandedClimbDays,
+        cardioDays: await days('cardio'),
         today: today,
       );
     } catch (_) {

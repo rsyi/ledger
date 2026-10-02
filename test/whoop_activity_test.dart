@@ -96,6 +96,40 @@ void main() {
     );
   });
 
+  group('climbDaysUnion (I1 — Kaya/Whoop date skew)', () {
+    test('Kaya D+1 folds into a Whoop climb on D (no double count)', () {
+      final union = climbDaysUnion(
+        [DateTime(2026, 10, 2)], // Kaya exported the UTC date, D+1
+        {DateTime(2026, 10, 1)}, // Whoop has the local-day climb, D
+      );
+      expect(union, {DateTime(2026, 10, 1)});
+      expect(union.length, 1);
+    });
+
+    test('Kaya D+1 does NOT fold when Whoop also has a climb on D+1 '
+        '(two real sessions stay two)', () {
+      final union = climbDaysUnion(
+        [DateTime(2026, 10, 2)],
+        {DateTime(2026, 10, 1), DateTime(2026, 10, 2)},
+      );
+      expect(union, {DateTime(2026, 10, 1), DateTime(2026, 10, 2)});
+      expect(union.length, 2);
+    });
+
+    test('a Kaya day with no Whoop climb at all (D or D-1) stays itself', () {
+      final union = climbDaysUnion([DateTime(2026, 10, 5)], const {});
+      expect(union, {DateTime(2026, 10, 5)});
+    });
+
+    test('Kaya dates are normalized to local midnight', () {
+      final union = climbDaysUnion(
+        [DateTime(2026, 10, 1, 23, 45)],
+        {DateTime(2026, 10, 1)},
+      );
+      expect(union, {DateTime(2026, 10, 1)});
+    });
+  });
+
   test('creditClimbItems ticks the PM climb item with strain', () {
     final items = parsePrescribedProse(
         null, 'PM: Climb — LIGHT session (technique/volume).');

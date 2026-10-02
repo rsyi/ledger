@@ -25,6 +25,7 @@ import '../services/log_now.dart';
 import '../services/plan_store.dart';
 import '../services/sheets_repository.dart';
 import '../services/warehouse_connector.dart';
+import '../services/working_sets.dart' show warmupIndices;
 import '../services/week_planner.dart' show WeekPlanner;
 import 'chat_screen.dart';
 import 'form_screen.dart';
@@ -1983,6 +1984,12 @@ class _RecordTile extends StatelessWidget {
     }
   }
 
+  /// A warm-up row: a planned program ramp row (stamped `set_type:
+  /// warmup` by the week planner) or a logged set tagged warmup. Muted +
+  /// "warm-up" tag so ramps read differently from working sets.
+  bool get isWarmup =>
+      item.values['set_type']?.toString().trim().toLowerCase() == 'warmup';
+
   @override
   Widget build(BuildContext context) {
     final subtitle = _subtitleFor(view, item.values);
@@ -2019,13 +2026,30 @@ class _RecordTile extends StatelessWidget {
                   child: Icon(Icons.check_circle,
                       size: 22, color: Colors.green),
                 )),
-      title: Text(_titleFor(view, item.values)),
+      title: isWarmup
+          ? Row(
+              children: [
+                const _WarmupTag(),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    _titleFor(view, item.values),
+                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            )
+          : Text(_titleFor(view, item.values)),
       subtitle: (subtitle == null && llmResponse == null && !llmPending)
           ? null
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (subtitle != null) Text(subtitle),
+                if (subtitle != null)
+                  Text(
+                    subtitle,
+                    style: isWarmup ? TextStyle(color: scheme.outline) : null,
+                  ),
                 if (llmPending)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
@@ -2182,7 +2206,16 @@ class _CompletedSection extends StatelessWidget {
   /// Keys of each exercise's best set in this day's logged rows — the
   /// history panel's "day top" (top_metric score, e.g. e1rm), grouped by
   /// the view's history dimension. Empty when the view declares neither.
-  Set<String> _bestKeys() {
+  /// Keys of the logged warm-up sets (working_sets.dart's shared rule:
+  /// set_type warmup, or an untagged ramp set). Strength-shaped views
+  /// only (an `exercise` dim) — elsewhere nothing is a warm-up.
+  Set<String> _warmupKeys() {
+    if (view.dimensionByName('exercise') == null) return const {};
+    final rows = [for (final it in items) it.isBatch ? null : it.logged];
+    return {for (final i in warmupIndices(rows)) items[i].keyString};
+  }
+
+  Set<String> _bestKeys(Set<String> warmups) {
     if (view.topMetric == null) return const {};
     String? groupField;
     for (final d in view.dimensions) {
@@ -2198,7 +2231,10 @@ class _CompletedSection extends StatelessWidget {
       final row = it.isBatch ? null : it.logged;
       final g = row?[groupField]?.toString().trim().toLowerCase();
       groups.add(g == null || g.isEmpty ? null : g);
-      scores.add(row == null ? null : scoreTopMetric(view, row));
+      // Warm-ups never compete for the day's best set.
+      scores.add(row == null || warmups.contains(it.keyString)
+          ? null
+          : scoreTopMetric(view, row));
     }
     return {
       for (final i in bestIndicesPerGroup(groups, scores)) items[i].keyString,
@@ -2208,7 +2244,8 @@ class _CompletedSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final best = _bestKeys();
+    final warmups = _warmupKeys();
+    final best = _bestKeys(warmups);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2236,6 +2273,7 @@ class _CompletedSection extends StatelessWidget {
             selected: selectedKeys.contains(item.keyString),
             expanded: expandedKeys.contains(item.keyString),
             isBest: best.contains(item.keyString),
+            isWarmup: warmups.contains(item.keyString),
             readOnly: readOnly,
             onTap: () => onTap(item),
             onEdit: () => onEdit(item),
@@ -2271,6 +2309,10 @@ class _CompactLoggedTile extends StatelessWidget {
   /// history panel's day-top row.
   final bool isBest;
 
+  /// A warm-up set (shared working_sets rule) — rendered muted with a
+  /// "warm-up" tag so it reads differently from working sets.
+  final bool isWarmup;
+
   /// When true, swipe-to-delete is hidden and the Edit/Move panel is
   /// suppressed. Long-press still does nothing because onLongPress is a
   /// no-op at that point.
@@ -2292,6 +2334,7 @@ class _CompactLoggedTile extends StatelessWidget {
     required this.selected,
     required this.expanded,
     this.isBest = false,
+    this.isWarmup = false,
     required this.onTap,
     required this.onEdit,
     required this.onMove,
@@ -2366,13 +2409,24 @@ class _CompactLoggedTile extends StatelessWidget {
                               size: 14, color: scheme.primary),
                         ),
                       ),
+                    if (isWarmup)
+                      const WidgetSpan(
+                        alignment: PlaceholderAlignment.middle,
+                        child: Padding(
+                          padding: EdgeInsets.only(right: 6),
+                          child: _WarmupTag(),
+                        ),
+                      ),
                     TextSpan(
                       text: title,
                       style: TextStyle(
                         fontSize: 14,
-                        fontWeight:
-                            isBest ? FontWeight.w700 : FontWeight.w500,
-                        color: isBest ? scheme.onPrimaryContainer : null,
+                        fontWeight: isBest
+                            ? FontWeight.w700
+                            : (isWarmup ? FontWeight.w400 : FontWeight.w500),
+                        color: isBest
+                            ? scheme.onPrimaryContainer
+                            : (isWarmup ? scheme.onSurfaceVariant : null),
                       ),
                     ),
                     if (subtitle != null)
@@ -2382,7 +2436,9 @@ class _CompactLoggedTile extends StatelessWidget {
                           fontSize: 13,
                           color: isBest
                               ? scheme.onPrimaryContainer
-                              : scheme.onSurfaceVariant,
+                              : (isWarmup
+                                  ? scheme.outline
+                                  : scheme.onSurfaceVariant),
                         ),
                       ),
                   ],
@@ -2672,3 +2728,30 @@ class _InProgressBanner extends StatelessWidget {
   }
 }
 
+
+/// Small muted "warm-up" chip marking ramp sets (planned and logged) in
+/// the timeline, so they read differently from working sets.
+class _WarmupTag extends StatelessWidget {
+  const _WarmupTag();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Text(
+        'warm-up',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+          color: scheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+}

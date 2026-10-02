@@ -7,6 +7,7 @@ import '../../models/view_schema.dart';
 import '../../services/list_display_render.dart';
 import '../../services/sheets_repository.dart';
 import '../../services/warehouse_connector.dart';
+import '../../services/working_sets.dart' show warmupIndices;
 import 'chart_bottom_axis.dart';
 import 'chart_range.dart';
 import 'pinned_tooltip_line_chart.dart';
@@ -163,8 +164,17 @@ class _HistorySheetState extends State<_HistorySheet> {
                         ),
                       );
                     }
+                    // Warm-ups (working_sets.dart's shared rule) never
+                    // count toward the day's max tint / trend point.
+                    final warmups =
+                        widget.view.dimensionByName('exercise') == null
+                            ? const <int>{}
+                            : warmupIndices(rows);
                     final scores = [
-                      for (final r in rows) scoreTopMetric(widget.view, r),
+                      for (var i = 0; i < rows.length; i++)
+                        warmups.contains(i)
+                            ? null
+                            : scoreTopMetric(widget.view, rows[i]),
                     ];
                     final dayMaxes = _computeDayMaxScores(
                       rows: rows,

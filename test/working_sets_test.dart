@@ -90,4 +90,35 @@ void main() {
       expect(out, hasLength(1));
     });
   });
+
+  group('warmupIndices (timeline best-set + history day-max)', () {
+    test('indexes the same sets workingSetRecords drops; nulls skipped', () {
+      final rows = <Map<String, Object?>?>[
+        {'date': '2026-09-28', 'exercise': 'Bench Press', 'weight': 95},
+        null, // e.g. a batch tile with no single row
+        {'date': '2026-09-28', 'exercise': 'Bench Press', 'weight': 225,
+            'rpe': 8},
+        {'date': '2026-09-28', 'exercise': 'Bench Press', 'weight': 135,
+            'set_type': 'warmup', 'reps': 1},
+        {'date': '2026-09-28', 'exercise': 'Pull-up'},
+        {'date': '2026-09-28', 'exercise': 'Squat', 'weight': 100,
+            'set_type': 'heavy'},
+      ];
+      expect(warmupIndices(rows), {0, 3});
+      final kept = workingSetRecords([for (final r in rows) ?r]);
+      expect(kept, hasLength(3));
+    });
+
+    test('a tagged warm-up never sets the ramp baseline', () {
+      // A (mis)tagged 315 warm-up must not make the unrated 225 a ramp.
+      expect(
+        warmupIndices([
+          {'date': '2026-09-28', 'exercise': 'Squat', 'weight': 225},
+          {'date': '2026-09-28', 'exercise': 'Squat', 'weight': 315,
+              'set_type': 'warmup'},
+        ]),
+        {1},
+      );
+    });
+  });
 }

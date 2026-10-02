@@ -66,43 +66,55 @@ String _dayKey(Object? v) {
   return d == null ? '' : '${d.year}-${d.month}-${d.day}';
 }
 
-/// [rows] (strength records: `date`, `exercise`, `weight`, `rpe`,
-/// `set_type`; DateTime/num or Sheets strings) minus warm-ups, in input
-/// order. "Day top" / "lightest rated" = over rows of the same exercise
-/// (case-insensitive) on the same calendar day.
-List<Map<String, Object?>> workingSetRecords(
-  Iterable<Map<String, Object?>> rows,
-) {
-  final list = rows.toList();
+/// Indices of the warm-up sets in [rows] (strength records: `date`,
+/// `exercise`, `weight`, `rpe`, `set_type`; DateTime/num or Sheets
+/// strings). "Day top" / "lightest rated" = over the NON-tagged-warm-up
+/// rows of the same exercise (case-insensitive) on the same calendar
+/// day. Null rows (e.g. a timeline batch tile) are skipped. Shared by
+/// [workingSetRecords], the timeline's best-set highlight and the
+/// history panel's day-max tint — one warm-up definition everywhere.
+Set<int> warmupIndices(List<Map<String, Object?>?> rows) {
   String key(Map<String, Object?> r) =>
       '${_dayKey(r['date'])}|'
       '${(r['exercise'] ?? '').toString().trim().toLowerCase()}';
   final top = <String, double>{};
   final minRated = <String, double>{};
-  for (final r in list) {
+  for (final r in rows) {
+    if (r == null) continue;
     final w = _num(r['weight']);
     if (w == null || w <= 0) continue;
+    final warm = r['set_type']?.toString().trim().toLowerCase() == 'warmup';
+    if (warm) continue;
     final k = key(r);
     if (w > (top[k] ?? double.negativeInfinity)) top[k] = w;
     final rpe = _num(r['rpe']);
-    final warm = r['set_type']?.toString().trim().toLowerCase() == 'warmup';
-    if (!warm &&
-        rpe != null &&
-        rpe >= 6 &&
-        w < (minRated[k] ?? double.infinity)) {
+    if (rpe != null && rpe >= 6 && w < (minRated[k] ?? double.infinity)) {
       minRated[k] = w;
     }
   }
+  return {
+    for (var i = 0; i < rows.length; i++)
+      if (rows[i] != null &&
+          isWarmupSet(
+            setType: rows[i]!['set_type']?.toString(),
+            weight: _num(rows[i]!['weight']),
+            rpe: _num(rows[i]!['rpe']),
+            dayTopWeight: top[key(rows[i]!)],
+            dayMinRatedWeight: minRated[key(rows[i]!)],
+          ))
+        i,
+  };
+}
+
+/// [rows] minus warm-ups ([warmupIndices]), in input order.
+List<Map<String, Object?>> workingSetRecords(
+  Iterable<Map<String, Object?>> rows,
+) {
+  final list = rows.toList();
+  final warm = warmupIndices(list);
   return [
-    for (final r in list)
-      if (!isWarmupSet(
-        setType: r['set_type']?.toString(),
-        weight: _num(r['weight']),
-        rpe: _num(r['rpe']),
-        dayTopWeight: top[key(r)],
-        dayMinRatedWeight: minRated[key(r)],
-      ))
-        r,
+    for (var i = 0; i < list.length; i++)
+      if (!warm.contains(i)) list[i],
   ];
 }
 

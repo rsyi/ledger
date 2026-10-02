@@ -131,6 +131,21 @@ bool? _wantsTop(PrescribedItem item) {
   return null;
 }
 
+const _equipmentWords = {
+  'barbell', 'dumbbell', 'cable', 'machine', 'ez', 'bar', 'smith', 'flat',
+  'seated', 'standing',
+};
+
+bool _addsMeaningfulWord(String line, String item) {
+  final words = line
+      .toLowerCase()
+      .replaceAll('-', ' ')
+      .split(RegExp(r'[^a-z]+'))
+      .where((w) => w.length > 1 && !_equipmentWords.contains(w));
+  return words.any((w) => sharedTokenCount(w, item) == 0 &&
+      sharedTokenCount(w, w) > 0);
+}
+
 int _extraTokens(String line, String item) =>
     sharedTokenCount(line, line) - sharedTokenCount(line, item);
 
@@ -215,7 +230,11 @@ String itemLineText(SessionLine line, PrescribedItem item, {double? tm}) {
   final full = formatSessionLine(line, tm: tm);
   final keepName = RegExp(r'\s+or\s+', caseSensitive: false)
           .hasMatch(item.name) ||
-      !loggedCoversPrescribed(line.exercise, item.name);
+      !loggedCoversPrescribed(line.exercise, item.name) ||
+      // Also keep it when the line adds a MEANINGFUL word the item lacks
+      // ("Handstand Hold" under "Handstand practice") — equipment words
+      // ("Dumbbell", "Barbell", "Cable") don't count.
+      _addsMeaningfulWord(exerciseDisplayName(line.exercise), item.name);
   if (keepName) return full;
   final prefix = '${exerciseDisplayName(line.exercise)} ';
   return full.startsWith(prefix) ? full.substring(prefix.length) : full;

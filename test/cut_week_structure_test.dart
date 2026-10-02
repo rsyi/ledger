@@ -20,7 +20,8 @@
 //      Fri  deadlift heavy + bench volume + light climb
 //      Sat  press heavy + OHP back-offs + seated cable row + pull-ups +
 //           laterals + face pulls + external rotations
-//      Sun  rest.
+//      Sun  rest — optional easy zone-2 run (prose only, v15 2026-10-01;
+//           never planned, never a missed session).
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -164,10 +165,19 @@ void main() {
     expect(summary, contains('press heavy'));
   });
 
-  test('Sun: rest — no rows, empty template', () {
+  test(
+      'Sun: rest — no planned rows (optional zone-2 run is prose only, '
+      'v15)', () {
+    // v15 (2026-10-01): cut Sunday gained an OPTIONAL easy zone-2 run —
+    // prose only, never planned (no `planned` rows) and never a missed
+    // session.
     expect(dayRows(6), isEmpty);
     final slice = programCurrent(program, null, monday.add(const Duration(days: 6)))!;
-    expect(slice.todayTemplate['morning'], isNull);
+    expect(
+      slice.todayTemplate['morning'],
+      'Optional: easy zone-2 run, 30-45 min (nice to have; Whoop detects '
+      'it — no logging needed).',
+    );
     expect(slice.todayTemplate['afternoon'], isNull);
   });
 

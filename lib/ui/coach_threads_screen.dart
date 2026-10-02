@@ -12,6 +12,12 @@ import '../services/sync_scheduler.dart';
 import '../services/warehouse_connector.dart';
 import 'coach_chat_screen.dart';
 
+/// The route that opens the threads list. The screen is its own
+/// Scaffold with the one app bar (back + "+" new thread) — never wrap it
+/// in another Scaffold/AppBar.
+Route<void> coachThreadsRoute(CoachThreadsScreen screen) =>
+    MaterialPageRoute<void>(builder: (_) => screen);
+
 /// Thread list over the synced `coach_chat` view: rows grouped by their
 /// `thread` dimension (blank = the pre-threads `general` history), one
 /// tile per thread with title, last-message preview, relative time, and

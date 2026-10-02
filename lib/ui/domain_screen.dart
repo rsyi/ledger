@@ -396,7 +396,7 @@ class _TrendsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(domain.name),
+        title: Text(domain.displayName),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -701,7 +701,7 @@ class _DomainRecordsScreenState extends State<_DomainRecordsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.domain.name),
+        title: Text(widget.domain.displayName),
         actions: [
           IconButton(
             icon: const Icon(Icons.calendar_month_outlined),

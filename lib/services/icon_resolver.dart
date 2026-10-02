@@ -63,6 +63,9 @@ class IconResolver {
     'book': LucideIcons.book,
     'book-open': LucideIcons.bookOpen,
     'notebook': LucideIcons.notebook,
+    'notebook-pen': LucideIcons.notebookPen,
+    'notebook-text': LucideIcons.notebookText,
+    'pen-line': LucideIcons.penLine,
     'file-text': LucideIcons.fileText,
     'database': LucideIcons.database,
     'table': LucideIcons.table,
@@ -91,6 +94,12 @@ class IconResolver {
     final lucide = _lucideByName[v];
     if (lucide != null) {
       return Icon(lucide, size: size, color: color);
+    }
+    // An unmapped lucide-style NAME (ascii, kebab-case) is a missing map
+    // entry, not an emoji — rendering it as text drew a clipped "no" for
+    // `notebook-pen`. Show the fallback glyph instead.
+    if (RegExp(r'^[a-z][a-z0-9-]+$').hasMatch(v)) {
+      return Icon(fallback, size: size, color: color);
     }
     // Fallback: render as text (emoji or arbitrary unicode).
     return SizedBox(

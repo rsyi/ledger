@@ -7,12 +7,14 @@ import '../models/view_schema.dart';
 import '../services/autocomplete_cache.dart';
 import '../services/bodyweight_cache.dart';
 import '../services/derive.dart';
+import '../services/display_names.dart';
 import '../services/sheets_repository.dart';
 import '../services/video_attach.dart';
 import '../services/video_draft_store.dart';
 import '../services/video_file_store.dart';
 import '../services/video_rpe.dart';
 import '../services/warehouse_connector.dart';
+import 'design/design.dart';
 import 'widgets/field_widgets.dart';
 import 'widgets/history_panel.dart';
 
@@ -498,14 +500,14 @@ class _FormScreenState extends State<FormScreen> {
           children.add(chip);
         }
       }
-      children.add(const SizedBox(height: 12));
+      children.add(const SizedBox(height: AppSpace.sectionGap));
     }
     if (_saving) {
       children.add(const Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
       appBar: AppBar(
-        title: Text('$titlePrefix ${widget.view.name}'),
+        title: Text('$titlePrefix ${viewLabel(widget.view.name).toLowerCase()}'),
         actions: [
           IconButton(
             icon: const Icon(Icons.check),
@@ -515,7 +517,7 @@ class _FormScreenState extends State<FormScreen> {
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpace.gutter),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: children,
@@ -635,14 +637,14 @@ class _FormScreenState extends State<FormScreen> {
       if (_repeatFields.contains(dim.name)) {
         for (var i = 0; i < _repeats.length; i++) {
           if (isMissing(_repeats[i][dim.name])) {
-            missing.add('${rg!.label} #${i + 1}: ${dim.name}');
+            missing.add('${rg!.label} #${i + 1}: ${fieldLabel(dim.name)}');
             newMissingRequired.add('block-$i-${dim.name}');
           }
         }
       } else {
         if (!dim.isVisibleGiven(_shared, widget.view.groups)) continue;
         if (isMissing(_shared[dim.name])) {
-          missing.add(dim.name);
+          missing.add(fieldLabel(dim.name));
           newMissingRequired.add(dim.name);
         }
       }

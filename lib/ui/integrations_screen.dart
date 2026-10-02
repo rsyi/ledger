@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/integrations/integration.dart';
 import '../services/integrations/registry.dart';
 import '../services/sync_scheduler.dart';
+import 'design/design.dart';
 
 /// Integrations page — one card per source: status, Connect/Sync
 /// now, and an overflow with Full reconcile / Disconnect. (Training
@@ -28,15 +29,14 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Integrations')),
       body: ListView(
+        padding: const EdgeInsets.only(top: 4),
         children: [
-          for (final it in integrations) ...[
+          for (final it in integrations)
             _IntegrationCard(
                 integration: it,
                 onChanged: () {
                   if (mounted) setState(() {});
                 }),
-            const Divider(height: 1),
-          ],
         ],
       ),
     );
@@ -89,8 +89,16 @@ class _IntegrationCardState extends State<_IntegrationCard> {
           future: it.statusLine,
           builder: (context, s) => Text(s.data ?? '…'),
         );
-        return ListTile(
-          title: Text('${it.displayName} ${it.targetDescription}'),
+        // Shared row pattern: status mark · name + target (meta) · one
+        // status line below · Sync now + ⋮.
+        return ExerciseRow(
+          name: it.displayName,
+          meta: it.targetDescription,
+          status: !it.isConfigured
+              ? ItemStatus.muted
+              : connected
+                  ? ItemStatus.done
+                  : ItemStatus.pending,
           subtitle: guided == null
               ? statusText
               : ValueListenableBuilder<String?>(

@@ -7,7 +7,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../models/view_schema.dart';
 import '../../services/heart_rate_service.dart';
 import '../../services/hr_session.dart';
+import '../../services/display_names.dart';
 import '../../services/video_ref.dart';
+import '../design/design.dart';
 import 'hr_max_dialog.dart';
 import 'video_preview.dart';
 
@@ -166,9 +168,11 @@ WidgetType _widgetForType(DimensionType t) {
   }
 }
 
+/// Field label: the humanized field name (services/display_names.dart)
+/// plus ` *` when required.
 String _labelFor(Dimension dim) {
   final required = dim.input?.required == true ? ' *' : '';
-  return '${dim.name}$required';
+  return '${fieldLabel(dim.name)}$required';
 }
 
 class _TextFieldWidget extends StatefulWidget {
@@ -243,7 +247,9 @@ class _TextFieldWidgetState extends State<_TextFieldWidget> {
       decoration: InputDecoration(
         labelText: _labelFor(widget.dim),
         hintText: widget.dim.input?.placeholder,
-        helperText: widget.dim.description,
+        helperText: fieldHelp(widget.dim),
+        helperMaxLines: 1,
+        isDense: true,
         border: const OutlineInputBorder(),
         prefixIcon: widget.isTimerLinked
             ? Icon(Icons.timer_outlined, size: 18, color: scheme.primary)
@@ -333,14 +339,16 @@ class _NumberFieldWidgetState extends State<_NumberFieldWidget> {
     final input = widget.dim.input;
     final history = widget.onShowHistory;
     final scheme = Theme.of(context).colorScheme;
-    return TextField(
+    final field = TextField(
       controller: _controller,
       focusNode: _focusNode,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       decoration: InputDecoration(
         labelText: _labelFor(widget.dim),
         hintText: input?.placeholder,
-        helperText: widget.dim.description,
+        helperText: fieldHelp(widget.dim),
+        helperMaxLines: 1,
+        isDense: true,
         border: const OutlineInputBorder(),
         prefixIcon: widget.isTimerLinked
             ? Icon(Icons.timer_outlined, size: 18, color: scheme.primary)
@@ -362,8 +370,47 @@ class _NumberFieldWidgetState extends State<_NumberFieldWidget> {
         widget.onChanged(n);
       },
     );
+    if (!isRpeField(widget.dim)) return field;
+    // RPE quick picks (6 … 10 by halves) under the field — one tap
+    // instead of the numeric keyboard; typing still works.
+    final current = num.tryParse(_controller.text.trim());
+    String? selected;
+    for (final o in kRpeQuickPicks) {
+      if (current != null && num.parse(o) == current) selected = o;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        field,
+        const SizedBox(height: 6),
+        QuickPicks(
+          options: kRpeQuickPicks,
+          selected: selected,
+          expand: true,
+          onSelected: (o) {
+            _controller.text = o ?? '';
+            widget.onChanged(o == null ? null : num.parse(o));
+            setState(() {});
+          },
+        ),
+      ],
+    );
   }
 }
+
+/// RPE quick-pick values (6 … 10 by halves).
+const List<String> kRpeQuickPicks = [
+  '6', '6.5', '7', '7.5', '8', '8.5', '9', '9.5', '10', //
+];
+
+/// True for the per-set RPE field (strength + calisthenics `rpe`).
+bool isRpeField(Dimension dim) => dim.name == 'rpe';
+
+/// Dropdowns with at most this many options render as quick-pick chips
+/// (set type, cardio type, calisthenics skill, meal slot) — every option
+/// visible, one tap. Longer lists keep the dropdown.
+const int kMaxChipOptions = 6;
 
 class _DateFieldWidget extends StatelessWidget {
   final Dimension dim;
@@ -392,7 +439,9 @@ class _DateFieldWidget extends StatelessWidget {
       child: InputDecorator(
         decoration: InputDecoration(
           labelText: _labelFor(dim),
-          helperText: dim.description,
+          helperText: fieldHelp(dim),
+          helperMaxLines: 1,
+          isDense: true,
           border: const OutlineInputBorder(),
         ),
         child: Row(
@@ -499,7 +548,9 @@ class _AutocompleteFieldWidget extends StatelessWidget {
           decoration: InputDecoration(
             labelText: _labelFor(dim),
             hintText: dim.input?.placeholder,
-            helperText: dim.description,
+            helperText: fieldHelp(dim),
+            helperMaxLines: 1,
+            isDense: true,
             border: const OutlineInputBorder(),
             suffixIcon: history == null
                 ? null
@@ -594,11 +645,33 @@ class _DropdownFieldWidget extends StatelessWidget {
     final options = dim.input?.options ?? dim.samples ?? const <String>[];
     final current = value?.toString();
     final history = onShowHistory;
-    final field = DropdownButtonFormField<String>(
+    final Widget field = options.isNotEmpty &&
+            options.length <= kMaxChipOptions
+        ? InputDecorator(
+            isEmpty: false,
+            decoration: InputDecoration(
+              labelText: _labelFor(dim),
+              helperText: fieldHelp(dim),
+              helperMaxLines: 1,
+              isDense: true,
+              border: const OutlineInputBorder(),
+              contentPadding: const EdgeInsets.fromLTRB(12, 14, 12, 10),
+            ),
+            child: QuickPicks(
+              options: options,
+              selected: options.contains(current) ? current : null,
+              // Required choices can be switched but not cleared.
+              allowClear: dim.input?.required != true,
+              onSelected: onChanged,
+            ),
+          )
+        : DropdownButtonFormField<String>(
       initialValue: options.contains(current) ? current : null,
       decoration: InputDecoration(
         labelText: _labelFor(dim),
-        helperText: dim.description,
+        helperText: fieldHelp(dim),
+        helperMaxLines: 1,
+        isDense: true,
         border: const OutlineInputBorder(),
       ),
       items: options
@@ -674,7 +747,9 @@ class _SwitchFieldWidget extends StatelessWidget {
     return InputDecorator(
       decoration: InputDecoration(
         labelText: _labelFor(dim),
-        helperText: dim.description,
+        helperText: fieldHelp(dim),
+        helperMaxLines: 1,
+        isDense: true,
         border: const OutlineInputBorder(),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -828,7 +903,9 @@ class _VideoFieldWidgetState extends State<_VideoFieldWidget> {
     return InputDecorator(
       decoration: InputDecoration(
         labelText: _labelFor(widget.dim),
-        helperText: widget.dim.description,
+        helperText: fieldHelp(widget.dim),
+        helperMaxLines: 1,
+        isDense: true,
         border: const OutlineInputBorder(),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1237,7 +1314,9 @@ class _TimerFieldWidgetState extends State<_TimerFieldWidget> {
             decoration: InputDecoration(
               labelText: _labelFor(widget.dim),
               hintText: widget.dim.input?.placeholder,
-              helperText: widget.dim.description,
+              helperText: fieldHelp(widget.dim),
+              helperMaxLines: 1,
+              isDense: true,
               filled: true,
               fillColor: Theme.of(context).scaffoldBackgroundColor,
               border: const OutlineInputBorder(),

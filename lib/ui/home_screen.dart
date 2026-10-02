@@ -19,6 +19,9 @@ import '../services/sync_scheduler.dart';
 import '../services/engine_schema_adapter.dart';
 import 'widgets/sync_status_button.dart';
 import 'widgets/today_status_card.dart';
+import 'widgets/log_list_row.dart';
+import 'design/components.dart' show SectionHeader;
+import '../services/display_names.dart';
 import 'integrations_screen.dart';
 import '../services/heart_rate_service.dart';
 import '../services/integrations/gmail_gateway.dart';
@@ -36,7 +39,6 @@ import '../services/coach_brain.dart';
 import '../services/day_synthesis_service.dart';
 import '../services/domain_config.dart';
 import '../services/github_client.dart';
-import '../services/icon_resolver.dart';
 import '../services/llm_client.dart';
 import '../services/llm_response_cache.dart';
 import '../services/notification_service.dart';
@@ -1190,19 +1192,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               void openCoachThreads() {
                 final view = coachView;
                 if (view == null) return;
+                // The threads screen owns its app bar (back + "+") —
+                // no wrapping Scaffold (that drew a double "Coach" bar).
                 Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => Scaffold(
-                      appBar: AppBar(title: const Text('Coach')),
-                      body: CoachThreadsScreen(
-                        view: view,
-                        repository: data.registry.forView(view),
-                        ledger: coachLedger,
-                        brain: coachBrain,
-                        openTimeline: openCoachTimeline,
-                        programMovesView: programMovesView,
-                        programMovesRepository: programMovesRepo,
-                      ),
+                  coachThreadsRoute(
+                    CoachThreadsScreen(
+                      view: view,
+                      repository: data.registry.forView(view),
+                      ledger: coachLedger,
+                      brain: coachBrain,
+                      openTimeline: openCoachTimeline,
+                      programMovesView: programMovesView,
+                      programMovesRepository: programMovesRepo,
                     ),
                   ),
                 );
@@ -1975,85 +1976,46 @@ class _DomainSectionsState extends State<_DomainSections> {
       final tile = _domainTile(context, d, view);
       (d.paradigm == DomainParadigm.integration ? connected : log).add(tile);
     }
-    // Unclaimed views keep their old row shape under LOG.
+    // Unclaimed views get the same row under LOG — except internal
+    // plumbing (program_moves is edited via the program card).
     for (final v in [...widget.entryViews, ...widget.readOnlyViews]) {
-      if (!claimed.contains(v.name)) log.add(_viewTile(context, v));
+      if (claimed.contains(v.name) || kHiddenLogViews.contains(v.name)) {
+        continue;
+      }
+      log.add(_viewTile(context, v));
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (log.isNotEmpty) ...[_sectionHeader(context, 'Log'), ...log],
+        if (log.isNotEmpty) ...[const SectionHeader(label: 'Log'), ...log],
         if (connected.isNotEmpty) ...[
-          _sectionHeader(context, 'Connected'),
+          const SectionHeader(label: 'Connected'),
           ...connected,
         ],
       ],
     );
   }
 
-  Widget _sectionHeader(BuildContext context, String text) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 2),
-      child: Text(text.toUpperCase(), style: AppText.title(context)),
-    );
-  }
-
   Widget _domainTile(BuildContext context, DomainConfig d, ViewSchema view) {
-    final scheme = Theme.of(context).colorScheme;
-    // Today's program call for this domain (badge), keyed by the domain's
-    // primary view name.
-    final call = _today.byView[view.name];
-    final waiting = _today.waiting.contains(view.name);
-    return ListTile(
-      leading: IconResolver.resolve(
-        d.icon ?? view.icon,
-        size: 22,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
-      title: Text(d.name),
-      subtitle: call == null
-          ? (view.description == null
-              ? null
-              : Text(
-                  view.description!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ))
-          : Text(
-              waiting ? 'Today: $call · waiting to log' : 'Today: $call',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
-            ),
-      trailing: const Icon(Icons.chevron_right),
+    // Today's program call for this domain (accent subtitle), keyed by
+    // the domain's primary view name.
+    return LogListRow(
+      label: d.displayName,
+      icon: d.icon ?? view.icon,
+      todayCall: _today.byView[view.name],
+      waiting: _today.waiting.contains(view.name),
+      summary: d.description,
+      description: view.description,
       onTap: () => widget.onOpenDomain(d, view),
     );
   }
 
-  /// Dense row for a view the config doesn't claim — same shape the
-  /// Ledgers expandable used.
+  /// Row for a view the config doesn't claim (and every fallback row).
   Widget _viewTile(BuildContext context, ViewSchema view) {
-    return ListTile(
-      dense: true,
-      visualDensity: VisualDensity.compact,
-      contentPadding: const EdgeInsets.only(left: 28, right: 16),
-      leading: IconResolver.resolve(
-        view.icon,
-        size: 20,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
-      title: Text(view.name),
-      subtitle: view.description == null
-          ? null
-          : Text(
-              view.description!,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-      trailing: const Icon(Icons.chevron_right),
+    return LogListRow(
+      label: viewLabel(view.name),
+      icon: view.icon,
+      description: view.description,
       onTap: () => widget.onOpenView(view),
     );
   }
@@ -2074,7 +2036,8 @@ class _DomainSectionsState extends State<_DomainSections> {
       shape: const Border(),
       collapsedShape: const Border(),
       children: [
-        for (final view in widget.entryViews) _viewTile(context, view),
+        for (final view in widget.entryViews)
+          if (!kHiddenLogViews.contains(view.name)) _viewTile(context, view),
         if (widget.readOnlyViews.isNotEmpty) ...[
           Padding(
             padding: const EdgeInsets.fromLTRB(28, 8, 16, 2),

@@ -139,6 +139,11 @@ class ExerciseRow extends StatelessWidget {
   /// Selection tint.
   final bool selected;
 
+  /// Optional second line under the name/meta line, in the meta style,
+  /// one line, ellipsized (Integrations' status line). A widget so it
+  /// can be a FutureBuilder / ValueListenableBuilder.
+  final Widget? subtitle;
+
   const ExerciseRow({
     super.key,
     required this.name,
@@ -152,6 +157,7 @@ class ExerciseRow extends StatelessWidget {
     this.muted = false,
     this.highlighted = false,
     this.selected = false,
+    this.subtitle,
   });
 
   @override
@@ -206,6 +212,16 @@ class ExerciseRow extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     text,
+                    if (subtitle != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: DefaultTextStyle.merge(
+                          style: metaStyle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          child: subtitle!,
+                        ),
+                      ),
                     if (chips.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       Wrap(
@@ -237,6 +253,120 @@ class ExerciseRow extends StatelessWidget {
       child: Material(
         type: MaterialType.transparency,
         child: InkWell(onTap: onTap, onLongPress: onLongPress, child: body),
+      ),
+    );
+  }
+}
+
+/// Single-select quick-pick chips (RPE 6…10, set type). Tapping the
+/// selected chip again clears it when [allowClear]. [expand] lays the
+/// options out as one equal-width row (short numeric labels); otherwise
+/// they wrap.
+class QuickPicks extends StatelessWidget {
+  final List<String> options;
+  final String? selected;
+  final ValueChanged<String?> onSelected;
+  final bool expand;
+  final bool allowClear;
+
+  const QuickPicks({
+    super.key,
+    required this.options,
+    required this.selected,
+    required this.onSelected,
+    this.expand = false,
+    this.allowClear = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final chips = [
+      for (final o in options)
+        _QuickPickChip(
+          label: o,
+          selected: o == selected,
+          onTap: () {
+            if (o == selected) {
+              if (allowClear) onSelected(null);
+            } else {
+              onSelected(o);
+            }
+          },
+        ),
+    ];
+    if (expand) {
+      return Row(
+        children: [
+          for (var i = 0; i < chips.length; i++) ...[
+            if (i > 0) const SizedBox(width: 4),
+            Expanded(child: chips[i]),
+          ],
+        ],
+      );
+    }
+    return Wrap(
+      spacing: AppSpace.chip,
+      runSpacing: AppSpace.chip,
+      children: chips,
+    );
+  }
+}
+
+class _QuickPickChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _QuickPickChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final radius = BorderRadius.circular(AppRadius.chip);
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: Material(
+        color: selected
+            ? scheme.primaryContainer
+            : scheme.surfaceContainerHighest,
+        shape: RoundedRectangleBorder(
+          borderRadius: radius,
+          side: selected
+              ? BorderSide(color: scheme.primary, width: 1.2)
+              : BorderSide.none,
+        ),
+        child: InkWell(
+          borderRadius: radius,
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 32),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Center(
+                widthFactor: 1,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.visible,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    color: selected
+                        ? scheme.onPrimaryContainer
+                        : scheme.onSurface,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -503,9 +633,9 @@ class DetailSheet extends StatelessWidget {
                         const SizedBox(width: AppSpace.leadGap + 4),
                         Text(
                           a.label,
-                          style: AppText.row(context).copyWith(
-                            color: a.destructive ? problem : null,
-                          ),
+                          style: AppText.row(
+                            context,
+                          ).copyWith(color: a.destructive ? problem : null),
                         ),
                       ],
                     ),

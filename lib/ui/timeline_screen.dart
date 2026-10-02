@@ -14,6 +14,7 @@ import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
 import '../services/day_best.dart';
 import '../services/derive.dart';
+import '../services/display_names.dart';
 import '../services/qbo_push_store.dart';
 import '../services/qbo_service.dart';
 import '../services/row_cache.dart';
@@ -1069,7 +1070,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
 
   AppBar _buildNormalAppBar() {
     return AppBar(
-      title: Text(widget.view.name),
+      title: Text(viewLabel(widget.view.name)),
       // Kiosk mode: timeline is the root screen, no back button.
       automaticallyImplyLeading: !widget.kioskMode,
       actions: [

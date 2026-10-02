@@ -20,6 +20,7 @@ library;
 
 import 'package:yaml/yaml.dart';
 
+import 'display_names.dart';
 import 'doc_cache.dart';
 
 /// Repo path of the presentation config.
@@ -115,6 +116,14 @@ class DomainListField {
 /// One domain: a home row + a domain screen.
 class DomainConfig {
   final String name;
+
+  /// Human display name (yaml `label: Daily notes`). Null → the
+  /// humanized [name] (see [displayName]).
+  final String? label;
+
+  /// Short Log-list subtitle (yaml `description:`). Null → the primary
+  /// view's description, cut to its first clause.
+  final String? description;
   final DomainParadigm paradigm;
 
   /// View names — the FIRST backs the domain screen's timeline body.
@@ -138,6 +147,8 @@ class DomainConfig {
 
   const DomainConfig({
     required this.name,
+    this.label,
+    this.description,
     required this.paradigm,
     required this.views,
     this.icon,
@@ -145,6 +156,13 @@ class DomainConfig {
     this.headline = const [],
     this.listFields = const [],
   });
+
+  /// What the UI shows: the declared `label`, else `daily_notes` →
+  /// "Daily notes".
+  String get displayName {
+    final l = label?.trim();
+    return l == null || l.isEmpty ? viewLabel(name) : l;
+  }
 
   /// The view backing the domain screen's timeline.
   String? get primaryView => views.isEmpty ? null : views.first;
@@ -184,6 +202,8 @@ List<DomainConfig>? parseDomainConfigs(String? raw) {
     out.add(
       DomainConfig(
         name: name,
+        label: d['label']?.toString(),
+        description: d['description']?.toString(),
         paradigm: d['paradigm']?.toString() == 'integration'
             ? DomainParadigm.integration
             : DomainParadigm.entry,

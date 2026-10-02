@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/services/program_metrics.dart'
     show GradedSet, SetTier;
 import 'package:airledger/services/goals_service.dart';
+import 'package:airledger/services/whoop_activity.dart';
 
 // ---------------------------------------------------------------------------
 // Fixtures — Saturday accounting weeks (program week_start: saturday). Today
@@ -391,5 +392,84 @@ phases:
     );
     expect(r.length, 1);
     expect(r.single.config.id, 'climbing');
+  });
+
+  group('whoop activity goals', () {
+    // Tuesday 2026-09-29; Monday-start week = Sep 28 .. Oct 4.
+    final today = DateTime(2026, 9, 29);
+    WhoopActivity act(ActivityKind k, DateTime d,
+            {double avg = 120, double dur = 40}) =>
+        WhoopActivity(
+            date: d, sport: k.name, kind: k, avgHr: avg, durationMin: dur);
+
+    test('climbing counts Whoop ∪ Kaya days once', () {
+      final evals = evaluateGoals(
+        configs: [const GoalConfig(id: 'climbing', target: 2)],
+        inputs: GoalInputs(
+          climbingDates: [DateTime(2026, 9, 28)],
+          activities: [
+            act(ActivityKind.climb, DateTime(2026, 9, 28)), // same day
+            act(ActivityKind.climb, DateTime(2026, 9, 29)),
+          ],
+        ),
+        today: today,
+      );
+      expect(evals.single.value, '2/2 sessions');
+      expect(evals.single.status, GoalStatus.met);
+    });
+
+    test('zone2_run met by an easy run', () {
+      final evals = evaluateGoals(
+        configs: [const GoalConfig(id: 'zone2_run', optional: true)],
+        inputs: GoalInputs(
+          maxHr: 200,
+          activities: [act(ActivityKind.run, DateTime(2026, 9, 28))],
+        ),
+        today: today,
+      );
+      expect(evals.single.status, GoalStatus.met);
+      expect(evals.single.value, '1/1 run');
+    });
+
+    test('optional unmet renders as optional, not unmet', () {
+      final evals = evaluateGoals(
+        configs: [const GoalConfig(id: 'zone2_run', optional: true)],
+        inputs: GoalInputs(
+          maxHr: 200,
+          activities: [
+            act(ActivityKind.run, DateTime(2026, 9, 28), avg: 170), // hard
+          ],
+        ),
+        today: today,
+      );
+      expect(evals.single.status, GoalStatus.optional);
+      expect(evals.single.detail, 'nice to have');
+    });
+
+    test('no max HR → unknown with a hint', () {
+      final evals = evaluateGoals(
+        configs: [const GoalConfig(id: 'zone2_run')],
+        inputs: const GoalInputs(),
+        today: today,
+      );
+      expect(evals.single.status, GoalStatus.unknown);
+      expect(evals.single.value, 'set max HR');
+    });
+
+    test('parseGoals reads optional + zone-2 keys', () {
+      final g = parseGoals('''
+phases:
+  cut:
+    goals:
+      - id: zone2_run
+        optional: true
+        target: 1
+        min_minutes: 25
+        max_avg_hr_pct: 0.7
+''')!['cut']!.single;
+      expect(g.optional, isTrue);
+      expect(g.minMinutes, 25);
+      expect(g.maxAvgHrPct, 0.7);
+    });
   });
 }

@@ -338,6 +338,7 @@ Color _statusColor(BuildContext context, GoalStatus s) {
     GoalStatus.partial => Colors.amber.shade700,
     GoalStatus.unmet => scheme.error,
     GoalStatus.unknown => scheme.outline,
+    GoalStatus.optional => scheme.outline,
   };
 }
 
@@ -346,6 +347,7 @@ String _statusWord(GoalStatus s) => switch (s) {
       GoalStatus.partial => 'Getting there',
       GoalStatus.unmet => 'Off track',
       GoalStatus.unknown => 'No data',
+      GoalStatus.optional => 'Nice to have',
     };
 
 class _StatusDot extends StatelessWidget {
@@ -359,6 +361,7 @@ class _StatusDot extends StatelessWidget {
       GoalStatus.partial => Icons.timelapse,
       GoalStatus.unmet => Icons.cancel,
       GoalStatus.unknown => Icons.help_outline,
+      GoalStatus.optional => Icons.radio_button_unchecked,
     };
     return Icon(icon, size: 20, color: _statusColor(context, status));
   }

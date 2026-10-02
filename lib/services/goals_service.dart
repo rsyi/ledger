@@ -27,8 +27,10 @@
 ///                    per-lift "accessories done" check: did that lift's
 ///                    associated accessories (declared in the config,
 ///                    derived from the routine) get hit this week.
-///   4. climbing      distinct climb-session days vs a weekly target.
+///   4. climbing      distinct climb-session days (Whoop ∪ Kaya, counted
+///                    once) vs a weekly target.
 ///   5. cardio_4x4    distinct 4x4 cardio days vs a weekly target.
+///   6. zone2_run     easy runs (Whoop) vs a weekly target — usually optional.
 ///
 /// Declared under app/dashboards.yaml `phases:` → `<phase>:` → `goals:`;
 /// absent → [parseGoals] returns null and the GOALS screen shows a
@@ -38,6 +40,7 @@ library;
 import 'package:yaml/yaml.dart';
 
 import 'program_metrics.dart' show GradedSet, weekStartOf;
+import 'whoop_activity.dart';
 
 // ---------------------------------------------------------------------------
 // Config (dashboards.yaml phases.<phase>.goals)
@@ -90,8 +93,19 @@ class GoalConfig {
   /// listed accessory has ≥ 1 logged set this week.
   final Map<String, List<String>> accessories;
 
-  // --- climbing / cardio_4x4 ---
+  // --- climbing / cardio_4x4 / zone2_run ---
   final double? target;
+
+  /// A "nice to have" goal: unmet renders [GoalStatus.optional] (neutral),
+  /// never the red unmet state.
+  final bool optional;
+
+  // --- zone2_run ---
+  /// Minimum run length in minutes (default 20).
+  final double? minMinutes;
+
+  /// Max average HR as a fraction of the user's max HR (default 0.75).
+  final double? maxAvgHrPct;
 
   const GoalConfig({
     required this.id,
@@ -107,6 +121,9 @@ class GoalConfig {
     this.hardRpeMin,
     this.accessories = const {},
     this.target,
+    this.optional = false,
+    this.minMinutes,
+    this.maxAvgHrPct,
   });
 }
 
@@ -169,6 +186,9 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
                 }
               : const {},
           target: (gg['target'] as num?)?.toDouble(),
+          optional: gg['optional'] == true,
+          minMinutes: (gg['min_minutes'] as num?)?.toDouble(),
+          maxAvgHrPct: (gg['max_avg_hr_pct'] as num?)?.toDouble(),
         ),
       );
     }
@@ -186,7 +206,8 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
 ///          state (also the calorie band's "close but not quite").
 /// unmet    no progress / a floor breached — the red state.
 /// unknown  can't be evaluated (no data, no target in force).
-enum GoalStatus { met, partial, unmet, unknown }
+/// optional  a nice-to-have goal not (yet) met — neutral, never red.
+enum GoalStatus { met, partial, unmet, unknown, optional }
 
 /// One per-lift tick (hard_sets: sets toward the target + accessory done).
 class GoalLiftTick {
@@ -239,6 +260,7 @@ class GoalEval {
     'hard_sets': 'Hard sets per lift',
     'climbing': 'Climbing',
     'cardio_4x4': 'Cardio',
+    'zone2_run': 'Zone-2 run',
   };
 
   String get label => config.label ?? _defaultLabels[config.id] ?? config.id;
@@ -282,6 +304,12 @@ class GoalInputs {
   /// Distinct 4x4 cardio dates (caller applies the type filter).
   final List<DateTime> cardioDates;
 
+  /// Whoop activities (whoop_activity.dart) — climbing credit + zone-2.
+  final List<WhoopActivity> activities;
+
+  /// The user's max HR (meta `user_max_hr`). Null → zone-2 can't judge.
+  final double? maxHr;
+
   const GoalInputs({
     this.graded = const [],
     this.strengthRows = const [],
@@ -293,6 +321,8 @@ class GoalInputs {
     this.maintenanceKcal,
     this.climbingDates = const [],
     this.cardioDates = const [],
+    this.activities = const [],
+    this.maxHr,
   });
 }
 
@@ -502,9 +532,13 @@ List<GoalEval> evaluateGoals({
         ));
 
       case 'climbing':
+        // Whoop says a climb happened even when Kaya hasn't exported
+        // yet; counting distinct DAYS means a day in both counts once.
         final sessions = <DateTime>{
           for (final d in inputs.climbingDates)
             if (inWeek(d)) _day(d),
+          for (final d in whoopClimbDays(inputs.activities))
+            if (inWeek(d)) d,
         }.length;
         final t = (c.target ?? 2).round();
         out.add(GoalEval(
@@ -529,12 +563,60 @@ List<GoalEval> evaluateGoals({
           value: '$sessions/$t session${t == 1 ? '' : 's'}',
         ));
 
+      case 'zone2_run':
+        final maxHr = inputs.maxHr;
+        if (maxHr == null || maxHr <= 0) {
+          out.add(GoalEval(
+            config: c,
+            status: GoalStatus.unknown,
+            value: 'set max HR',
+            detail: 'Integrations → Whoop live heart rate',
+          ));
+          break;
+        }
+        final runs = [
+          for (final a in inputs.activities)
+            if (inWeek(a.date) &&
+                isZone2Run(a,
+                    maxHr: maxHr,
+                    minMinutes: c.minMinutes ?? 20,
+                    maxAvgPct: c.maxAvgHrPct ?? 0.75))
+              a,
+        ];
+        final days = {for (final a in runs) a.date}.length;
+        final t = (c.target ?? 1).round();
+        final last = runs.isEmpty ? null : runs.last;
+        out.add(GoalEval(
+          config: c,
+          status: days >= t
+              ? GoalStatus.met
+              : days > 0
+                  ? GoalStatus.partial
+                  : GoalStatus.unmet,
+          value: '$days/$t run${t == 1 ? '' : 's'}',
+          detail: last == null
+              ? ''
+              : '${last.durationMin!.round()} min · avg HR ${last.avgHr!.round()}',
+        ));
+
       default:
         // Unknown id — newer config, older app. Skip, never error.
         break;
     }
   }
-  return out;
+  // Optional goals never go red: unmet → the neutral "nice to have".
+  return [
+    for (final e in out)
+      e.config.optional && e.status == GoalStatus.unmet
+          ? GoalEval(
+              config: e.config,
+              status: GoalStatus.optional,
+              value: e.value,
+              detail: e.detail.isEmpty ? 'nice to have' : e.detail,
+              ticks: e.ticks,
+            )
+          : e,
+  ];
 }
 
 /// "1,850 kcal" with a thousands separator.

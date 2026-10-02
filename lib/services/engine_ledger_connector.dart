@@ -97,5 +97,12 @@ class EngineLedgerConnector implements WarehouseConnector {
       recordToEngineJson(record),
     );
     SyncScheduler.instance?.onLocalWrite();
+    // A program_moves delete (proposal Undo / Schedule rollback) changes
+    // the effective week: nudge the program day card + synthesis like a
+    // create would. Other views' deletes stay silent (no post-log
+    // notification for removing a row).
+    if (view.name == 'program_moves') {
+      LogEventBus.instance.publish(LogEvent(view.name, record));
+    }
   }
 }

@@ -640,6 +640,47 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     coach/{goals,routine,metrics,PROMPT}.md` — goals: CUT active;
     routine.md is a DEPRECATED readable fallback (program.yaml `routine:`
     is authoritative; templates retired 2026-09-30).
+- **Missed-work carryover + manual moves (2026-10-02, Part 2; spec/plan
+  docs/superpowers/{specs,plans}/2026-10-02-missed-work-carryover*)**:
+  ONE synced engine view `program_moves` (id, date=TARGET day, from_date,
+  item, period, source manual|coach, created_at, note) relocates program
+  items within a Mon–Sun week; latest row per (from_date, item) wins; a
+  `to == from` row = "back home" (Undo writes one — never delete-only).
+  Pure core: program_week.dart (`prescribedDay`/`prescribedWeek` — the
+  card and week builder share one path; IntentDocs lives in
+  intent_docs.dart so tools can import it without Flutter),
+  program_moves.dart (`activeMoves`, `effectiveWeek` → ghosts "→ Fri" +
+  moved-in "from Wed"), missed_work.dart (`allocateDay` exclusive per-day
+  allocation — ALSO used by the Today card + day synthesis so they agree;
+  pass-2 week-wide spare sets need a STRONG name match
+  `loggedCoversPrescribed`; climb/4x4 = one session per item),
+  working_sets.dart (warm-ups never credit prescribed work: set_type
+  warmup, or untagged + lighter than the day's lightest RPE-rated set /
+  < 75% of top), week_state_loader.dart (one parallel read of strength/
+  whoop/cardio/moves + 30-min Kaya climb-day cache), moves_validation.dart
+  (shared by propose_moves and the nightly: week bounds, to >= today,
+  item must exist on from_date).
+  UI: ProgramDayCard rows get ⋮ Move to… (past days disabled) / Undo
+  move (also on ghost rows); today's card shows MISSED THIS WEEK with
+  Move to…. Coach: `propose_moves` tool → MovesProposal card
+  (`{"v":1,"type":"moves","summary","moves":[{item,from_date,to_date,
+  period,note}]}` in a kind=proposal row; Schedule writes program_moves,
+  disabled when stale). CoachBrain "This week: moves + missed work"
+  section with the placement rules (no lifting Tue, squat/DL apart, ≤1
+  carried main/day, mains first, pain/recovery<34 days off-limits).
+  Nightly: tool/missed_work.dart → `# missed_work`; claude emits one
+  ```moves block; `coach_msg post --kind briefing --split-moves --target`
+  posts the briefing THEN the validated proposal. In-app fallback
+  (carryover_check.dart): ≥06:00, once/day (meta carryover_checked_day),
+  skipped when a briefing/moves proposal with ts ≥ yesterday 18:00 exists,
+  only after a fresh post-resume sync; also runs from the home poller.
+  MCP get_coach_context gained `moves_this_week` (deployed).
+  NIGHTLY WAS DEAD 2026-09-12..10-01 (launchd zsh -lc had no Homebrew
+  PATH → "dart: command not found") — coach_nightly.sh now pins PATH and
+  runs claude with ANTHROPIC_API_KEY unset; briefing-exists compares the
+  planning target derived from ts (`briefing_target.dart`).
+  Prose parser fixes: AM:/PM: label stripped, no ';' split or skip words
+  inside parentheses, ". Accessories:" sentences dropped.
 - **Whoop activity layer (2026-10-01, Part 1; spec/plan in
   docs/superpowers/{specs,plans}/2026-10-01-whoop-activity-layer*)**:
   Whoop is the source of truth that a session HAPPENED (+ strain); Kaya
@@ -805,9 +846,12 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
-- Whoop activity Part 2 (NOT designed yet): missed-exercise detection +
-  carryover/rescheduling into the following days; strain-based load
-  modulation. Separate spec.
+- Part 2 carryover (2026-10-02): NOT yet verified on device — install the
+  built APK, try Move to… / Undo, and watch the first nightly (23:30) for
+  a moves card. Known gaps: same-day loose matching can over-credit
+  (e.g. a Barbell Squat set filling "Bulgarian split squat"); aliases
+  only expand one word cross-day (RDL/BSS); post-cut "4x4 run …" prose
+  yields no item. Strain-based load modulation still not built.
 - Video-attach + AI RPE (2026-09-28): USER one-time GCP setup before
   the attach button goes live — console (ryi-data-entry): enable the
   "Google Photos Picker API"; add scope

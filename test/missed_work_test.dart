@@ -509,4 +509,42 @@ void main() {
           isTrue);
     });
   });
+
+  group('skipped items', () {
+    test('a skipped past item is not missed', () {
+      final mw = detectMissedWork(
+        week: eff(),
+        strengthRows: monTueDone(),
+        climbDays: {d(1)},
+        cardio4x4Days: {d(1)},
+        today: d(3),
+        skipped: {skipKey(d(2), 'Bench top set')},
+      );
+      expect(mw.isEmpty, isTrue);
+    });
+
+    test('a skip on another day does not hide the miss', () {
+      final mw = detectMissedWork(
+        week: eff(),
+        strengthRows: monTueDone(),
+        climbDays: {d(1)},
+        cardio4x4Days: {d(1)},
+        today: d(3),
+        skipped: {skipKey(d(4), 'Bench top set')},
+      );
+      expect(mw.missed.single.item.name, 'Bench top set');
+    });
+
+    test('a moved item skipped on its target day is not missed', () {
+      final mw = detectMissedWork(
+        week: eff([mv('Bench top set', d(2), d(3))]),
+        strengthRows: monTueDone(),
+        climbDays: {d(1)},
+        cardio4x4Days: {d(1)},
+        today: d(4),
+        skipped: {skipKey(d(3), 'Bench top set')},
+      );
+      expect(mw.isEmpty, isTrue);
+    });
+  });
 }

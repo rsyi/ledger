@@ -2,6 +2,12 @@
 /// over the synced `program_moves` view (one row per move; manual from
 /// the program day card or an accepted coach proposal).
 ///
+/// SKIPS (2026-10-02): the same view also carries `source: skip` rows —
+/// an item intentionally skipped on a day (date == from_date == that
+/// day, note = the user's reason). They are NOT moves: [activeMoves]
+/// ignores them entirely (a skip never cancels or creates a move);
+/// [activeSkips] resolves them; Undo skip deletes the row(s).
+///
 /// A move relocates ONE prescribed item instance, keyed by
 /// `from_date + item` (case-insensitive), to `date`. The latest row per
 /// key wins; deleting the row (Undo) puts the item back. Moves whose
@@ -49,7 +55,7 @@ class ProgramMove {
   final DateTime from; // local midnight — the day the program prescribed it
   final String item; // display name
   final String period; // 'AM' | 'PM' | ''
-  final String source; // 'manual' | 'coach'
+  final String source; // 'manual' | 'coach' | 'skip'
   final DateTime? createdAt;
   final String note;
 
@@ -66,6 +72,9 @@ class ProgramMove {
 
   /// `yyyy-mm-dd(from)|item lowercased+trimmed`.
   String get key => '${_ymd(from)}|${_norm(item)}';
+
+  /// An intentional skip (not a move) — see the library doc.
+  bool get isSkip => source.trim().toLowerCase() == skipSource;
 
   /// Tolerant parse of a ledger/Sheets record (dates as DateTime or
   /// strings — "2026-10-02", "2026-10-02 08:00:00", ISO). Null when id,
@@ -102,19 +111,54 @@ class ProgramMove {
       };
 }
 
-/// Latest move per key (by createdAt, then list order — a row without a
-/// createdAt sorts as oldest), restricted to moves whose from AND to fall
-/// in [monday]'s week. A latest row with to == from is "back home": it
-/// yields no active move for that key.
-Map<String, ProgramMove> activeMoves(
+/// `program_moves.source` of a skip row.
+const skipSource = 'skip';
+
+/// Key of a skip: `yyyy-mm-dd(day)|item lowercased+trimmed` — the day the
+/// item was skipped on (its effective day, after moves).
+String skipKey(DateTime day, String item) => '${_ymd(dayOnly(day))}|${_norm(item)}';
+
+/// Skips in [monday]'s Mon–Sun week, keyed by [skipKey] (latest row per
+/// key wins — by createdAt, then list order).
+Map<String, ProgramMove> activeSkips(
     Iterable<ProgramMove> all, DateTime monday) {
   final mon = mondayOf(monday);
-  final inWeek = [
+  final out = <String, ProgramMove>{};
+  for (final m in _byCreated([
     for (final m in all)
-      if (mondayOf(m.from) == mon && mondayOf(m.to) == mon) m,
-  ];
-  // Stable order: createdAt ascending (null first), ties keep list order.
-  final indexed = [for (var i = 0; i < inWeek.length; i++) (i, inWeek[i])];
+      if (m.isSkip && mondayOf(m.to) == mon) m,
+  ])) {
+    out[skipKey(m.to, m.item)] = m;
+  }
+  return out;
+}
+
+/// Every skip row for [item] on [day] — Undo skip deletes them all (a
+/// stale duplicate would otherwise keep the item skipped).
+List<ProgramMove> skipRowsFor(
+        Iterable<ProgramMove> all, DateTime day, String item) =>
+    [
+      for (final m in all)
+        if (m.isSkip && skipKey(m.to, m.item) == skipKey(day, item)) m,
+    ];
+
+/// `- Bench heavy — Wed 9/30: shoulder tweak` per skip (day order), or
+/// `none` — the "SKIPPED THIS WEEK:" body shared by CoachBrain and
+/// tool/missed_work.dart.
+String skippedLines(Map<String, ProgramMove> skips) {
+  if (skips.isEmpty) return 'none';
+  const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  final ss = skips.values.toList()..sort((a, c) => a.to.compareTo(c.to));
+  return [
+    for (final s in ss)
+      '- ${s.item} — ${wd[s.to.weekday - 1]} ${s.to.month}/${s.to.day}: '
+          '${s.note.isEmpty ? '(no reason given)' : s.note}',
+  ].join('\n');
+}
+
+/// Stable order: createdAt ascending (null first), ties keep list order.
+List<ProgramMove> _byCreated(List<ProgramMove> ms) {
+  final indexed = [for (var i = 0; i < ms.length; i++) (i, ms[i])];
   indexed.sort((a, b) {
     final ca = a.$2.createdAt, cb = b.$2.createdAt;
     if (ca != null && cb != null) {
@@ -127,8 +171,23 @@ Map<String, ProgramMove> activeMoves(
     }
     return a.$1.compareTo(b.$1);
   });
+  return [for (final (_, m) in indexed) m];
+}
+
+/// Latest move per key (by createdAt, then list order — a row without a
+/// createdAt sorts as oldest), restricted to moves whose from AND to fall
+/// in [monday]'s week. A latest row with to == from is "back home": it
+/// yields no active move for that key. Skip rows ([ProgramMove.isSkip])
+/// are not moves and are ignored here.
+Map<String, ProgramMove> activeMoves(
+    Iterable<ProgramMove> all, DateTime monday) {
+  final mon = mondayOf(monday);
+  final inWeek = [
+    for (final m in all)
+      if (!m.isSkip && mondayOf(m.from) == mon && mondayOf(m.to) == mon) m,
+  ];
   final latest = <String, ProgramMove>{};
-  for (final (_, m) in indexed) {
+  for (final m in _byCreated(inWeek)) {
     latest[m.key] = m;
   }
   latest.removeWhere((_, m) => m.to == m.from);

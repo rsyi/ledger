@@ -460,6 +460,7 @@ in a desktop Claude session — you cannot edit files from here.''';
     required MissedWork? missed,
     required Map<DateTime, List<EffectiveItem>> week,
     required DateTime today,
+    Map<String, ProgramMove> skips = const {},
   }) {
     const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     String label(DateTime d) => '${wd[d.weekday - 1]} ${d.month}/${d.day}';
@@ -505,6 +506,10 @@ in a desktop Claude session — you cannot edit files from here.''';
     }
     b
       ..writeln()
+      ..writeln('SKIPPED THIS WEEK:');
+    b.writeln(skippedLines(skips));
+    b
+      ..writeln()
       ..writeln('REMAINING DAYS:');
     for (var d = t; !d.isAfter(sun); d = DateTime(d.year, d.month, d.day + 1)) {
       final items = [
@@ -518,10 +523,14 @@ in a desktop Claude session — you cannot edit files from here.''';
       String from(EffectiveItem e) => e.movedFrom == null
           ? ''
           : ' (moved from ${wd[e.movedFrom!.weekday - 1]})';
+      String skipped(EffectiveItem e) {
+        final s = skips[skipKey(d, e.item.name)];
+        return s == null ? '' : ' (SKIPPED${s.note.isEmpty ? '' : ': ${s.note}'})';
+      }
       final parts = [
         for (final e in items)
           '${e.item.period.isEmpty ? '' : '${e.item.period} '}'
-              '${e.item.name}${from(e)}',
+              '${e.item.name}${from(e)}${skipped(e)}',
       ];
       b.writeln('- ${label(d)}: ${parts.join('; ')}');
     }
@@ -533,6 +542,10 @@ in a desktop Claude session — you cannot edit files from here.''';
           'from the missed line (from_date is the program\'s original day, '
           'even if the item was already moved once). One entry per item; '
           'items you let expire are simply left out (say so).')
+      ..writeln('SKIPPED items were skipped on purpose by the user, with the '
+          'stated reason — they are NOT missed: never re-propose them as '
+          'moves; weigh the reason (pain/fatigue → adjust load or recovery '
+          'advice, time/equipment → no action needed).')
       ..write('When something is missed, call propose_moves — never claim '
           "it's moved; the card handles it.");
     return b.toString();
@@ -547,6 +560,7 @@ in a desktop Claude session — you cannot edit files from here.''';
       if (state == null) return null;
       return renderMovesSection(
         moves: state.moves,
+        skips: state.skips,
         missed: state.missed,
         week: state.week,
         today: today,

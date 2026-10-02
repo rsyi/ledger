@@ -40,6 +40,9 @@ class WeekState {
   /// Active moves for the week (latest per key).
   final Map<String, ProgramMove> moves;
 
+  /// The week's intentional skips, keyed by [skipKey] (day|item).
+  final Map<String, ProgramMove> skips;
+
   /// The effective (post-moves) Mon–Sun week.
   final Map<DateTime, List<EffectiveItem>> week;
 
@@ -63,6 +66,7 @@ class WeekState {
     required this.date,
     required this.prescription,
     required this.moves,
+    this.skips = const {},
     required this.week,
     required this.strengthRows,
     required this.loggedOnDate,
@@ -219,11 +223,12 @@ class WeekStateLoader {
     final calisthenicsRows = reads[5] as List<Record>?;
 
     var moves = const <String, ProgramMove>{};
+    var skips = const <String, ProgramMove>{};
     if (moveRows != null) {
       try {
-        moves = activeMoves([
-          for (final r in moveRows) ?ProgramMove.fromRecord(r),
-        ], mon);
+        final all = [for (final r in moveRows) ?ProgramMove.fromRecord(r)];
+        moves = activeMoves(all, mon);
+        skips = activeSkips(all, mon);
       } catch (_) {/* honest: unmoved week */}
     }
     final week = effectiveWeek(prescribedWeek(docs, day, label: label), moves);
@@ -280,6 +285,7 @@ class WeekStateLoader {
         climbDays: climbDaysUnion(kaya, whoopClimbDays(whoop)),
         cardio4x4Days: cardioDays,
         today: day,
+        skipped: skips.keys.toSet(),
       );
     }
 
@@ -288,6 +294,7 @@ class WeekStateLoader {
       date: day,
       prescription: prescription,
       moves: moves,
+      skips: skips,
       week: week,
       strengthRows: strengthRows,
       loggedOnDate: logged,

@@ -339,6 +339,28 @@ void main() {
       expect(s, contains('call propose_moves — never claim'));
     });
 
+    test('lists skipped items with reasons, tags them on remaining days',
+        () {
+      final skip = ProgramMove(
+          id: 's1', from: d(4), to: d(4), item: 'RDL', period: 'PM',
+          source: 'skip', note: 'low back tight');
+      final s = CoachBrain.renderMovesSection(
+        moves: const {},
+        skips: {skipKey(d(4), 'RDL'): skip},
+        missed: MissedWork(missed: const [], remainingDays: [d(3)]),
+        week: {
+          d(4): [EffectiveItem(item: rdl, home: d(4))],
+        },
+        today: thu,
+      );
+      expect(s, contains('SKIPPED THIS WEEK:\n- RDL — Fri 10/2: low back tight'));
+      expect(s, contains('- Fri 10/2: PM RDL (SKIPPED: low back tight)'));
+      expect(s, contains('NOT missed'));
+      final none = CoachBrain.renderMovesSection(
+        moves: const {}, missed: null, week: const {}, today: thu);
+      expect(none, contains('SKIPPED THIS WEEK:\nnone'));
+    });
+
     test('none / unknown when nothing moved or no strength log', () {
       final s = CoachBrain.renderMovesSection(
         moves: const {},

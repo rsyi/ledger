@@ -29,6 +29,8 @@ import 'coach_dump.dart' as dump;
 ///   MISSED THIS WEEK:   one line per item + the exact item name /
 ///                       from_date / period a ```moves block must copy
 ///   MOVES THIS WEEK:    active moves (item: Wed 9/30 → Fri 10/2 (source))
+///   SKIPPED THIS WEEK:  items the user skipped on purpose + the reason
+///                       (program_moves source=skip — never missed)
 ///   REMAINING DAYS:     each day --date..Sun with its effective items
 ///   EXPIRING END OF WEEK: (--date a Sunday) what expires at the end of
 ///                       that Sunday — "(tonight)" only when run ON it
@@ -101,8 +103,10 @@ Future<void> main(List<String> args) async {
   );
 
   ({MissedWork missed, Map<String, ProgramMove> moves,
+      Map<String, ProgramMove> skips,
       Map<DateTime, List<EffectiveItem>> week}) evaluate(DateTime today) {
     final moves = activeMoves(allMoves, mondayOf(today));
+    final skips = activeSkips(allMoves, mondayOf(today));
     final week = effectiveWeek(prescribedWeek(docs, today), moves);
     final missed = detectMissedWork(
       week: week,
@@ -110,8 +114,9 @@ Future<void> main(List<String> args) async {
       climbDays: climbDays,
       cardio4x4Days: cardioDays,
       today: today,
+      skipped: skips.keys.toSet(),
     );
-    return (missed: missed, moves: moves, week: week);
+    return (missed: missed, moves: moves, skips: skips, week: week);
   }
 
   final r = evaluate(date);
@@ -134,6 +139,10 @@ Future<void> main(List<String> args) async {
     }
   }
 
+  print('\nSKIPPED THIS WEEK:');
+  print('(skipped on purpose by the user — NOT missed; never re-propose)');
+  print(skippedLines(r.skips));
+
   print('\nREMAINING DAYS:');
   for (final d in r.missed.remainingDays) {
     final items = [
@@ -148,7 +157,9 @@ Future<void> main(List<String> args) async {
     for (final e in items) {
       final tag =
           e.movedFrom == null ? '' : ' (moved from ${_wd[e.movedFrom!.weekday - 1]})';
-      print('    ${_itemLine(e.item)}$tag');
+      final skip = r.skips[skipKey(d, e.item.name)];
+      final skipTag = skip == null ? '' : ' (SKIPPED: ${skip.note})';
+      print('    ${_itemLine(e.item)}$tag$skipTag');
     }
   }
 

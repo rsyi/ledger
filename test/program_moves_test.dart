@@ -300,4 +300,52 @@ void main() {
       expect([for (final x in e[d(3)]!) x.item.name], ['Squat', 'Press']);
     });
   });
+
+  group('skips (source "skip")', () {
+    test('isSkip is case-insensitive on source', () {
+      expect(mv('Bench', from: d(2), to: d(2), source: 'Skip').isSkip, isTrue);
+      expect(mv('Bench', from: d(2), to: d(4)).isSkip, isFalse);
+    });
+
+    test('a skip row never cancels a move of the same key', () {
+      final moves = activeMoves([
+        mv('Bench', from: d(2), to: d(4), id: 'a', at: DateTime(2026, 9, 29)),
+        mv('Bench', from: d(2), to: d(2), id: 'b', source: 'skip',
+            at: DateTime(2026, 9, 30)),
+      ], mon);
+      expect(moves.values.single.to, d(4));
+    });
+
+    test('a skip row never creates a move', () {
+      expect(
+          activeMoves([
+            mv('Bench', from: d(2), to: d(2), source: 'skip'),
+          ], mon),
+          isEmpty);
+    });
+
+    test('activeSkips: in-week skips keyed day|item, latest wins', () {
+      final s = activeSkips([
+        mv('Bench', from: d(2), to: d(2), id: 'a', source: 'skip',
+            at: DateTime(2026, 9, 30, 8)),
+        mv('bench ', from: d(2), to: d(2), id: 'b', source: 'skip',
+            at: DateTime(2026, 9, 30, 9)),
+        mv('Squat', from: d(-7), to: d(-7), id: 'c', source: 'skip'),
+        mv('Press', from: d(5), to: d(5), id: 'm'), // a move, not a skip
+      ], mon);
+      expect(s.keys, ['2026-09-30|bench']);
+      expect(s.values.single.id, 'b');
+      expect(skipKey(d(2), ' BENCH'), '2026-09-30|bench');
+    });
+
+    test('skipsFor returns every row of the key (undo deletes all)', () {
+      final rows = [
+        mv('Bench', from: d(2), to: d(2), id: 'a', source: 'skip'),
+        mv('Bench', from: d(2), to: d(2), id: 'b', source: 'skip'),
+        mv('Bench', from: d(2), to: d(4), id: 'm'),
+      ];
+      expect([for (final r in skipRowsFor(rows, d(2), 'bench')) r.id],
+          ['a', 'b']);
+    });
+  });
 }

@@ -16,13 +16,15 @@
 ///     item. Same order: today, own day, then any spare climb day.
 ///   * 4x4 items (name/scheme mentions "4x4") — same, vs cardio 4x4 days.
 /// Ghost entries (moved-out origins) never count. Optional prose yields
-/// no item upstream, so it can never be missed.
+/// no item upstream, so it can never be missed. SKIPPED items (a
+/// `program_moves` skip row on the item's effective day — [skipKey])
+/// never count either: intentionally skipped is not missed.
 ///
 /// Pure: no Flutter/IO imports.
 library;
 
 import 'prescribed_exercises.dart';
-import 'program_moves.dart' show EffectiveItem;
+import 'program_moves.dart' show EffectiveItem, skipKey;
 import 'program_week.dart' show dayOnly, mondayOf;
 import 'whoop_activity.dart' show isClimbItem;
 
@@ -200,12 +202,15 @@ class _Slot {
 
 /// Detects missed work for [today]'s Mon–Sun week. [strengthRows] is one
 /// entry per logged set; [climbDays] is Part 1's `climbDaysUnion`.
+/// [skipped] holds [skipKey]s (day|item) of intentionally skipped items —
+/// they take no slot (not missed, claim no sets).
 MissedWork detectMissedWork({
   required Map<DateTime, List<EffectiveItem>> week,
   required List<({DateTime date, String exercise})> strengthRows,
   required Set<DateTime> climbDays,
   required Set<DateTime> cardio4x4Days,
   required DateTime today,
+  Set<String> skipped = const {},
 }) {
   final t = dayOnly(today);
   final mon = mondayOf(t);
@@ -225,6 +230,7 @@ MissedWork detectMissedWork({
       if (dayOnly(entry.key) != day) continue;
       for (final e in entry.value) {
         if (e.isGhost) continue;
+        if (skipped.contains(skipKey(day, e.item.name))) continue;
         slots.add(_Slot(e, day, _kindOf(e.item)));
       }
     }

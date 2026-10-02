@@ -189,11 +189,20 @@ void main() {
       find.textContaining('Declared cut (target −0.75 lb/week)'),
       findsOneWidget,
     );
-    expect(find.byKey(const ValueKey('sim2-bw-chart')), findsOneWidget);
-    expect(find.byKey(const ValueKey('forecast-bw-summary')), findsOneWidget);
+    // Frozen phase projections lead (no snapshot store here → the
+    // live-model fallback, labelled); the rolling outlook sits in Model
+    // details.
+    expect(find.byKey(const ValueKey('projection-card-bodyweight')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('projection-none-bodyweight')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('projection-card-body_fat')),
+        findsOneWidget);
     expect(find.byKey(const ValueKey('nutrition-card')), findsOneWidget);
     expect(find.byKey(const ValueKey('nutrition-empty')), findsOneWidget);
-    expect(find.byKey(const ValueKey('sim2-bf-chart')), findsOneWidget);
+    expect(find.byKey(const ValueKey('sim2-bw-chart')), findsNothing);
+    expect(find.byKey(const ValueKey('forecast-model-details')),
+        findsOneWidget);
     expect(find.text('ABOUT THIS PHASE'), findsOneWidget);
     expect(find.text('Exit: 154 lb or Wilks floor breached'), findsOneWidget);
     expect(find.textContaining('Target 154'), findsNothing);
@@ -214,9 +223,11 @@ void main() {
     expect(find.text('Bench 200 lb'), findsOneWidget);
     expect(find.text('Deadlift 315 lb'), findsOneWidget);
     expect(find.textContaining(' points'), findsNWidgets(3));
-    expect(find.byKey(const ValueKey('sim2-summary')), findsOneWidget);
-    expect(find.byKey(const ValueKey('sim2-capacity-toggle')),
+    expect(find.byKey(const ValueKey('projection-card-strength_total')),
         findsOneWidget);
+    // The rolling outlook ("Staying on this program, by …") moved into
+    // Model details (collapsed).
+    expect(find.byKey(const ValueKey('sim2-summary')), findsNothing);
     expect(find.text('Model details'), findsOneWidget);
     expect(find.text('Climbing'), findsOneWidget);
     expect(find.text('VO2 max'), findsOneWidget);
@@ -334,8 +345,13 @@ void main() {
       final tmOld = tester.getTopLeft(find.text('starting value')).dy;
       expect(tmTop, lessThan(tmOld));
 
-      // Projection for this lift + the end of the current block.
+      // Projection for this lift: the frozen card (live fallback here —
+      // no snapshot store), the rolling outlook behind Model details.
       expect(find.text('PROJECTION'), findsOneWidget);
+      expect(find.byKey(const ValueKey('projection-card-e1rm_squat')),
+          findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('lift-model-details')));
+      await tester.pumpAndSettle();
       expect(
         tester
             .widget<Text>(find.byKey(const ValueKey('lift-projection')))

@@ -930,7 +930,14 @@ Future<void> main(List<String> args) async {
     final currentN =
         calendar == null ? null : sim2CurrentBlockN(calendar, now);
     final existing = parseProjectionSnapshots(snapshotValues);
-    if (calendar == null || currentN == null) {
+    if (!projectionTabHeaderOk(snapshotValues)) {
+      // Refuse: appending below a missing/garbled header row would bake
+      // the damage in (program_moves lost its header to the A1-append
+      // gotcha). Repair the tab's row 1 by hand, then re-run.
+      print('projection_snapshots: REFUSED — row 1 is not the expected '
+          'header ${projectionSnapshotHeaders.join(',')}; repair the tab '
+          'before appending');
+    } else if (calendar == null || currentN == null) {
       print('projection_snapshots: skipped (no block calendar / before '
           'the first block)');
     } else if (!snapshotNeededForBlock(existing, currentN)) {

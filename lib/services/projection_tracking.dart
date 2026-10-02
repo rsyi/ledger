@@ -170,8 +170,9 @@ Map<String, double?> projectionActualsAt({
   return {
     ProjectionMetric.bodyweight: bodyweightActualAt(weighIns, day),
     ProjectionMetric.bodyFat: bodyFatActualAt(bodyFat, day),
-    ProjectionMetric.strengthTotal:
-        s == null || b == null || d == null ? null : s + b + d,
+    ProjectionMetric.strengthTotal: s == null || b == null || d == null
+        ? null
+        : s + b + d,
     for (final l in ProjectionMetric.lifts) ProjectionMetric.e1rm(l): e[l],
     ProjectionMetric.vo2max: null,
     ProjectionMetric.climbingGrade: climbingActualAt(climbs, day),
@@ -285,8 +286,7 @@ MetricTracking trackMetric({
   } else {
     final above = actual > p.hi;
     status = switch (dir) {
-      GoodDirection.up =>
-        above ? TrackingStatus.ahead : TrackingStatus.behind,
+      GoodDirection.up => above ? TrackingStatus.ahead : TrackingStatus.behind,
       GoodDirection.down =>
         above ? TrackingStatus.behind : TrackingStatus.ahead,
       GoodDirection.hold => TrackingStatus.behind,
@@ -306,12 +306,12 @@ MetricTracking trackMetric({
 
 /// Unit + decimals per metric for the plain-language line.
 ({String unit, int decimals}) metricUnit(String metric) => switch (metric) {
-      ProjectionMetric.bodyweight => (unit: ' lb', decimals: 1),
-      ProjectionMetric.bodyFat => (unit: ' pts', decimals: 1),
-      ProjectionMetric.vo2max => (unit: '', decimals: 1),
-      ProjectionMetric.climbingGrade => (unit: ' V', decimals: 1),
-      _ => (unit: ' lb', decimals: 0),
-    };
+  ProjectionMetric.bodyweight => (unit: ' lb', decimals: 1),
+  ProjectionMetric.bodyFat => (unit: ' pts', decimals: 1),
+  ProjectionMetric.vo2max => (unit: '', decimals: 1),
+  ProjectionMetric.climbingGrade => (unit: ' V', decimals: 1),
+  _ => (unit: ' lb', decimals: 0),
+};
 
 String _num(double v, int decimals) => v.abs().toStringAsFixed(decimals);
 
@@ -355,17 +355,16 @@ Map<String, MetricTracking> trackSnapshot(
   ProjectionSnapshot snapshot,
   Map<String, double?> actuals,
   DateTime day,
-) =>
-    {
-      for (final e in snapshot.metrics.entries)
-        e.key: trackMetric(
-          metric: e.key,
-          points: e.value,
-          day: day,
-          actual: actuals[e.key],
-          emphasis: snapshot.emphasis,
-        ),
-    };
+) => {
+  for (final e in snapshot.metrics.entries)
+    e.key: trackMetric(
+      metric: e.key,
+      points: e.value,
+      day: day,
+      actual: actuals[e.key],
+      emphasis: snapshot.emphasis,
+    ),
+};
 
 // ---------------------------------------------------------------------------
 // Past-block result line
@@ -389,8 +388,10 @@ String? blockResultLine(
   final bwEnd = endActuals[ProjectionMetric.bodyweight];
   final bwProj = bw == null ? null : projectionAt(bw, endDay);
   if (bw != null && bw.isNotEmpty && bwEnd != null && bwProj != null) {
-    parts.add('${_fmt1(bw.first.projected)} → ${_fmt1(bwEnd)} vs projected '
-        '${_fmt1(bwProj.projected)}');
+    parts.add(
+      '${_fmt1(bw.first.projected)} → ${_fmt1(bwEnd)} vs projected '
+      '${_fmt1(bwProj.projected)}',
+    );
   }
   final st = snapshot.metrics[ProjectionMetric.strengthTotal];
   final stEnd = endActuals[ProjectionMetric.strengthTotal];
@@ -419,4 +420,111 @@ String? blockResultLine(
 String _fmt1(double v) {
   final s = v.toStringAsFixed(1);
   return s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+}
+
+// ---------------------------------------------------------------------------
+// The app/coach bundle: first snapshots per block + the actual sources
+// ---------------------------------------------------------------------------
+
+/// Everything a surface needs to show frozen projections vs actuals:
+/// each block's FIRST snapshot and the raw actual sources.
+class PhaseProjections {
+  /// Block number → that block's first snapshot.
+  final Map<int, ProjectionSnapshot> byBlock;
+  final List<WeightRow> weighIns;
+  final List<BodyFatReading> bodyFat;
+  final List<StrengthRow> strength;
+  final List<ClimbAscent> climbs;
+
+  const PhaseProjections({
+    this.byBlock = const {},
+    this.weighIns = const [],
+    this.bodyFat = const [],
+    this.strength = const [],
+    this.climbs = const [],
+  });
+
+  /// From the raw tab's decoded snapshots.
+  factory PhaseProjections.fromSnapshots(
+    List<ProjectionSnapshot> snapshots, {
+    List<WeightRow> weighIns = const [],
+    List<BodyFatReading> bodyFat = const [],
+    List<StrengthRow> strength = const [],
+    List<ClimbAscent> climbs = const [],
+  }) => PhaseProjections(
+    byBlock: firstSnapshotsByBlock(snapshots),
+    weighIns: weighIns,
+    bodyFat: bodyFat,
+    strength: strength,
+    climbs: climbs,
+  );
+
+  /// Every metric's actual at [day].
+  Map<String, double?> actualsAt(DateTime day) => projectionActualsAt(
+    day: day,
+    weighIns: weighIns,
+    bodyFat: bodyFat,
+    strength: strength,
+    climbs: climbs,
+  );
+
+  /// One metric's actual at [day].
+  double? actualAt(String metric, DateTime day) => switch (metric) {
+    ProjectionMetric.bodyweight => bodyweightActualAt(weighIns, day),
+    ProjectionMetric.bodyFat => bodyFatActualAt(bodyFat, day),
+    ProjectionMetric.climbingGrade => climbingActualAt(climbs, day),
+    ProjectionMetric.vo2max => null,
+    _ => projectionActualsAt(day: day, strength: strength)[metric],
+  };
+
+  /// Actual points for a chart overlay over [from]..[to] (inclusive):
+  /// DAILY for bodyweight and body fat (each day with a reading that
+  /// day — the 7-day average / BF definition at it), WEEKLY (each
+  /// Monday + [to]) for the strength, VO2 and climbing metrics.
+  List<(DateTime, double)> actualSeries(
+    String metric,
+    DateTime from,
+    DateTime to,
+  ) {
+    final start = _d(from), end = _d(to);
+    if (end.isBefore(start)) return const [];
+    final days = <DateTime>[];
+    if (metric == ProjectionMetric.bodyweight ||
+        metric == ProjectionMetric.bodyFat) {
+      final has = {
+        for (final w
+            in metric == ProjectionMetric.bodyweight
+                ? [for (final r in weighIns) r.date]
+                : [for (final r in bodyFat) r.date])
+          _d(w),
+      };
+      for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 1))) {
+        if (has.contains(d)) days.add(d);
+      }
+    } else {
+      for (var d = start; !d.isAfter(end); d = d.add(const Duration(days: 7))) {
+        days.add(d);
+      }
+      if (days.isEmpty || days.last != end) days.add(end);
+    }
+    return [
+      for (final d in days)
+        if (actualAt(metric, d) case final v?) (d, v),
+    ];
+  }
+
+  /// Tracking for [metric] of block [block] at [day]; null without a
+  /// snapshot for that block or metric.
+  MetricTracking? track(int block, String metric, DateTime day) {
+    final s = byBlock[block];
+    final pts = s?.metrics[metric];
+    if (s == null || pts == null) return null;
+    return trackMetric(
+      metric: metric,
+      points: pts,
+      day: day,
+      actual: actualAt(metric, day),
+      emphasis: s.emphasis,
+    );
+  }
 }

@@ -399,29 +399,42 @@ void main() {
   // IA restructure 2026-10-02: the Plan tab split into the Weight and
   // Strength pages, each rendering one slice of the same section.
   group('focus slices', () {
-    testWidgets('weight: bodyweight trajectory open, nutrition lever, body '
-        'fat — no strength chart, folds or model details', (tester) async {
+    testWidgets('weight: frozen bodyweight + body fat cards, nutrition '
+        'lever; the rolling outlook sits in Model details', (tester) async {
       await pumpSection(tester, focus: ForecastFocus.weight);
       expect(find.text('BODYWEIGHT'), findsOneWidget);
-      expect(find.byKey(const ValueKey('sim2-bw-chart')), findsOneWidget);
-      expect(find.byKey(const ValueKey('sim2-bf-chart')), findsOneWidget);
+      expect(find.byKey(const ValueKey('projection-card-bodyweight')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('projection-card-body_fat')),
+          findsOneWidget);
+      // No snapshot in these inputs → the labelled live fallback.
+      expect(find.byKey(const ValueKey('projection-none-bodyweight')),
+          findsOneWidget);
       expect(find.byKey(const ValueKey('nutrition-card')), findsOneWidget);
-      expect(textOf(tester, 'forecast-bw-summary'),
-          startsWith('Projected '));
-      expect(textOf(tester, 'forecast-basis'),
-          contains('from your logged intake'));
       for (final k in [
         'sim2-expressed-chart',
         'sim2-summary',
         'sim2-fold-body',
         'sim2-fold-climb',
-        'forecast-model-details',
+        'sim2-bw-chart',
+        'forecast-bw-summary',
       ]) {
         expect(find.byKey(ValueKey(k)), findsNothing, reason: k);
       }
-      // The what-if lever moves the weight projection here.
+      await openModelDetails(tester);
+      expect(find.byKey(const ValueKey('forecast-outlook-note')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('sim2-bw-chart')), findsOneWidget);
+      expect(find.byKey(const ValueKey('sim2-bf-chart')), findsOneWidget);
+      expect(textOf(tester, 'forecast-bw-summary'),
+          startsWith('Projected '));
+      expect(textOf(tester, 'forecast-basis'),
+          contains('from your logged intake'));
+      // The what-if lever still moves the rolling outlook.
       final before = textOf(tester, 'forecast-bw-summary');
       for (var i = 0; i < 5; i++) {
+        await scrollTo(
+            tester, find.byKey(const ValueKey('nutrition-delta-plus')));
         await tester.tap(find.byKey(const ValueKey('nutrition-delta-plus')));
         await tester.pump();
       }
@@ -429,16 +442,15 @@ void main() {
       expect(textOf(tester, 'forecast-bw-summary'), isNot(before));
     });
 
-    testWidgets('strength: summary + strength chart + capacity toggle, '
-        'climbing/VO2/fatigue folds, model details — no nutrition card or '
-        'body fold', (tester) async {
+    testWidgets('strength: frozen strength-total card; climbing/VO2 folds '
+        'hold frozen cards; the rolling outlook (summary, live chart + '
+        'capacity toggle, P(V8)) is in Model details', (tester) async {
       await pumpSection(tester, focus: ForecastFocus.strength);
-      expect(find.byKey(const ValueKey('sim2-summary')), findsOneWidget);
-      expect(summaryText(tester), contains('Staying on this program, by'));
+      expect(find.byKey(const ValueKey('projection-card-strength_total')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('sim2-summary')), findsNothing);
       expect(find.byKey(const ValueKey('sim2-expressed-chart')),
-          findsOneWidget);
-      expect(find.byKey(const ValueKey('sim2-capacity-toggle')),
-          findsOneWidget);
+          findsNothing);
       for (final k in [
         'sim2-fold-climb',
         'sim2-fold-vo2',
@@ -449,8 +461,19 @@ void main() {
       }
       expect(find.byKey(const ValueKey('nutrition-card')), findsNothing);
       expect(find.byKey(const ValueKey('sim2-fold-body')), findsNothing);
-      // Model details still holds the provenance sheet.
+      await scrollTo(tester, find.byKey(const ValueKey('sim2-fold-climb')));
+      await tester.tap(find.byKey(const ValueKey('sim2-fold-climb')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('projection-card-climbing_grade')),
+          findsOneWidget);
       await openModelDetails(tester);
+      expect(find.byKey(const ValueKey('sim2-summary')), findsOneWidget);
+      expect(summaryText(tester), contains('Staying on this program, by'));
+      expect(find.byKey(const ValueKey('sim2-expressed-chart')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('sim2-capacity-toggle')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('sim2-pv8')), findsOneWidget);
       expect(find.byKey(const ValueKey('sim2-params-tile')), findsOneWidget);
       expect(find.byKey(const ValueKey('forecast-tracking')), findsOneWidget);
     });

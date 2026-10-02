@@ -56,6 +56,8 @@ import '../services/today_program_call.dart';
 import '../services/today_thread.dart';
 import '../services/week_planner.dart';
 import '../services/forecast_meta_store.dart';
+import '../services/projection_snapshot_store.dart';
+import '../services/projection_tracking.dart' show PhaseProjections;
 import '../services/wm_store.dart';
 import 'chat_screen.dart';
 import 'coach_chat_screen.dart';
@@ -72,6 +74,7 @@ import 'timeline_screen.dart';
 import 'home_tabs.dart';
 import 'lift_screen.dart';
 import 'plan_data.dart';
+import 'phase_projection_screen.dart';
 import 'strength_screen.dart';
 import 'weight_screen.dart';
 
@@ -333,6 +336,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       spreadsheetId: assetConfig.spreadsheetId,
       serviceAccountKeyJson: keyJson,
     );
+    // Frozen phase projections (append-only projection_snapshots tab) —
+    // the Weight / Strength / Lift pages + the Progress phase timeline.
+    final projectionStore = ProjectionSnapshotStore(
+      spreadsheetId: assetConfig.spreadsheetId,
+      serviceAccountKeyJson: keyJson,
+    );
     final repo = await retryTransient(
       () => connectSheetsConnector(
         defaultSpreadsheetId: assetConfig.spreadsheetId,
@@ -536,6 +545,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       readOnlyRepo: readOnlyRepo,
       wmStore: wmStore,
       forecastMetaStore: forecastMetaStore,
+      projectionStore: projectionStore,
     );
   }
 
@@ -1121,6 +1131,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         forView: data.registry.forView,
                       ),
                       metaStore: data.forecastMetaStore,
+                      projectionStore: data.projectionStore,
                     );
 
               void openWeight() => Navigator.of(context).push(
@@ -1146,6 +1157,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                     ),
                   );
+
+              void openBlockProjection(int block, PhaseProjections p) {
+                final snapshot = p.byBlock[block];
+                if (snapshot == null) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => PhaseProjectionScreen(
+                      snapshot: snapshot,
+                      projections: p,
+                    ),
+                  ),
+                );
+              }
 
               void openStatusLedger() {
                 final view = statusView;
@@ -1569,6 +1593,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         onOpenStrength:
                             planSources == null ? null : openStrength,
                         onOpenLift: openLift,
+                        // Frozen phase projections: timeline tracking +
+                        // past-block results; rows open the block view.
+                        loadProjections: planSources == null
+                            ? null
+                            : () => loadPhaseProjections(planSources),
+                        onOpenBlockProjection: openBlockProjection,
                       ),
                     ],
                   ),
@@ -1802,6 +1832,9 @@ class _Bootstrap {
   /// Plan tab's "model tracking" line + guarded refit application.
   final ForecastMetaStore? forecastMetaStore;
 
+  /// Frozen phase projections reader (projection_snapshots tab).
+  final ProjectionSnapshotStore? projectionStore;
+
   _Bootstrap({
     required this.views,
     required this.repository,
@@ -1818,6 +1851,7 @@ class _Bootstrap {
     this.readOnlyRepo,
     this.wmStore,
     this.forecastMetaStore,
+    this.projectionStore,
   });
 }
 

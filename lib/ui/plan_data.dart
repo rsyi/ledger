@@ -22,6 +22,8 @@ import '../services/nutrition_model.dart'
 import '../services/program_metrics.dart' show StrengthRow, WeightRow;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
+import '../services/projection_snapshot_store.dart';
+import '../services/projection_tracking.dart';
 import '../services/sim_fit.dart' show ClimbAscent, buildWeeklySeries;
 import '../services/sim_program.dart' show simInitialFromSeries;
 import '../services/sim2_harness.dart'
@@ -56,6 +58,10 @@ class PlanSources {
   /// Nightly recalibration state (forecast_meta tab).
   final ForecastMetaStore? metaStore;
 
+  /// Frozen phase projections (projection_snapshots tab). Null → the
+  /// pages show the live model line labelled "no frozen projection yet".
+  final ProjectionSnapshotStore? projectionStore;
+
   const PlanSources({
     required this.provider,
     this.analytics,
@@ -68,6 +74,7 @@ class PlanSources {
     this.mealsRepo,
     this.mealsView,
     this.metaStore,
+    this.projectionStore,
   });
 }
 
@@ -87,13 +94,107 @@ class PlanData {
   /// (no block calendar in program.yaml).
   final ForecastInputs? forecast;
 
+  /// Frozen phase projections + the actual sources (always non-null;
+  /// empty byBlock when no snapshot exists yet).
+  final PhaseProjections projections;
+
   const PlanData({
     required this.docs,
     required this.daily,
     this.strengthRows = const [],
     this.observedError,
     this.forecast,
+    this.projections = const PhaseProjections(),
   });
+}
+
+/// Body-fat readings from raw weight records: per row the first
+/// non-blank of withings → omron → caliper (projection_tracking's BF
+/// definition). Unparseable rows are skipped.
+List<BodyFatReading> bodyFatReadingsFromRecords(
+  Iterable<Map<String, Object?>> records,
+) {
+  double? n(Object? v) =>
+      v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '');
+  final out = <BodyFatReading>[];
+  for (final r in records) {
+    final raw = r['date'];
+    final d = raw is DateTime ? raw : DateTime.tryParse(raw?.toString() ?? '');
+    final bf = n(r['body_fat_withing']) ??
+        n(r['body_fat_omron']) ??
+        n(r['body_fat_caliper']);
+    if (d == null || bf == null) continue;
+    out.add(BodyFatReading(d, bf));
+  }
+  return out;
+}
+
+/// Loads the frozen snapshots (first per block) + every actual source
+/// the tracking needs. Each source degrades independently to empty.
+Future<PhaseProjections> loadPhaseProjections(
+  PlanSources src, {
+  List<WeightRow>? daily,
+  List<StrengthRow>? strengthRows,
+  List<ClimbAscent>? climbs,
+}) async {
+  final snapshots = await () async {
+    try {
+      return await src.projectionStore?.load();
+    } catch (_) {
+      return null;
+    }
+  }();
+  var bf = const <BodyFatReading>[];
+  if (src.weightRepo != null && src.weightView != null) {
+    try {
+      bf = bodyFatReadingsFromRecords(
+        await src.weightRepo!.list(src.weightView!),
+      );
+    } catch (_) {}
+  }
+  final weighIns = daily ??
+      (await loadDailyWeighIns(
+        analytics: src.analytics,
+        view: src.weightView,
+        repo: src.weightRepo,
+      ))
+          .daily;
+  final strength = strengthRows ?? await _loadStrength(src);
+  final cl = climbs ?? await _loadClimbs(src);
+  return PhaseProjections.fromSnapshots(
+    snapshots ?? const [],
+    weighIns: weighIns,
+    bodyFat: bf,
+    strength: strength,
+    climbs: cl,
+  );
+}
+
+Future<List<StrengthRow>> _loadStrength(PlanSources src) async {
+  if (src.strengthRepo == null || src.strengthView == null) return const [];
+  try {
+    final recs = await src.strengthRepo!.list(src.strengthView!);
+    return [for (final r in recs) ?strengthRowFromRecord(r)];
+  } catch (_) {
+    return const [];
+  }
+}
+
+Future<List<ClimbAscent>> _loadClimbs(PlanSources src) async {
+  final climbs = <ClimbAscent>[];
+  if (src.climbingRepo == null || src.climbingView == null) return climbs;
+  try {
+    final recs = await src.climbingRepo!.list(src.climbingView!);
+    final vRe = RegExp(r'^v(\d+)', caseSensitive: false);
+    for (final r in recs) {
+      final raw = r['date'];
+      final d = raw is DateTime ? raw : DateTime.tryParse(raw?.toString() ?? '');
+      if (d == null) continue;
+      final g = vRe.firstMatch(r['grade']?.toString().trim() ?? '');
+      climbs.add((date: d, vGrade: g == null ? null : int.parse(g.group(1)!)));
+    }
+  } catch (_) {}
+  return climbs;
 }
 
 /// Loads everything the forecast pages need. Null only when the intent
@@ -114,13 +215,7 @@ Future<PlanData?> loadPlanData(PlanSources src, DateTime today) async {
     repo: src.weightRepo,
   );
 
-  var strengthRows = const <StrengthRow>[];
-  if (src.strengthRepo != null && src.strengthView != null) {
-    try {
-      final recs = await src.strengthRepo!.list(src.strengthView!);
-      strengthRows = [for (final r in recs) ?strengthRowFromRecord(r)];
-    } catch (_) {}
-  }
+  final strengthRows = await _loadStrength(src);
 
   var meals = const <Map<String, Object?>>[];
   if (src.mealsRepo != null && src.mealsView != null) {
@@ -129,31 +224,20 @@ Future<PlanData?> loadPlanData(PlanSources src, DateTime today) async {
     } catch (_) {}
   }
 
-  final climbs = <ClimbAscent>[];
-  if (src.climbingRepo != null && src.climbingView != null) {
-    try {
-      final recs = await src.climbingRepo!.list(src.climbingView!);
-      final vRe = RegExp(r'^v(\d+)', caseSensitive: false);
-      for (final r in recs) {
-        final raw = r['date'];
-        final d = raw is DateTime
-            ? raw
-            : DateTime.tryParse(raw?.toString() ?? '');
-        if (d == null) continue;
-        final g = vRe.firstMatch(r['grade']?.toString().trim() ?? '');
-        climbs.add((
-          date: d,
-          vGrade: g == null ? null : int.parse(g.group(1)!),
-        ));
-      }
-    } catch (_) {}
-  }
+  final climbs = await _loadClimbs(src);
+  final projections = await loadPhaseProjections(
+    src,
+    daily: series.daily,
+    strengthRows: strengthRows,
+    climbs: climbs,
+  );
 
   return PlanData(
     docs: docs,
     daily: series.daily,
     strengthRows: strengthRows,
     observedError: series.error,
+    projections: projections,
     forecast: await _buildForecast(
       src,
       docs,
@@ -162,6 +246,7 @@ Future<PlanData?> loadPlanData(PlanSources src, DateTime today) async {
       climbs,
       meals,
       today,
+      projections,
     ),
   );
 }
@@ -178,6 +263,7 @@ Future<ForecastInputs?> _buildForecast(
   List<ClimbAscent> climbs,
   List<Map<String, Object?>> mealRecords,
   DateTime today,
+  PhaseProjections projections,
 ) async {
   final blocks = sim2BlocksFromProgramDocs(docs.program);
   if (blocks == null) return null;
@@ -215,6 +301,7 @@ Future<ForecastInputs?> _buildForecast(
       today: today,
     ),
     meta: meta,
+    projections: projections,
   );
 }
 

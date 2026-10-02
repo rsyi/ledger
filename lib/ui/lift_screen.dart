@@ -12,8 +12,11 @@
 ///     reps, RPE, e1RM);
 ///   * TRAINING MAX — the value in force + its history from the
 ///     append-only working_max tab (value, from-date, source, reason);
-///   * PROJECTION — the single-trajectory forecast for this lift (end of
-///     the current block + the horizon).
+///   * PROJECTION — this lift's estimated max projected at the current
+///     block's start and FROZEN (band + projected line, actuals overlaid,
+///     tracking chip + one line — phase-projections spec 2026-10-02);
+///     the rolling outlook ("Squat 404 by Dec '28", end of block) sits in
+///     a Model details fold below it.
 ///
 /// The how-it's-measured explanations sit at the bottom as small text
 /// ([LiftExplainer]) — no info icons.
@@ -29,7 +32,8 @@ import '../services/home_synthesis.dart' show fmtLb, fmtMonthTag;
 import '../services/program_metrics.dart'
     show StrengthRow, mainLiftByExercise, rpeAdjustedE1rm;
 import '../services/program_provider.dart';
-import '../services/sim2_harness.dart' show Sim2WeekPoint;
+import '../services/projection_snapshot.dart' show ProjectionMetric;
+import '../services/sim2_harness.dart' show Sim2WeekPoint, sim2CurrentBlockN;
 import '../services/wm_tabs.dart' show WmSnapshot, WorkingMaxRow;
 import 'design/design.dart';
 import 'home_dashboard.dart'
@@ -38,6 +42,7 @@ import 'plan_data.dart';
 import 'widgets/chart_bottom_axis.dart';
 import 'widgets/chart_range.dart';
 import 'widgets/forecast_section.dart' show forecastBaselineRun;
+import 'widgets/projection_card.dart';
 
 /// One value on the Progress lift row: pounds + the date + its Wilks
 /// points (null when no bodyweight covers the date).
@@ -408,35 +413,82 @@ class _LiftScreenState extends State<LiftScreen> {
     final blockEnd = run.weeks.lastWhere((w) => w.blockN == currentBlock);
     final horizon = run.weeks.last;
     final name = liftTitle(widget.lift);
+    final metric = ProjectionMetric.e1rm(widget.lift);
+    final blockN = sim2CurrentBlockN(inputs.blocks, _today);
+    final projections = plan?.projections;
+    const gutter = EdgeInsets.symmetric(horizontal: AppSpace.gutter);
     return [
       const SectionHeader(label: 'Projection'),
       Padding(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpace.gutter),
+        padding: gutter,
+        child: ProjectionCard(
+          metric: metric,
+          title: 'Estimated max this block',
+          snapshot: blockN == null ? null : projections?.byBlock[blockN],
+          projections: projections,
+          today: _today,
+          // Live fallback on the index basis (what logged e1RMs show).
+          liveLine: [
+            for (final w in run.weeks)
+              if (w.blockN == blockN)
+                (
+                  w.monday.add(const Duration(days: 7)),
+                  of(w) * w.sIdx / w.sTrue,
+                ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 8),
+      Padding(
+        padding: gutter,
         child: AppCard(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '$name ${of(horizon).round()} lb by '
-                '${fmt.format(horizon.monday.add(const Duration(days: 6)))}',
-                key: const ValueKey('lift-projection'),
-                style: AppText.title(context),
+          padding: EdgeInsets.zero,
+          child: Theme(
+            data: Theme.of(
+              context,
+            ).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              key: const ValueKey('lift-model-details'),
+              tilePadding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.gutter,
               ),
-              const SizedBox(height: 4),
-              Text(
-                '${of(blockEnd).round()} lb at the end of this '
-                '${blockEnd.emphasis} block '
-                '(${fmt.format(blockEnd.monday.add(const Duration(days: 6)))})',
-                style: AppText.row(context),
+              childrenPadding: const EdgeInsets.fromLTRB(
+                AppSpace.gutter,
+                0,
+                AppSpace.gutter,
+                AppSpace.gutter,
               ),
-              const SizedBox(height: 4),
-              Text(
-                'Expected strength staying on this program — the model '
-                'behind it is on the Strength page.',
-                style: AppText.meta(context),
-              ),
-            ],
+              expandedCrossAxisAlignment: CrossAxisAlignment.start,
+              title: Text('Model details', style: AppText.row(context)),
+              children: [
+                Text(
+                  'Rolling outlook — the live model, recalibrated nightly '
+                  '(not the frozen projection above).',
+                  style: AppText.meta(context),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$name ${of(horizon).round()} lb by '
+                  '${fmt.format(horizon.monday.add(const Duration(days: 6)))}',
+                  key: const ValueKey('lift-projection'),
+                  style: AppText.row(context),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${of(blockEnd).round()} lb at the end of this '
+                  '${blockEnd.emphasis} block '
+                  '(${fmt.format(blockEnd.monday.add(const Duration(days: 6)))})',
+                  style: AppText.row(context),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Expected strength staying on this program (true '
+                  'strength, which logged e1RMs lag) — the model behind it '
+                  'is on the Strength page.',
+                  style: AppText.meta(context),
+                ),
+              ],
+            ),
           ),
         ),
       ),

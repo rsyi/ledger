@@ -6,10 +6,20 @@ import 'package:airledger/services/sim2_harness.dart';
 import 'package:airledger/services/sim2_model.dart';
 
 final _blocks = [
-  Sim2Block(0, DateTime.utc(2026, 9, 21), DateTime.utc(2026, 12, 13), 'cut',
-      -0.75),
-  Sim2Block(1, DateTime.utc(2026, 12, 14), DateTime.utc(2027, 1, 3),
-      'reverse', 0.15),
+  Sim2Block(
+    0,
+    DateTime.utc(2026, 9, 21),
+    DateTime.utc(2026, 12, 13),
+    'cut',
+    -0.75,
+  ),
+  Sim2Block(
+    1,
+    DateTime.utc(2026, 12, 14),
+    DateTime.utc(2027, 1, 3),
+    'reverse',
+    0.15,
+  ),
 ];
 
 const _anchors = ProjectionAnchors(
@@ -24,25 +34,23 @@ ProjectionSnapshot _build({
   double? r,
   int paths = 20,
   int block = 0,
-}) =>
-    buildProjectionSnapshot(
-      params: Sim2Params.fitted(),
-      blocks: _blocks,
-      blockN: block,
-      anchors: anchors,
-      madeAt: DateTime.utc(2026, 10, 2, 6, 30),
-      programVersion: '16',
-      rLbWk: r,
-      mcPaths: paths,
-      extraInputs: const {
-        'tms': {'squat': 320},
-      },
-    )!;
+}) => buildProjectionSnapshot(
+  params: Sim2Params.fitted(),
+  blocks: _blocks,
+  blockN: block,
+  anchors: anchors,
+  madeAt: DateTime.utc(2026, 10, 2, 6, 30),
+  programVersion: '16',
+  rLbWk: r,
+  mcPaths: paths,
+  extraInputs: const {
+    'tms': {'squat': 320},
+  },
+)!;
 
 void main() {
   group('buildProjectionSnapshot', () {
-    test('weekly rows from block start Monday to the week after the end',
-        () {
+    test('weekly rows from block start Monday to the week after the end', () {
       final s = _build();
       expect(s.metrics.keys, ProjectionMetric.all);
       final bw = s.metrics[ProjectionMetric.bodyweight]!;
@@ -101,16 +109,22 @@ void main() {
       expect(tot.first.hi - tot.first.projected, closeTo(27, 1e-6)); // 3%
       // Over one cut block the model's own strength noise stays inside
       // the ±3% measurement floor — the floor holds at every week.
-      expect(tot.last.hi - tot.last.lo,
-          greaterThanOrEqualTo(2 * 0.03 * tot.last.projected - 1e-9));
+      expect(
+        tot.last.hi - tot.last.lo,
+        greaterThanOrEqualTo(2 * 0.03 * tot.last.projected - 1e-9),
+      );
     });
 
     test('without anchors the raw model (seeded) values pass through', () {
       final s = _build(anchors: const ProjectionAnchors());
-      expect(s.metrics[ProjectionMetric.strengthTotal]!.first.projected,
-          closeTo(sim2SeedIndexTotal, 1e-9));
-      expect(s.metrics[ProjectionMetric.bodyweight]!.first.projected,
-          closeTo(sim2SeedBw, 1e-9));
+      expect(
+        s.metrics[ProjectionMetric.strengthTotal]!.first.projected,
+        closeTo(sim2SeedIndexTotal, 1e-9),
+      );
+      expect(
+        s.metrics[ProjectionMetric.bodyweight]!.first.projected,
+        closeTo(sim2SeedBw, 1e-9),
+      );
     });
 
     test('deterministic: same inputs → same rows', () {
@@ -152,8 +166,10 @@ void main() {
       expect(rows, hasLength(ProjectionMetric.all.length * 13));
       expect(rows.first[8], isNotEmpty);
       expect(rows.skip(1).every((r) => r[8] == ''), isTrue);
-      final parsed =
-          parseProjectionSnapshots([projectionSnapshotHeaders, ...rows]);
+      final parsed = parseProjectionSnapshots([
+        projectionSnapshotHeaders,
+        ...rows,
+      ]);
       expect(parsed, hasLength(1));
       final p = parsed.single;
       expect(p.block, 0);
@@ -164,22 +180,64 @@ void main() {
       expect(p.end, DateTime.utc(2026, 12, 13));
       for (final m in ProjectionMetric.all) {
         expect(p.metrics[m], hasLength(13));
-        expect(p.metrics[m]!.last.projected,
-            closeTo(s.metrics[m]!.last.projected, 0.006));
+        expect(
+          p.metrics[m]!.last.projected,
+          closeTo(s.metrics[m]!.last.projected, 0.006),
+        );
       }
     });
 
     test('malformed rows skipped; strings from Sheets parse', () {
       final parsed = parseProjectionSnapshots([
         projectionSnapshotHeaders,
-        ['0', 'bodyweight', '2026-09-21', '161', '159.75', '162.25',
-          '2026-10-02T06:30:00.000Z', '16', 'not json'],
+        [
+          '0',
+          'bodyweight',
+          '2026-09-21',
+          '161',
+          '159.75',
+          '162.25',
+          '2026-10-02T06:30:00.000Z',
+          '16',
+          'not json',
+        ],
         ['x', 'bodyweight', '2026-09-28', '160', '', '', '2026-10-02', '16'],
         ['0', '', '2026-09-28', '160'],
       ]);
       expect(parsed, hasLength(1));
       expect(parsed.single.inputs, isEmpty);
       expect(parsed.single.metrics['bodyweight'], hasLength(1));
+    });
+
+    test('header check: exact header row required (empty tab is fine)', () {
+      expect(projectionTabHeaderOk(const []), isTrue);
+      expect(projectionTabHeaderOk([projectionSnapshotHeaders]), isTrue);
+      expect(
+        projectionTabHeaderOk([
+          [...projectionSnapshotHeaders, 'extra_col'],
+        ]),
+        isTrue,
+      );
+      final rows = _build(paths: 2).toRows();
+      expect(projectionTabHeaderOk(rows), isFalse); // header lost
+      expect(
+        projectionTabHeaderOk([
+          ['block', 'metric', 'week'],
+        ]),
+        isFalse,
+      );
+    });
+
+    test('repair-read: a headerless tab (row 1 = data) parses every row', () {
+      final s = _build(paths: 2);
+      final rows = s.toRows();
+      final parsed = parseProjectionSnapshots(rows); // no header row
+      expect(parsed, hasLength(1));
+      expect(
+        parsed.single.metrics[ProjectionMetric.bodyweight],
+        hasLength(13),
+      ); // row 1 (bodyweight week 0) kept, not eaten
+      expect(parsed.single.inputs['block_emphasis'], 'cut');
     });
 
     test('empty / header-only tab → no snapshots', () {
@@ -190,9 +248,18 @@ void main() {
 
   group('selection', () {
     List<List<Object?>> rowsAt(int block, DateTime made, double v) => [
-          [block, 'bodyweight', '2026-09-21', v, v - 1, v + 1,
-            made.toIso8601String(), '16', ''],
-        ];
+      [
+        block,
+        'bodyweight',
+        '2026-09-21',
+        v,
+        v - 1,
+        v + 1,
+        made.toIso8601String(),
+        '16',
+        '',
+      ],
+    ];
 
     test('first snapshot per block wins; re-snapshots are kept', () {
       final tab = [
@@ -221,5 +288,26 @@ void main() {
       expect(snapshotNeededForBlock(all, 1), isTrue);
       expect(snapshotNeededForBlock(const [], 0), isTrue);
     });
+  });
+
+  test('snapshotForDay: covering block, else the latest started', () {
+    ProjectionSnapshot snap(int n, String start, String end) =>
+        ProjectionSnapshot(
+          block: n,
+          madeAt: DateTime.utc(2026, 10, 2),
+          programVersion: '16',
+          metrics: const {},
+          inputs: {'block_start': start, 'block_end': end},
+        );
+    final by = {
+      0: snap(0, '2026-09-21', '2026-12-13'),
+      2: snap(2, '2027-01-04', '2027-02-28'),
+    };
+    expect(snapshotForDay(by, DateTime(2026, 10, 5))!.block, 0);
+    expect(snapshotForDay(by, DateTime(2026, 12, 13))!.block, 0);
+    // Dec 20 is block 1 (no snapshot) → block 0 keeps tracking.
+    expect(snapshotForDay(by, DateTime(2026, 12, 20))!.block, 0);
+    expect(snapshotForDay(by, DateTime(2027, 1, 10))!.block, 2);
+    expect(snapshotForDay(by, DateTime(2026, 9, 1)), isNull);
   });
 }

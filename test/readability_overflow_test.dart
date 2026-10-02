@@ -224,14 +224,14 @@ domains:
     expect(find.text('Cut · since Oct 6, 2025'), findsOneWidget);
     expect(find.textContaining('Target 154 lb'), findsNothing);
     expect(find.text('BODYWEIGHT'), findsOneWidget);
-    expect(find.byKey(const ValueKey('sim2-bw-chart')), findsOneWidget);
+    expect(find.byKey(const ValueKey('projection-card-bodyweight')),
+        findsOneWidget);
     for (final banned in ['wks', 'lb/wk', 'SBD', 'OHP']) {
       expect(find.textContaining(banned, findRichText: true), findsNothing,
           reason: banned);
     }
     // Strength-only sections stay on the Strength page.
     expect(find.byKey(const ValueKey('sim2-expressed-chart')), findsNothing);
-    expect(find.text('Model details'), findsNothing);
 
     await tester.dragUntilVisible(
       find.byKey(const ValueKey('phase-exit')),
@@ -256,9 +256,12 @@ domains:
 
     expect(find.text('THIS WEEK'), findsOneWidget);
     expect(find.text('PROJECTION'), findsOneWidget);
-    expect(find.byKey(const ValueKey('sim2-summary')), findsOneWidget);
-    expect(find.byKey(const ValueKey('sim2-capacity-toggle')),
+    expect(find.byKey(const ValueKey('projection-card-strength_total')),
         findsOneWidget);
+    // The rolling outlook (live chart + capacity toggle) sits in the
+    // collapsed Model details.
+    expect(find.byKey(const ValueKey('sim2-capacity-toggle')),
+        findsNothing);
     // The weight lever lives on the Weight page.
     expect(find.byKey(const ValueKey('nutrition-card')), findsNothing);
     await tester.dragUntilVisible(
@@ -269,6 +272,10 @@ domains:
     await tester.pumpAndSettle();
     expect(find.text('Model details'), findsOneWidget);
     expect(find.text('Fatigue budget'), findsOneWidget);
+    await tester.tap(find.text('Model details'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('sim2-capacity-toggle')),
+        findsOneWidget);
     // Reaching here without a RenderFlex overflow report = pass.
   });
 

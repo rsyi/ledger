@@ -147,12 +147,12 @@ class ProjectionAnchors {
   }
 
   Map<String, Object?> toJson() => {
-        'bodyweight': _r2(bodyweight),
-        'body_fat': _r2(bodyFat),
-        'climbing_grade': _r2(climbingGrade),
-        'e1rm': {for (final e in e1rm.entries) e.key: _r2(e.value)},
-        'index_total': _r2(indexTotal),
-      };
+    'bodyweight': _r2(bodyweight),
+    'body_fat': _r2(bodyFat),
+    'climbing_grade': _r2(climbingGrade),
+    'e1rm': {for (final e in e1rm.entries) e.key: _r2(e.value)},
+    'index_total': _r2(indexTotal),
+  };
 }
 
 /// One frozen projection set: a block × made_at.
@@ -182,7 +182,8 @@ class ProjectionSnapshot {
   DateTime? get start {
     final fromInputs = DateTime.tryParse('${inputs['block_start']}');
     if (fromInputs != null) return _utcDay(fromInputs);
-    final pts = metrics[ProjectionMetric.bodyweight] ??
+    final pts =
+        metrics[ProjectionMetric.bodyweight] ??
         (metrics.isEmpty ? null : metrics.values.first);
     return pts == null || pts.isEmpty ? null : pts.first.weekStart;
   }
@@ -191,7 +192,8 @@ class ProjectionSnapshot {
   DateTime? get end {
     final fromInputs = DateTime.tryParse('${inputs['block_end']}');
     if (fromInputs != null) return _utcDay(fromInputs);
-    final pts = metrics[ProjectionMetric.bodyweight] ??
+    final pts =
+        metrics[ProjectionMetric.bodyweight] ??
         (metrics.isEmpty ? null : metrics.values.first);
     return pts == null || pts.isEmpty ? null : pts.last.weekStart;
   }
@@ -258,20 +260,23 @@ List<Map<String, double>> _runValues(
     final ratio = sIdx / sTrue;
     final m = <String, double>{
       ProjectionMetric.bodyweight: bw,
-      ProjectionMetric.bodyFat:
-          a.bodyFat == null ? bf : a.bodyFat! + (bf - st.bfPct),
+      ProjectionMetric.bodyFat: a.bodyFat == null
+          ? bf
+          : a.bodyFat! + (bf - st.bfPct),
       ProjectionMetric.strengthTotal: a.indexTotal == null
           ? sIdx
           : a.indexTotal! * sIdx / startIndexTotal,
       ProjectionMetric.vo2max: vo2,
-      ProjectionMetric.climbingGrade:
-          a.climbingGrade == null ? c : a.climbingGrade! + (c - st.c),
+      ProjectionMetric.climbingGrade: a.climbingGrade == null
+          ? c
+          : a.climbingGrade! + (c - st.c),
     };
     for (final l in ProjectionMetric.lifts) {
       final idx = lifts[l]! * ratio;
       final anchor = a.e1rm[l];
-      m[ProjectionMetric.e1rm(l)] =
-          anchor == null ? idx : anchor * idx / lift0[l]!;
+      m[ProjectionMetric.e1rm(l)] = anchor == null
+          ? idx
+          : anchor * idx / lift0[l]!;
     }
     out.add(m);
   }
@@ -310,12 +315,12 @@ List<Map<String, double>> _runValues(
 }
 
 double _floorFor(String metric, double projected) => switch (metric) {
-      ProjectionMetric.bodyweight => projectionBwFloorLb,
-      ProjectionMetric.bodyFat => projectionBfFloorPts,
-      ProjectionMetric.vo2max => projectionVo2Floor,
-      ProjectionMetric.climbingGrade => projectionClimbFloorV,
-      _ => projectionStrengthFloorFrac * projected.abs(),
-    };
+  ProjectionMetric.bodyweight => projectionBwFloorLb,
+  ProjectionMetric.bodyFat => projectionBfFloorPts,
+  ProjectionMetric.vo2max => projectionVo2Floor,
+  ProjectionMetric.climbingGrade => projectionClimbFloorV,
+  _ => projectionStrengthFloorFrac * projected.abs(),
+};
 
 double _pct(List<double> sorted, double q) {
   final pos = q * (sorted.length - 1);
@@ -358,21 +363,21 @@ ProjectionSnapshot? buildProjectionSnapshot({
   final baseR = rLbWk ?? block.r;
 
   Sim2Run run({double? r, Random? rng}) => sim2Run(
-        params: params,
-        blocks: blocks,
-        start: startMonday,
-        horizon: block.end,
-        blockOverrides: {
-          if (r != null || proteinGPerLb != null)
-            blockN: Sim2DialOverrides(r: r, p: proteinGPerLb),
-        },
-        observedBw: anchors.bodyweight,
-        observedIndexTotal: startIndexTotal,
-        rng: rng,
-        sNoise: rng == null ? 0 : 1.5,
-        cNoise: rng == null ? 0 : 0.05,
-        injuries: rng != null,
-      );
+    params: params,
+    blocks: blocks,
+    start: startMonday,
+    horizon: block.end,
+    blockOverrides: {
+      if (r != null || proteinGPerLb != null)
+        blockN: Sim2DialOverrides(r: r, p: proteinGPerLb),
+    },
+    observedBw: anchors.bodyweight,
+    observedIndexTotal: startIndexTotal,
+    rng: rng,
+    sNoise: rng == null ? 0 : 1.5,
+    cNoise: rng == null ? 0 : 0.05,
+    injuries: rng != null,
+  );
 
   final det = _runValues(run(r: rLbWk), anchors, startIndexTotal);
   final brackets = [
@@ -400,8 +405,9 @@ ProjectionSnapshot? buildProjectionSnapshot({
         lo = min(lo, _pct(vals, 0.10));
         hi = max(hi, _pct(vals, 0.90));
       }
-      pts.add(ProjectionPoint(
-          startMonday.add(Duration(days: 7 * k)), p, lo, hi));
+      pts.add(
+        ProjectionPoint(startMonday.add(Duration(days: 7 * k)), p, lo, hi),
+      );
     }
     metrics[m] = pts;
   }
@@ -438,14 +444,48 @@ ProjectionSnapshot? buildProjectionSnapshot({
 // Codec + selection
 // ---------------------------------------------------------------------------
 
+/// True when row 1 of the raw tab is the expected header (every
+/// [projectionSnapshotHeaders] column, in order) — or the tab is empty
+/// (a fresh tab gets its header written first). The nightly writer
+/// REFUSES to append under anything else (the values.append-at-A1
+/// gotcha once ate program_moves' header row; appending below a data
+/// row would bake the damage in).
+bool projectionTabHeaderOk(List<List<Object?>> tab) {
+  if (tab.isEmpty) return true;
+  final row = tab.first;
+  if (row.length < projectionSnapshotHeaders.length) return false;
+  for (var i = 0; i < projectionSnapshotHeaders.length; i++) {
+    if ((row[i]?.toString() ?? '').trim() != projectionSnapshotHeaders[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Row 1 looks like a DATA row (numeric block + a known metric) — the
+/// header row is missing.
+bool _looksLikeDataRow(List<Object?> row) =>
+    row.length >= 4 &&
+    num.tryParse('${row[0]}'.trim()) != null &&
+    ProjectionMetric.all.contains('${row[1]}'.trim());
+
 /// Decodes the raw tab (header + rows) into snapshot sets grouped by
 /// (block, made_at), sorted by block then made_at. Header-driven;
-/// malformed rows are skipped, never fatal.
+/// malformed rows are skipped, never fatal. REPAIR-READ: when row 1 is
+/// a data row (the header was lost), every row — row 1 included — is
+/// read positionally in [projectionSnapshotHeaders] order.
 List<ProjectionSnapshot> parseProjectionSnapshots(List<List<Object?>> tab) {
-  if (tab.length < 2) return const [];
+  if (tab.isEmpty) return const [];
+  final headerless =
+      !projectionTabHeaderOk(tab) && _looksLikeDataRow(tab.first);
+  if (!headerless && tab.length < 2) return const [];
   final head = <String, int>{
-    for (var i = 0; i < tab.first.length; i++)
-      tab.first[i].toString().trim(): i,
+    if (headerless)
+      for (var i = 0; i < projectionSnapshotHeaders.length; i++)
+        projectionSnapshotHeaders[i]: i
+    else
+      for (var i = 0; i < tab.first.length; i++)
+        tab.first[i].toString().trim(): i,
   };
   String cell(List<Object?> r, String k) {
     final i = head[k];
@@ -453,8 +493,9 @@ List<ProjectionSnapshot> parseProjectionSnapshots(List<List<Object?>> tab) {
   }
 
   final groups = <String, _Group>{};
-  for (final r in tab.skip(1)) {
-    final block = int.tryParse(cell(r, 'block')) ??
+  for (final r in tab.skip(headerless ? 0 : 1)) {
+    final block =
+        int.tryParse(cell(r, 'block')) ??
         double.tryParse(cell(r, 'block'))?.round();
     final metric = cell(r, 'metric');
     final week = DateTime.tryParse(cell(r, 'week_start'));
@@ -482,9 +523,13 @@ List<ProjectionSnapshot> parseProjectionSnapshots(List<List<Object?>> tab) {
       try {
         final decoded = jsonDecode(ij);
         if (decoded is Map) {
-          g.inputs.addAll({for (final e in decoded.entries) '${e.key}': e.value});
+          g.inputs.addAll({
+            for (final e in decoded.entries) '${e.key}': e.value,
+          });
         }
-      } catch (_) {/* malformed inputs degrade to empty */}
+      } catch (_) {
+        /* malformed inputs degrade to empty */
+      }
     }
   }
   final out = [
@@ -495,14 +540,17 @@ List<ProjectionSnapshot> parseProjectionSnapshots(List<List<Object?>> tab) {
         programVersion: g.programVersion,
         metrics: {
           for (final e in g.metrics.entries)
-            e.key: (e.value..sort((a, b) => a.weekStart.compareTo(b.weekStart))),
+            e.key: (e.value
+              ..sort((a, b) => a.weekStart.compareTo(b.weekStart))),
         },
         inputs: g.inputs,
       ),
   ];
-  out.sort((a, b) => a.block != b.block
-      ? a.block.compareTo(b.block)
-      : a.madeAt.compareTo(b.madeAt));
+  out.sort(
+    (a, b) => a.block != b.block
+        ? a.block.compareTo(b.block)
+        : a.madeAt.compareTo(b.madeAt),
+  );
   return out;
 }
 
@@ -543,6 +591,26 @@ Map<int, ProjectionSnapshot> firstSnapshotsByBlock(
   return out;
 }
 
+/// The first snapshot of the block covering [day] (its recorded
+/// block_start ≤ day ≤ block_end); when no block covers the day, the
+/// latest block that started on/before it (a finished phase keeps
+/// tracking at its end until the next block is frozen). Null when no
+/// snapshot started by [day]. Mirrored by the MCP phase_tracking block.
+ProjectionSnapshot? snapshotForDay(
+  Map<int, ProjectionSnapshot> firstByBlock,
+  DateTime day,
+) {
+  final d = _utcDay(day);
+  ProjectionSnapshot? latest;
+  for (final s in firstByBlock.values) {
+    final start = s.start, end = s.end;
+    if (start == null || d.isBefore(start)) continue;
+    if (end != null && !d.isAfter(end)) return s;
+    if (latest == null || start.isAfter(latest.start!)) latest = s;
+  }
+  return latest;
+}
+
 /// Whether the nightly writer still owes [block] its snapshot.
 bool snapshotNeededForBlock(List<ProjectionSnapshot> existing, int block) =>
     !existing.any((s) => s.block == block);
@@ -557,5 +625,4 @@ String _ymd(DateTime d) =>
     '${d.year}-${d.month.toString().padLeft(2, '0')}-'
     '${d.day.toString().padLeft(2, '0')}';
 
-double? _r2(double? v) =>
-    v == null ? null : double.parse(v.toStringAsFixed(2));
+double? _r2(double? v) => v == null ? null : double.parse(v.toStringAsFixed(2));

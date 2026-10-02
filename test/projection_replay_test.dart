@@ -10,47 +10,79 @@ import 'package:airledger/services/sim2_model.dart';
 import 'package:airledger/services/wm_tabs.dart' show WorkingMaxRow;
 
 final _blocks = [
-  Sim2Block(0, DateTime.utc(2026, 9, 21), DateTime.utc(2026, 12, 13), 'cut',
-      -0.75),
-  Sim2Block(1, DateTime.utc(2026, 12, 14), DateTime.utc(2027, 1, 3),
-      'reverse', 0.15),
+  Sim2Block(
+    0,
+    DateTime.utc(2026, 9, 21),
+    DateTime.utc(2026, 12, 13),
+    'cut',
+    -0.75,
+  ),
+  Sim2Block(
+    1,
+    DateTime.utc(2026, 12, 14),
+    DateTime.utc(2027, 1, 3),
+    'reverse',
+    0.15,
+  ),
 ];
 
 List<WeightRow> _weighIns() => [
-      // Before the anchor: ~162 flat. After: a crash to 150 that the
-      // replay must NOT see.
-      for (var i = 0; i < 40; i++)
-        WeightRow(
-            date: DateTime(2026, 8, 13).add(Duration(days: i)),
-            weightLbs: 162),
-      for (var i = 1; i < 12; i++)
-        WeightRow(
-            date: DateTime(2026, 9, 21).add(Duration(days: i)),
-            weightLbs: 150),
-    ];
+  // Before the anchor: ~162 flat. After: a crash to 150 that the
+  // replay must NOT see.
+  for (var i = 0; i < 40; i++)
+    WeightRow(
+      date: DateTime(2026, 8, 13).add(Duration(days: i)),
+      weightLbs: 162,
+    ),
+  for (var i = 1; i < 12; i++)
+    WeightRow(
+      date: DateTime(2026, 9, 21).add(Duration(days: i)),
+      weightLbs: 150,
+    ),
+];
 
 List<StrengthRow> _strength() => [
-      StrengthRow(date: DateTime(2026, 9, 14), exercise: 'Barbell Squat',
-          weight: 300, reps: 1, rpe: 8),
-      StrengthRow(date: DateTime(2026, 9, 15), exercise:
-          'Flat Barbell Bench Press', weight: 220, reps: 1, rpe: 8),
-      StrengthRow(date: DateTime(2026, 9, 16), exercise: 'Barbell Deadlift',
-          weight: 310, reps: 1, rpe: 8),
-      // After the anchor — a huge squat the replay must ignore.
-      StrengthRow(date: DateTime(2026, 9, 28), exercise: 'Barbell Squat',
-          weight: 400, reps: 1, rpe: 8),
-    ];
+  StrengthRow(
+    date: DateTime(2026, 9, 14),
+    exercise: 'Barbell Squat',
+    weight: 300,
+    reps: 1,
+    rpe: 8,
+  ),
+  StrengthRow(
+    date: DateTime(2026, 9, 15),
+    exercise: 'Flat Barbell Bench Press',
+    weight: 220,
+    reps: 1,
+    rpe: 8,
+  ),
+  StrengthRow(
+    date: DateTime(2026, 9, 16),
+    exercise: 'Barbell Deadlift',
+    weight: 310,
+    reps: 1,
+    rpe: 8,
+  ),
+  // After the anchor — a huge squat the replay must ignore.
+  StrengthRow(
+    date: DateTime(2026, 9, 28),
+    exercise: 'Barbell Squat',
+    weight: 400,
+    reps: 1,
+    rpe: 8,
+  ),
+];
 
 List<MealRow> _meals() => [
-      for (var i = 0; i < 40; i++)
-        MealRow(
-          eatenAt: DateTime(2026, 8, 13, 12).add(Duration(days: i)),
-          calories: 2000,
-          proteinG: 160,
-          carbsG: 200,
-          fatG: 60,
-        ),
-    ];
+  for (var i = 0; i < 40; i++)
+    MealRow(
+      eatenAt: DateTime(2026, 8, 13, 12).add(Duration(days: i)),
+      calories: 2000,
+      proteinG: 160,
+      carbsG: 200,
+      fatG: 60,
+    ),
+];
 
 ProjectionSnapshot _snap({DateTime? madeAt, double aScale = 1}) =>
     snapshotAtBlockStart(
@@ -109,8 +141,7 @@ void main() {
     expect((s.inputs['r_lb_wk'] as num).abs(), lessThan(0.05));
   });
 
-  test('replay (made days later) ignores tonight\'s recalibration scales',
-      () {
+  test('replay (made days later) ignores tonight\'s recalibration scales', () {
     final late = _snap(aScale: 1.4);
     expect(late.inputs['replay'], isTrue);
     expect(late.inputs['a_scale'], 1.0);
@@ -118,8 +149,10 @@ void main() {
     final onTime = _snap(madeAt: DateTime.utc(2026, 9, 21, 23), aScale: 1.4);
     expect(onTime.inputs['replay'], isFalse);
     expect(onTime.inputs['a_scale'], 1.4);
-    expect((onTime.inputs['params'] as Map)['a'],
-        closeTo(Sim2Params.fitted().a * 1.4, 1e-9));
+    expect(
+      (onTime.inputs['params'] as Map)['a'],
+      closeTo(Sim2Params.fitted().a * 1.4, 1e-9),
+    );
   });
 
   test('unknown block → null', () {

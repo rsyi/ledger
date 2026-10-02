@@ -66,11 +66,26 @@ ProjectionSnapshot? snapshotAtBlockStart({
   final replay =
       _d(madeAt).difference(anchor).inDays > projectionReplayAfterDays;
 
-  final w = [for (final r in weighIns) if (_onOrBefore(r.date, anchor)) r];
-  final bf = [for (final r in bodyFat) if (_onOrBefore(r.date, anchor)) r];
-  final s = [for (final r in strength) if (_onOrBefore(r.date, anchor)) r];
-  final c = [for (final r in climbs) if (_onOrBefore(r.date, anchor)) r];
-  final m = [for (final r in meals) if (_onOrBefore(r.eatenAt, anchor)) r];
+  final w = [
+    for (final r in weighIns)
+      if (_onOrBefore(r.date, anchor)) r,
+  ];
+  final bf = [
+    for (final r in bodyFat)
+      if (_onOrBefore(r.date, anchor)) r,
+  ];
+  final s = [
+    for (final r in strength)
+      if (_onOrBefore(r.date, anchor)) r,
+  ];
+  final c = [
+    for (final r in climbs)
+      if (_onOrBefore(r.date, anchor)) r,
+  ];
+  final m = [
+    for (final r in meals)
+      if (_onOrBefore(r.eatenAt, anchor)) r,
+  ];
 
   final e1rm = e1rmActualsAt(s, anchor);
   final anchors = ProjectionAnchors(
@@ -87,8 +102,11 @@ ProjectionSnapshot? snapshotAtBlockStart({
     ..a *= useA
     ..b *= useB;
 
-  final nutrition = buildNutritionForecast(meals: m, weighIns: w, today: anchor)
-      .withMaintenanceOffset(useOffset);
+  final nutrition = buildNutritionForecast(
+    meals: m,
+    weighIns: w,
+    today: anchor,
+  ).withMaintenanceOffset(useOffset);
   final bwForP = anchors.bodyweight ?? sim2SeedBw;
   final r = nutrition.canProject ? nutrition.rProjectedLbWk : null;
   final p = nutrition.canProject ? nutrition.proteinGPerLb(bwForP) : null;

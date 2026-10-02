@@ -151,6 +151,7 @@ import '../services/program_metrics.dart'
         weekStartOf;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
+import '../services/projection_tracking.dart' show PhaseProjections;
 import '../services/recomp_review.dart';
 import '../services/warehouse_connector.dart';
 import '../services/week_drivers.dart';
@@ -266,6 +267,17 @@ class HomeDashboard extends StatefulWidget {
   /// this dashboard already computed. Null → the explainer sheet.
   final void Function(String lift, LiftSummary summary)? onOpenLift;
 
+  /// FROZEN PHASE PROJECTIONS (2026-10-02): loads each block's first
+  /// snapshot + the actual sources. The PHASE timeline then shows the
+  /// current block's bodyweight tracking and past blocks' one-line
+  /// results. Null → the plain timeline.
+  final Future<PhaseProjections?> Function()? loadProjections;
+
+  /// A timeline row with a frozen snapshot → that block's
+  /// projection-vs-actual view.
+  final void Function(int block, PhaseProjections projections)?
+      onOpenBlockProjection;
+
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -310,6 +322,8 @@ class HomeDashboard extends StatefulWidget {
     this.onOpenWeight,
     this.onOpenStrength,
     this.onOpenLift,
+    this.loadProjections,
+    this.onOpenBlockProjection,
     this.today,
     this.progressOnly = false,
   });
@@ -441,6 +455,7 @@ class HomeDashboardState extends State<HomeDashboard> {
   // source never poisons another card. Reassigned by [reload].
   late Future<WmSnapshot?> _wm;
   late Future<IntentDocs?> _docs;
+  late Future<PhaseProjections?> _projections;
   late Future<WeightSeriesResult?> _weights;
   late Future<List<Map<String, Object?>>?> _status;
 
@@ -494,6 +509,7 @@ class HomeDashboardState extends State<HomeDashboard> {
     }
     _wm = _guard(() async => widget.wmStore?.snapshot(force: force));
     _docs = _guard(() async => widget.provider?.load());
+    _projections = _guard(() async => widget.loadProjections?.call());
     // Not gated on analytics: loadDailyWeighIns falls back to a direct
     // ledger read when the airlayer path is unavailable or empty.
     _weights = _guard(
@@ -1384,11 +1400,22 @@ class HomeDashboardState extends State<HomeDashboard> {
             const SectionHeader(label: 'Phase'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: AppSpace.gutter),
-              child: BlockTimeline(
-                key: const ValueKey('progress-block-timeline'),
-                programVersion: version,
-                slice: _slice(snap.data),
-                today: _today,
+              child: FutureBuilder<PhaseProjections?>(
+                future: _projections,
+                builder: (context, psnap) {
+                  final projections = psnap.data;
+                  final open = widget.onOpenBlockProjection;
+                  return BlockTimeline(
+                    key: const ValueKey('progress-block-timeline'),
+                    programVersion: version,
+                    slice: _slice(snap.data),
+                    today: _today,
+                    projections: projections,
+                    onOpenBlock: projections == null || open == null
+                        ? null
+                        : (n) => open(n, projections),
+                  );
+                },
               ),
             ),
           ],

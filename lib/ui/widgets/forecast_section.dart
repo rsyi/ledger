@@ -27,6 +27,13 @@
 ///     constant with value/prior/source), not a lever; edits remain
 ///     possible for inspection but there is no scenario machinery
 ///     around them.
+///   * FROZEN PHASE PROJECTIONS (2026-10-02 spec, user choice): the
+///     Weight and Strength focuses lead with the CURRENT block's
+///     projection frozen at the block start (band + projected line,
+///     actuals overlaid, tracking chip + one line — projection_card.dart);
+///     the nightly-recalibrated end-of-horizon OUTLOOK ("Strength total
+///     … by Dec '28", P(V8), the live charts) moved into Model details.
+///     The [ForecastFocus.all] layout is unchanged.
 ///   * UI redesign phase 6 (2026-10-02): plain-language summary first
 ///     (Projection → Nutrition → More projections); every model
 ///     internal — tracking status, the single-trajectory note, the
@@ -46,10 +53,13 @@ import '../../services/nutrition_model.dart';
 import '../../services/program_metrics.dart' show WeightRow;
 import '../../services/program_observed.dart'
     show ObservedWeightStats, sevenDayAvgSeries;
+import '../../services/projection_snapshot.dart';
+import '../../services/projection_tracking.dart' show PhaseProjections;
 import '../../services/sim2_harness.dart';
 import '../../services/sim2_model.dart';
 import '../design/design.dart';
 import 'chart_bottom_axis.dart';
+import 'projection_card.dart';
 
 // ---------------------------------------------------------------------------
 // Inputs
@@ -86,6 +96,12 @@ class ForecastInputs {
   /// simply reads "on".
   final ForecastMeta? meta;
 
+  /// Frozen phase projections + actual sources (projection_snapshots).
+  /// The Weight / Strength focuses render the CURRENT block's frozen
+  /// projection with actuals overlaid; null/empty → the live model line
+  /// labelled "no frozen projection yet".
+  final PhaseProjections? projections;
+
   const ForecastInputs({
     required this.blocks,
     this.observedDaily = const [],
@@ -101,6 +117,7 @@ class ForecastInputs {
     this.expectations,
     this.nutrition,
     this.meta,
+    this.projections,
   });
 }
 
@@ -404,22 +421,70 @@ class _ForecastSectionState extends State<ForecastSection> {
     final horizonLabel = DateFormat("MMM d ''yy").format(_blocks.last.end);
     final children = switch (widget.focus) {
       ForecastFocus.weight => [
-        ..._bodyweightBlock(context, horizonLabel),
+        const SectionHeader(label: 'Bodyweight'),
+        _gutter(_frozen(ProjectionMetric.bodyweight, (w) => w.bw)),
         ..._nutritionBlock(),
         const SectionHeader(label: 'Body composition'),
+        _gutter(_frozen(ProjectionMetric.bodyFat, (w) => w.bfPct)),
+        const SizedBox(height: AppSpace.sectionGap),
         _gutter(
-          AppCard(
-            key: const ValueKey('forecast-bodycomp-card'),
-            padding: const EdgeInsets.all(12),
-            child: _bodyFatBody(context),
+          _foldout(
+            context,
+            key: 'forecast-model-details',
+            title: 'Model details',
+            child: _weightOutlook(context, horizonLabel),
           ),
         ),
       ],
       ForecastFocus.strength => [
-        ..._projectionBlock(context, horizonLabel),
+        const SectionHeader(label: 'Projection'),
+        _gutter(_frozen(ProjectionMetric.strengthTotal, (w) => w.sIdx)),
         const SectionHeader(label: 'More projections'),
-        ..._moreFolds(context, horizonLabel, includeBody: false),
-        _modelDetailsFold(context),
+        _gutter(
+          _foldout(
+            context,
+            key: 'sim2-fold-climb',
+            title: 'Climbing',
+            child: _frozen(
+              ProjectionMetric.climbingGrade,
+              (w) => w.c,
+              bare: true,
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        _gutter(
+          _foldout(
+            context,
+            key: 'sim2-fold-vo2',
+            title: 'VO2 max',
+            child: _frozen(ProjectionMetric.vo2max, (w) => w.vo2, bare: true),
+          ),
+        ),
+        const SizedBox(height: 8),
+        _gutter(
+          _foldout(
+            context,
+            key: 'sim2-fold-fatigue',
+            title: 'Fatigue budget',
+            child: _fatigueBody(context),
+          ),
+        ),
+        const SizedBox(height: 8),
+        _gutter(
+          _foldout(
+            context,
+            key: 'forecast-model-details',
+            title: 'Model details',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ..._strengthOutlook(context, horizonLabel),
+                _modelDetails(context),
+              ],
+            ),
+          ),
+        ),
       ],
       ForecastFocus.all => [
         ..._projectionBlock(context, horizonLabel),
@@ -434,6 +499,130 @@ class _ForecastSectionState extends State<ForecastSection> {
       children: children,
     );
   }
+
+  /// The block the frozen projections track (the one containing today).
+  int? get _currentBlock =>
+      sim2CurrentBlockN(widget.inputs.blocks, widget.today);
+
+  /// The current block's FIRST frozen snapshot, if the nightly writer
+  /// has made one.
+  ProjectionSnapshot? get _snapshot {
+    final n = _currentBlock;
+    return n == null ? null : widget.inputs.projections?.byBlock[n];
+  }
+
+  /// The live run's values inside the current block — the fallback line
+  /// when no snapshot exists (a sim point at Monday m is the state
+  /// entering m + 7).
+  List<(DateTime, double)> _liveLine(double Function(Sim2WeekPoint) f) {
+    final n = _currentBlock;
+    return [
+      for (final w in _run.weeks)
+        if (w.blockN == n) (w.monday.add(const Duration(days: 7)), f(w)),
+    ];
+  }
+
+  /// One metric's frozen projection card (live fallback built in).
+  Widget _frozen(
+    String metric,
+    double Function(Sim2WeekPoint) live, {
+    bool bare = false,
+  }) =>
+      ProjectionCard(
+        metric: metric,
+        snapshot: _snapshot,
+        projections: widget.inputs.projections ?? _fallbackActuals,
+        today: widget.today,
+        liveLine: _liveLine(live),
+        bare: bare,
+      );
+
+  /// Actual sources when the loader supplied none (weigh-ins only).
+  PhaseProjections get _fallbackActuals =>
+      PhaseProjections(weighIns: widget.inputs.observedDaily);
+
+  /// Weight page Model details: the ROLLING outlook (recalibrated
+  /// nightly, end of horizon) the frozen cards replaced on the page.
+  Widget _weightOutlook(BuildContext context, String horizonLabel) {
+    final meta = AppText.meta(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Rolling outlook — the live model, recalibrated nightly '
+          '(not the frozen phase projection above)',
+          key: const ValueKey('forecast-outlook-note'),
+          style: meta,
+        ),
+        const SizedBox(height: 6),
+        _bwChartBody(context),
+        const SizedBox(height: 8),
+        Text(
+          'Projected ${_run.last.bw.toStringAsFixed(0)} lb by $horizonLabel',
+          key: const ValueKey('forecast-bw-summary'),
+          style: AppText.row(context),
+        ),
+        Text(
+          _nutritionDriven
+              ? 'Weight rate from your logged intake'
+              : "Weight rate from the program's declared rates (no "
+                    'nutrition data yet)',
+          key: const ValueKey('forecast-basis'),
+          style: meta,
+        ),
+        const SizedBox(height: 10),
+        _bodyFatBody(context),
+        const SizedBox(height: 6),
+        Text(
+          '${_tracking()}'
+          '${_nutritionDriven ? ' · rate from logged intake' : ' · declared rates (no nutrition data)'}',
+          key: const ValueKey('forecast-tracking'),
+          style: meta,
+        ),
+      ],
+    );
+  }
+
+  /// Strength page Model details: the ROLLING end-of-horizon outlook —
+  /// the "Staying on this program, by …" summary, the live strength
+  /// chart with the capacity toggle, the climbing line + P(V8) and the
+  /// VO2 note.
+  List<Widget> _strengthOutlook(BuildContext context, String horizonLabel) => [
+    Text(
+      'Rolling outlook — the live model, recalibrated nightly (not the '
+      'frozen phase projection above)',
+      key: const ValueKey('forecast-outlook-note'),
+      style: AppText.meta(context),
+    ),
+    const SizedBox(height: 6),
+    _SummaryLine(
+      key: const ValueKey('sim2-summary'),
+      run: _run,
+      mc: _mc,
+      horizonLabel: horizonLabel,
+      nutritionDriven: _nutritionDriven,
+    ),
+    const SizedBox(height: 8),
+    _card(
+      context,
+      title: 'Strength total',
+      trailing: FilterChip(
+        key: const ValueKey('sim2-capacity-toggle'),
+        label: const Text('capacity'),
+        visualDensity: VisualDensity.compact,
+        selected: _showCapacity,
+        onSelected: (v) => setState(() => _showCapacity = v),
+      ),
+      child: _strengthBody(context, horizonLabel),
+    ),
+    const SizedBox(height: 8),
+    Text('Climbing', style: AppText.row(context)),
+    _climbBody(context, horizonLabel),
+    const SizedBox(height: 8),
+    Text('VO2 max', style: AppText.row(context)),
+    _vo2Body(context),
+    const SizedBox(height: 12),
+  ];
 
   /// Plain-language answer first: where the program lands, then the
   /// strength-total chart with the capacity toggle.
@@ -475,39 +664,6 @@ class _ForecastSectionState extends State<ForecastSection> {
         delta: _calorieDelta,
         onDelta: _setDelta,
         stepKcal: _deltaStepKcal,
-      ),
-    ),
-  ];
-
-  /// Weight page: the bodyweight trajectory (observed daily + 7-day
-  /// average + the projection), the observed stats, and where the
-  /// projection lands — always open (it is the page's subject).
-  List<Widget> _bodyweightBlock(BuildContext context, String horizonLabel) => [
-    const SectionHeader(label: 'Bodyweight'),
-    _gutter(
-      AppCard(
-        key: const ValueKey('forecast-bw-card'),
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _bwChartBody(context),
-            const SizedBox(height: 8),
-            Text(
-              'Projected ${_run.last.bw.toStringAsFixed(0)} lb by $horizonLabel',
-              key: const ValueKey('forecast-bw-summary'),
-              style: AppText.row(context),
-            ),
-            Text(
-              _nutritionDriven
-                  ? 'Weight rate from your logged intake'
-                  : "Weight rate from the program's declared rates (no "
-                        'nutrition data yet)',
-              key: const ValueKey('forecast-basis'),
-              style: AppText.meta(context),
-            ),
-          ],
-        ),
       ),
     ),
   ];

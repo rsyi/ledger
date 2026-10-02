@@ -1,5 +1,6 @@
 // carryover_check.dart — the in-app daily fallback that asks the coach
 // for a moves proposal when work was missed (spec 2026-10-02 §5).
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:airledger/models/coach_proposal.dart';
@@ -93,6 +94,7 @@ void main() {
       DateTime? now,
       MissedWork? missed,
       bool proposalToday = false,
+      bool synced = true,
       Future<void> Function()? ask,
     }) => CarryoverCheck.maybeRun(
       now: now ?? fri7,
@@ -102,10 +104,18 @@ void main() {
         meta[k] = v;
       },
       missed: () async {
+        order.add('missed');
         missedLoads++;
         return missed ?? _missed();
       },
-      hasMovesProposalToday: () async => proposalToday,
+      freshSync: () async {
+        order.add('sync');
+        return synced;
+      },
+      alreadyPlanned: () async {
+        order.add('planned');
+        return proposalToday;
+      },
       ask: (_) async {
         order.add('ask');
         asks++;
@@ -115,7 +125,7 @@ void main() {
 
     test('runs once: sets meta BEFORE asking, then asks', () async {
       expect(await run(), CarryoverOutcome.asked);
-      expect(order, ['meta', 'ask']);
+      expect(order, ['missed', 'sync', 'planned', 'meta', 'ask']);
       expect(meta[CarryoverCheck.metaKey], '2026-10-02');
       expect(asks, 1);
     });
@@ -142,10 +152,28 @@ void main() {
       expect(await run(), CarryoverOutcome.asked);
     });
 
-    test('a moves proposal already dated today → skipped', () async {
-      expect(await run(proposalToday: true), CarryoverOutcome.proposalExists);
-      expect(meta, isEmpty);
+    test('already planned (nightly briefing / proposal) → skipped; the '
+        'day counts as checked', () async {
+      expect(await run(proposalToday: true), CarryoverOutcome.alreadyPlanned);
+      expect(meta[CarryoverCheck.metaKey], '2026-10-02');
       expect(asks, 0);
+      expect(await run(), CarryoverOutcome.alreadyChecked);
+    });
+
+    test('no fresh sync → returns WITHOUT meta (retry next resume); '
+        'coach_chat is never read', () async {
+      expect(await run(synced: false), CarryoverOutcome.notSynced);
+      expect(meta, isEmpty);
+      expect(order, isNot(contains('planned')));
+      expect(asks, 0);
+      // Next resume, sync works → asks.
+      expect(await run(), CarryoverOutcome.asked);
+      expect(asks, 1);
+    });
+
+    test('nothing missed → no sync attempted (cheap gate first)', () async {
+      await run(missed: MissedWork(missed: const [], remainingDays: const []));
+      expect(order, ['missed']);
     });
 
     test('nothing missed → skipped, meta untouched', () async {
@@ -165,7 +193,8 @@ void main() {
         metaGet: (k) async => null,
         metaSet: (k, v) async => meta[k] = v,
         missed: () async => null,
-        hasMovesProposalToday: () async => false,
+        freshSync: () async => true,
+        alreadyPlanned: () async => false,
         ask: (_) async => asks++,
       );
       expect(out, CarryoverOutcome.nothingMissed);
@@ -189,47 +218,168 @@ void main() {
     });
   });
 
-  group('hasMovesProposalOn', () {
-    Record row(String kind, String text, Object date) => {
-      'kind': kind,
-      'text': text,
-      'date': date,
-    };
+  group('alreadyPlannedToday', () {
+    final now = DateTime(2026, 10, 2, 7, 15);
+    Record row(String kind, String text,
+            {String ts = '', Object? date, String thread = ''}) =>
+        {
+          'kind': kind,
+          'text': text,
+          'ts': ts,
+          'date': ?date,
+          'thread': thread,
+        };
 
-    test('true for a moves proposal dated today (DateTime or string)', () {
-      final today = DateTime(2026, 10, 2);
+    test('a nightly briefing posted last night (dated YESTERDAY) covers '
+        'today', () {
       expect(
-        hasMovesProposalOn([
-          row('proposal', _proposal().encode(), DateTime(2026, 10, 2)),
-        ], today),
+        alreadyPlannedToday([
+          row('briefing', 'Plan for Fri…',
+              ts: '2026-10-01T23:30:12.123', date: '2026-10-01',
+              thread: 'briefings'),
+        ], now),
         isTrue,
       );
+      // A one-digit-hour Sheets rendering parses too.
       expect(
-        hasMovesProposalOn([
-          row('proposal', _proposal().encode(), '2026-10-02'),
-        ], today),
+        alreadyPlannedToday([
+          row('briefing', 'x', ts: '2026-10-02 6:59:00',
+              thread: 'briefings'),
+        ], now),
         isTrue,
       );
     });
 
-    test('false for yesterday, legacy proposals, non-proposal rows', () {
-      final today = DateTime(2026, 10, 2);
+    test('a briefing before yesterday 18:00 or outside the briefings '
+        'thread does not count', () {
+      expect(
+        alreadyPlannedToday([
+          row('briefing', 'x', ts: '2026-10-01T17:59:00',
+              thread: 'briefings'),
+          row('briefing', 'x', ts: '2026-10-01T23:30:00'),
+          row('reply', 'x', ts: '2026-10-01T23:30:00', thread: 'briefings'),
+        ], now),
+        isFalse,
+      );
+    });
+
+    test('a moves proposal from last night (dated yesterday) or dated '
+        'today covers today', () {
+      expect(
+        alreadyPlannedToday([
+          row('proposal', _proposal().encode(),
+              ts: '2026-10-01T23:30:05', date: '2026-10-01',
+              thread: 'briefings'),
+        ], now),
+        isTrue,
+      );
+      expect(
+        alreadyPlannedToday([
+          row('proposal', _proposal().encode(), date: DateTime(2026, 10, 2)),
+        ], now),
+        isTrue,
+      );
+    });
+
+    test('older / legacy / non-moves proposals do not count', () {
       final legacy = CoachProposal(
         view: 'strength',
-        date: today,
+        date: DateTime(2026, 10, 2),
         summary: 's',
         entries: const [
           {'exercise': 'Squat'},
         ],
       ).encode();
       expect(
-        hasMovesProposalOn([
-          row('proposal', _proposal().encode(), DateTime(2026, 10, 1)),
-          row('proposal', legacy, today),
-          row('reply', _proposal().encode(), today),
-        ], today),
+        alreadyPlannedToday([
+          row('proposal', _proposal().encode(),
+              ts: '2026-10-01T12:00:00', date: '2026-10-01'),
+          row('proposal', legacy, ts: '2026-10-02T07:00:00',
+              date: '2026-10-02'),
+          row('reply', _proposal().encode(), ts: '2026-10-02T07:00:00'),
+        ], now),
         isFalse,
       );
+    });
+  });
+
+  group('awaitFreshSync', () {
+    final resumeAt = DateTime(2026, 10, 2, 7, 15);
+    late ValueNotifier<bool> syncing;
+    late ValueNotifier<DateTime?> lastSync;
+    setUp(() {
+      syncing = ValueNotifier(false);
+      lastSync = ValueNotifier(DateTime(2026, 10, 2, 6));
+    });
+
+    test('idle → runs a sync; true once lastSync is after resume', () async {
+      var syncs = 0;
+      final ok = await awaitFreshSync(
+        since: resumeAt,
+        syncing: syncing,
+        lastSync: lastSync,
+        chatFailed: () => false,
+        sync: () async {
+          syncs++;
+          lastSync.value = resumeAt.add(const Duration(seconds: 3));
+        },
+      );
+      expect(ok, isTrue);
+      expect(syncs, 1);
+    });
+
+    test('a sync already running → waits for it instead of a no-op '
+        'maybeSync', () async {
+      syncing.value = true;
+      var syncs = 0;
+      final f = awaitFreshSync(
+        since: resumeAt,
+        syncing: syncing,
+        lastSync: lastSync,
+        chatFailed: () => false,
+        sync: () async => syncs++,
+      );
+      await Future<void>.delayed(Duration.zero);
+      lastSync.value = resumeAt.add(const Duration(seconds: 5));
+      syncing.value = false;
+      expect(await f, isTrue);
+      expect(syncs, 0);
+    });
+
+    test('running sync never finishes → false after the timeout', () async {
+      syncing.value = true;
+      final ok = await awaitFreshSync(
+        since: resumeAt,
+        syncing: syncing,
+        lastSync: lastSync,
+        chatFailed: () => false,
+        sync: () async {},
+        timeout: const Duration(milliseconds: 20),
+      );
+      expect(ok, isFalse);
+    });
+
+    test('sync did not complete (lastSync stale) → false', () async {
+      final ok = await awaitFreshSync(
+        since: resumeAt,
+        syncing: syncing,
+        lastSync: lastSync,
+        chatFailed: () => false,
+        sync: () async {},
+      );
+      expect(ok, isFalse);
+    });
+
+    test('coach_chat failed in that sync → false', () async {
+      final ok = await awaitFreshSync(
+        since: resumeAt,
+        syncing: syncing,
+        lastSync: lastSync,
+        chatFailed: () => true,
+        sync: () async =>
+            lastSync.value = resumeAt.add(const Duration(seconds: 1)),
+      );
+      expect(ok, isFalse);
     });
   });
 

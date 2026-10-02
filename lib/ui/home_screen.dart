@@ -126,12 +126,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Daily missed-work carryover check (in-app fallback for the nightly
   /// briefing). Set by build once the coach is available; run after the
-  /// first bootstrap and on every app resume (the check itself gates to
-  /// once a day). Fire-and-forget — never blocks the UI.
+  /// first bootstrap, on every app resume and on each home-poller tick
+  /// (the check itself gates to once a day). Fire-and-forget — never blocks the UI.
   Future<void> Function()? _carryoverCheck;
   bool _carryoverKicked = false;
 
-  /// Resume throttle: until the day's check fires, each run re-reads the
+  /// Resume/poller throttle: until the day's check fires, each run re-reads the
   /// week's logs — at most one attempt per 10 minutes.
   DateTime? _carryoverLastRun;
 
@@ -291,7 +291,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_syncTimer == null && github != null && github.pollSeconds > 0) {
       _syncTimer = Timer.periodic(
         Duration(seconds: github.pollSeconds),
-        (_) => _pollGithub(github),
+        (_) {
+          _pollGithub(github);
+          // Kiosk mode never resumes: the poller tick is the carryover
+          // check's other trigger (same gates + 10-min throttle).
+          _runCarryoverCheck();
+        },
       );
     }
 
@@ -900,7 +905,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               // nightly briefing): needs the in-app coach, the coach_chat
               // view and ledger meta (the once-a-day guard). Skipped
               // under flutter test. Kicked once after bootstrap, then on
-              // every resume.
+              // every resume + home-poller tick.
               final carryoverView = coachView;
               final carryoverBrain = coachBrain;
               final carryoverLedger = coachLedger;
@@ -911,12 +916,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ? null
                   : () async {
                       final chatRepo = data.registry.forView(carryoverView);
+                      // resumeAt: coach_chat must come from a sync that
+                      // finished AFTER this — else last night's briefing
+                      // may not be local yet (→ duplicate proposal).
                       final now = DateTime.now();
                       await CarryoverCheck.maybeRun(
                         now: now,
                         metaGet: carryoverLedger.metaGet,
                         metaSet: carryoverLedger.metaSet,
-                        hasMovesProposalToday: () async => hasMovesProposalOn(
+                        freshSync: () async {
+                          final sched = SyncScheduler.instance;
+                          if (sched == null) return false;
+                          return awaitFreshSync(
+                            since: now,
+                            syncing: sched.syncing,
+                            lastSync: sched.lastSync,
+                            chatFailed: () {
+                              final bad = sched.lastErrorViews.value;
+                              return bad.contains('*') ||
+                                  bad.contains(carryoverView.name);
+                            },
+                            sync: () => sched.maybeSync(manual: true),
+                          );
+                        },
+                        alreadyPlanned: () async => alreadyPlannedToday(
                             await chatRepo.list(carryoverView), now),
                         missed: () async => (await carryoverBrain
                                 .weekStateLoader()

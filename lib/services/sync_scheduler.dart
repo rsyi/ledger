@@ -45,6 +45,11 @@ class SyncScheduler with WidgetsBindingObserver {
   final ValueNotifier<DateTime?> lastSync = ValueNotifier(null);
   final ValueNotifier<String?> lastError = ValueNotifier(null);
 
+  /// View names whose sync reported an error in the last round (`*` =
+  /// the whole round threw). Lets a reader require ITS view synced
+  /// cleanly (the carryover check gates on coach_chat).
+  final ValueNotifier<Set<String>> lastErrorViews = ValueNotifier(const {});
+
   Timer? _debounce;
   StreamSubscription<List<ConnectivityResult>>? _connSub;
 
@@ -153,6 +158,10 @@ class SyncScheduler with WidgetsBindingObserver {
           .whereType<String>()
           .toList();
       lastError.value = errors.isEmpty ? null : errors.join('; ');
+      lastErrorViews.value = {
+        for (final r in results)
+          if (r['error'] is String) r['view']?.toString() ?? '*',
+      };
       lastSync.value = DateTime.now();
     } catch (e) {
       // Input-shape / transport-level failure: keep dirty rows, note
@@ -160,6 +169,7 @@ class SyncScheduler with WidgetsBindingObserver {
       // the engine also pass through retryTransient above when their
       // message matches the transient patterns.)
       lastError.value = e.toString();
+      lastErrorViews.value = const {'*'};
     } finally {
       syncing.value = false;
       await refreshPending();

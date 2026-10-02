@@ -88,4 +88,13 @@ void main() {
       expect(marked.single.done, isTrue);
     });
   });
+
+  test('PM climb prose: period prefix stripped, no split inside parens', () {
+    final items = parsePrescribedProse(null,
+        'PM: Climb — LIGHT session (technique/volume, movement quality; low fatigue).');
+    expect(items, hasLength(1));
+    expect(items.single.name, 'Climb — LIGHT session');
+    expect(items.single.period, 'PM');
+    expect(items.single.scheme, contains('low fatigue'));
+  });
 }

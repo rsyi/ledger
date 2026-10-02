@@ -119,10 +119,13 @@ List<PrescribedItem> parsePrescribedProse(String? morning, String? afternoon) {
   for (final entry in [('AM', morning), ('PM', afternoon)]) {
     final prose = entry.$2;
     if (prose == null) continue;
-    final tidy = tidyProgramProse(prose);
+    // A leading "AM:"/"PM:" label is the period, not an exercise name.
+    final tidy = tidyProgramProse(prose)
+        .replaceFirst(RegExp(r'^\s*(?:AM|PM)\s*:\s*'), '');
     // Split on ';' and on ". then"/", then" (exercises are chained both
-    // ways in the prose — "… hanging leg raise 3x8-15. Then dips 3x8-12").
-    for (var seg in tidy.split(RegExp(r';|(?:[.,]\s+)[Tt]hen\s+'))) {
+    // ways in the prose — "… hanging leg raise 3x8-15. Then dips 3x8-12"),
+    // never inside parentheses ("(… movement quality; low fatigue)").
+    for (var seg in _splitTopLevel(tidy)) {
       seg = seg.trim();
       if (seg.isEmpty) continue;
       final low = seg.toLowerCase();
@@ -144,6 +147,28 @@ List<PrescribedItem> parsePrescribedProse(String? morning, String? afternoon) {
       ));
     }
   }
+  return out;
+}
+
+/// Splits prose into exercise segments on ';' and ". then"/", then",
+/// ignoring separators inside parentheses.
+List<String> _splitTopLevel(String prose) {
+  // Mask parenthesised spans so their ';' / "then" can't split.
+  final masked = StringBuffer();
+  var depth = 0;
+  for (final ch in prose.split('')) {
+    if (ch == '(') depth++;
+    masked.write(depth > 0 ? '\u0000' : ch);
+    if (ch == ')' && depth > 0) depth--;
+  }
+  final out = <String>[];
+  var start = 0;
+  for (final m
+      in RegExp(r';|(?:[.,]\s+)[Tt]hen\s+').allMatches(masked.toString())) {
+    out.add(prose.substring(start, m.start));
+    start = m.end;
+  }
+  out.add(prose.substring(start));
   return out;
 }
 

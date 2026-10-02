@@ -579,18 +579,21 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   (widget video, autofill:false — a carried-over video is fabricated
   data) + `video_media_id` (editable:false); sibling-dim CONVENTION
   `<field minus "_url">_media_id` (video_rpe.dart mediaIdFieldFor), no
-  new schema key beyond the widget. Attach = Google Photos PICKER API
-  (Library API's third-party media access died 2025-03-31; picker is
-  the sanctioned path) behind injectable `PhotosPickerGateway`
-  (GmailGateway pattern; scope photospicker.mediaitems.readonly ONLY;
-  google_sign_in 7.x init shared via google_signin_bootstrap.dart —
-  SAME web client id as kaya_gmail): sessions.create → VIEW-intent
-  pickerUri → poll until mediaItemsSet (pollingConfig, 5-min cap) →
-  first VIDEO of mediaItems.list. Picked items have NO productUrl —
-  video_url stores the CONSTRUCTED deep link
-  photos.google.com/lr/photo/<persistent-id> (Library-productUrl
-  shape; verify it opens on device). RPE estimate fires AT ATTACH TIME
-  (the baseUrl dies ~60 min post-pick): `=dv` download → ≤14 evenly
+  new schema key beyond the widget. ATTACH = LOCAL CLIPS (2026-10-02,
+  supersedes the Google Photos Picker API flow, whose ~60-min `=dv`
+  download kept failing "picker link may have expired"): Android
+  SYSTEM photo picker (ACTION_PICK_IMAGES video/*, OPEN_DOCUMENT below
+  API 33; no permission) via MainActivity channel
+  `com.robertyi.fitness/video_pick` (pick/copy) behind injectable
+  `LocalVideoPicker` (video_attach.dart). video_url = the content://
+  URI with a PERSISTED read grant; video_media_id = localMediaIdFor
+  (uri) (video_ref.dart, pure+tested); grant not persistable → native
+  copy into VideoFileStore while the one-shot grant lives. No Google
+  config needed — VideoRpeService is always on. Legacy rows keep
+  photos.google.com/lr/photo/<id> links (cached clip → in-app, else
+  Photos app; video_ref playbackTargetFor). photos_picker_gateway.dart
+  DELETED. RPE estimate fires at attach, reading frames STRAIGHT from
+  the URI/copy (no download) → ≤14 evenly
   spaced frames (4% end inset, ≥100 ms spacing) via a dependency-free
   MediaMetadataRetriever channel in MainActivity
   (`com.robertyi.fitness/video_frames`, services/video_frames.dart —
@@ -852,17 +855,11 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   (e.g. a Barbell Squat set filling "Bulgarian split squat"); aliases
   only expand one word cross-day (RDL/BSS); post-cut "4x4 run …" prose
   yields no item. Strain-based load modulation still not built.
-- Video-attach + AI RPE (2026-09-28): USER one-time GCP setup before
-  the attach button goes live — console (ryi-data-entry): enable the
-  "Google Photos Picker API"; add scope
-  photospicker.mediaitems.readonly to the OAuth consent screen (testing
-  mode + existing test user suffices); the SAME OAuth clients as
-  kaya_gmail work (Android package+SHA-1 + the Web client id in
-  config.yml integrations.kaya_gmail.server_client_id) — which is
-  ITSELF still pending, so both features light up together. Until
-  then the form renders "Attach video" disabled + hint. On-device
-  verify wanted: the constructed photos.google.com/lr/photo/<id> link
-  opens the right video; first end-to-end estimate quality.
+- Video-attach (local picker, 2026-10-02): no GCP setup needed any
+  more. On-device verify wanted: attach a Google-Photos-backed clip
+  from the system picker, confirm the grant persists across a reboot
+  (row still plays + thumbnails), and first end-to-end estimate
+  quality. Cloud-only (not on device) items may hit the copy path.
 
 - Cut revision (2026-09-28): NOT built — (1) live next-set suggester
   (in-gym: read the just-logged RPE, propose the next set's load per

@@ -60,7 +60,7 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  final docs = _loadDocs();
+  final docs = loadCoachDocs();
   if (docs.program == null) {
     stderr.writeln('program.yaml not found under $coachDir');
     exit(1);
@@ -69,7 +69,7 @@ Future<void> main(List<String> args) async {
   final config = dump.readConfig();
   final api = await dump.sheetsApi(config.keyPath);
   Future<List<Map<String, Object?>>> rows(String view) =>
-      _records(api, config.spreadsheetId, view);
+      readRecords(api, config.spreadsheetId, view);
 
   final strength = await rows('strength');
   final cardio = await rows('cardio');
@@ -200,7 +200,9 @@ bool _isFourByFour(Object? type, Set<String> types) {
 
 DateTime? _day(Object? v) => v == null ? null : dump.parseSheetDate('$v');
 
-IntentDocs _loadDocs() {
+/// program/phase/strategy.yaml from [coachDir] (missing/bad file = null).
+/// Shared with tool/coach_msg.dart's --split-moves validation.
+IntentDocs loadCoachDocs() {
   Map<Object?, Object?>? load(String name) {
     final f = File('$coachDir/$name');
     if (!f.existsSync()) return null;
@@ -221,7 +223,8 @@ IntentDocs _loadDocs() {
 
 /// All rows of [viewName]'s tab as dimension-name → cell maps. A missing
 /// schema or tab yields []; date dims are normalised to yyyy-mm-dd.
-Future<List<Map<String, Object?>>> _records(
+/// Shared with tool/coach_msg.dart.
+Future<List<Map<String, Object?>>> readRecords(
   gsheets.SheetsApi api,
   String defaultSpreadsheetId,
   String viewName,

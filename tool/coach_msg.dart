@@ -6,18 +6,24 @@ import 'dart:io';
 import 'package:airledger/models/coach_proposal.dart';
 import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/moves_block.dart';
+import 'package:airledger/services/moves_validation.dart';
 import 'package:airledger/services/input_parser.dart';
+import 'package:airledger/services/program_moves.dart';
+import 'package:airledger/services/program_week.dart';
 import 'package:airledger/services/schema_parser.dart';
 import 'package:googleapis/sheets/v4.dart' as gsheets;
 import 'package:googleapis_auth/auth_io.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
+import 'coach_dump.dart' show planningTarget;
+import 'missed_work.dart' show loadCoachDocs, readRecords;
+
 /// Coach chat message tool — posts and inspects the `coach_chat` tab.
 ///
 ///   echo 'text' | dart run tool/coach_msg.dart post --role coach --kind reply [--thread <id>]
 ///   echo "$PAYLOAD_JSON" | dart run tool/coach_msg.dart post --role coach --kind proposal --thread briefings
-///   echo "$OUT"   | dart run tool/coach_msg.dart post --role coach --kind briefing --split-moves --thread briefings
+///   echo "$OUT"   | dart run tool/coach_msg.dart post --role coach --kind briefing --split-moves [--target YYYY-MM-DD] --thread briefings
 ///   dart run tool/coach_msg.dart pending
 ///   dart run tool/coach_msg.dart briefing-exists --date YYYY-MM-DD
 ///
@@ -27,10 +33,17 @@ import 'package:uuid/uuid.dart';
 /// `--kind proposal` posts the stdin JSON payload verbatim (it must parse
 /// as a MovesProposal or legacy CoachProposal, else abort).
 /// `--kind briefing --split-moves` treats stdin as raw LLM output: an
-/// optional fenced ```moves block is extracted (extractMovesBlock) and
-/// posted FIRST as a `kind=proposal` row on the same thread, then the
-/// briefing text with the block stripped. A failed proposal post is
-/// logged and never blocks the briefing.
+/// optional fenced ```moves block is extracted (extractMovesBlock); the
+/// briefing text (block stripped) is posted FIRST, then the proposal as
+/// a `kind=proposal` row on the same thread (postSplitBriefing) — so a
+/// failed briefing post leaves no orphan proposal for the next run to
+/// duplicate. Moves are validated against the planning TARGET's Mon–Sun
+/// week (--target, default = coach_dump's planningTarget) with the same
+/// rules as the in-app propose_moves tool (moves_validation.dart: dates
+/// in the week, to >= target, to != from, item exists on from_date per
+/// program.yaml + program_moves); invalid moves are dropped with a
+/// stderr warning, and nothing is posted when none remain. A failed
+/// proposal post only warns.
 /// `pending` prints the full chat history and exits 0 when the newest
 /// message is from the user (i.e. a reply is owed); otherwise exits 3.
 /// `briefing-exists` exits 0 if a coach briefing row exists for the given
@@ -66,6 +79,7 @@ Future<void> post(List<String> args) async {
   String? kind;
   String thread = 'general';
   var splitMoves = false;
+  DateTime? target;
   for (var i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--role':
@@ -76,6 +90,13 @@ Future<void> post(List<String> args) async {
         thread = args[++i];
       case '--split-moves':
         splitMoves = true;
+      case '--target':
+        final raw = ++i < args.length ? args[i] : '';
+        final p = RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(raw)
+            ? DateTime.tryParse(raw)
+            : null;
+        if (p == null) abort('--target expects YYYY-MM-DD (got "$raw")');
+        target = DateTime(p.year, p.month, p.day);
       default:
         abort('unknown arg: ${args[i]}');
     }
@@ -101,28 +122,60 @@ Future<void> post(List<String> args) async {
   }
 
   if (splitMoves) {
-    final raw = text;
-    final split = extractMovesBlock(raw);
-    text = split.text;
-    final proposal = split.proposal;
-    if (proposal != null) {
-      try {
-        await appendRow(role, 'proposal', thread, proposal.encode());
-        print('posted proposal (${proposal.moves.length} move(s))');
-      } catch (e) {
-        stderr.writeln('warn: moves proposal post failed: $e');
-      }
-    } else if (RegExp(r'```[ \t]*moves', caseSensitive: false)
-        .hasMatch(raw)) {
-      stderr.writeln('warn: moves block present but unparseable / no '
-          'valid moves — stripped, no proposal posted');
+    final day = target ?? planningTarget(DateTime.now());
+    // The program week is only needed (network reads) when there's a
+    // proposal to validate.
+    final week = extractMovesBlock(text).proposal == null
+        ? null
+        : await _targetWeek(day);
+    try {
+      await postSplitBriefing(
+        text,
+        postBriefing: (t) async {
+          await appendRow(role!, kind!, thread, t);
+          print('posted $kind (${t.length} chars)');
+        },
+        postProposal: (p) async {
+          await appendRow(role!, 'proposal', thread, p.encode());
+          print('posted proposal (${p.moves.length} move(s))');
+        },
+        validate: (p) => filterValidMoves(p, today: day, week: week),
+        warn: (m) => stderr.writeln('warn: $m'),
+      );
+    } on StateError catch (e) {
+      abort(e.message);
     }
-    if (text.isEmpty) abort('empty briefing text after stripping moves');
+    exit(0);
   }
 
   await appendRow(role, kind, thread, text);
   print('posted $kind (${text.length} chars)');
   exit(0);
+}
+
+/// [day]'s effective Mon–Sun week (program.yaml + the program_moves
+/// tab), loaded like tool/missed_work.dart. Null (→ dates-only
+/// validation, warned) when program.yaml is missing; a failed moves read
+/// is an unmoved week.
+Future<Map<DateTime, List<EffectiveItem>>?> _targetWeek(DateTime day) async {
+  final docs = loadCoachDocs();
+  if (docs.program == null) {
+    stderr.writeln('warn: program.yaml not found — moves validated by '
+        'date only');
+    return null;
+  }
+  var moves = const <String, ProgramMove>{};
+  try {
+    final config = readConfig();
+    final api = await sheetsApi(config.keyPath);
+    final rows = await readRecords(api, config.spreadsheetId, 'program_moves');
+    moves = activeMoves(
+        [for (final r in rows) ?ProgramMove.fromRecord(r)], mondayOf(day));
+  } catch (e) {
+    stderr.writeln('warn: program_moves read failed ($e) — validating '
+        'against the unmoved week');
+  }
+  return effectiveWeek(prescribedWeek(docs, day), moves);
 }
 
 /// Appends one coach_chat row (creating the tab + headers if missing).

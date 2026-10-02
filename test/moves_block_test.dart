@@ -1,3 +1,4 @@
+import 'package:airledger/models/coach_proposal.dart';
 import 'package:airledger/services/moves_block.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -68,5 +69,93 @@ Sleep well.''';
     final r = extractMovesBlock(out);
     expect(r.text, out);
     expect(r.proposal, isNull);
+  });
+
+  group('postSplitBriefing', () {
+    const raw = 'Plan for Fri.\n\n```moves\n'
+        '{"summary": "s", "moves": [{"item": "Bench heavy", '
+        '"from_date": "2026-09-30", "to_date": "2026-10-02"}, '
+        '{"item": "Nope", "from_date": "2026-09-30", '
+        '"to_date": "2026-10-02"}]}\n```\n';
+
+    test('briefing FIRST, then the validated proposal; invalid moves '
+        'dropped with a warning', () async {
+      final order = <String>[];
+      final warns = <String>[];
+      MovesProposal? posted;
+      await postSplitBriefing(
+        raw,
+        postBriefing: (t) async => order.add('briefing:$t'),
+        postProposal: (p) async {
+          order.add('proposal');
+          posted = p;
+        },
+        validate: (p) => (
+          proposal: MovesProposal(
+              summary: p.summary, moves: [p.moves.first]),
+          warnings: ['moves[1] bad'],
+        ),
+        warn: warns.add,
+      );
+      expect(order, ['briefing:Plan for Fri.', 'proposal']);
+      expect(posted!.moves.single.item, 'Bench heavy');
+      expect(warns.single, contains('moves[1] bad'));
+    });
+
+    test('briefing post fails → throws, proposal never posted', () async {
+      var proposals = 0;
+      await expectLater(
+        postSplitBriefing(
+          raw,
+          postBriefing: (_) async => throw StateError('sheets down'),
+          postProposal: (_) async => proposals++,
+          validate: (p) => (proposal: p, warnings: const <String>[]),
+          warn: (_) {},
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(proposals, 0);
+    });
+
+    test('proposal post fails → warn only (briefing already posted)',
+        () async {
+      final warns = <String>[];
+      await postSplitBriefing(
+        raw,
+        postBriefing: (_) async {},
+        postProposal: (_) async => throw StateError('quota'),
+        validate: (p) => (proposal: p, warnings: const <String>[]),
+        warn: warns.add,
+      );
+      expect(warns.single, contains('quota'));
+    });
+
+    test('no valid move left → no proposal posted', () async {
+      var proposals = 0;
+      await postSplitBriefing(
+        raw,
+        postBriefing: (_) async {},
+        postProposal: (_) async => proposals++,
+        validate: (p) => (proposal: null, warnings: const ['all bad']),
+        warn: (_) {},
+      );
+      expect(proposals, 0);
+    });
+
+    test('empty briefing after stripping → throws before posting anything',
+        () async {
+      var posts = 0;
+      await expectLater(
+        postSplitBriefing(
+          '```moves\n{"summary":"s","moves":[]}\n```',
+          postBriefing: (_) async => posts++,
+          postProposal: (_) async => posts++,
+          validate: (p) => (proposal: p, warnings: const <String>[]),
+          warn: (_) {},
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(posts, 0);
+    });
   });
 }

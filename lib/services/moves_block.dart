@@ -54,3 +54,50 @@ MovesProposal? _parse(String body) {
   }
   return MovesProposal.tryParse(jsonEncode(payload));
 }
+
+/// The nightly `--split-moves` post (tool/coach_msg.dart): splits [raw]
+/// with [extractMovesBlock], posts the BRIEFING FIRST — if that throws,
+/// nothing else is posted and the error propagates, so the next run's
+/// `briefing-exists` check retries cleanly instead of re-posting an
+/// orphan proposal — then the proposal after [validate] (invalid moves
+/// dropped, each reported through [warn]; nothing posted when none
+/// remain). A failed proposal post only warns. Throws a [StateError]
+/// when the briefing is empty after stripping the block.
+Future<void> postSplitBriefing(
+  String raw, {
+  required Future<void> Function(String text) postBriefing,
+  required Future<void> Function(MovesProposal proposal) postProposal,
+  required ({MovesProposal? proposal, List<String> warnings}) Function(
+          MovesProposal proposal)
+      validate,
+  required void Function(String message) warn,
+}) async {
+  final split = extractMovesBlock(raw);
+  if (split.text.isEmpty) {
+    throw StateError('empty briefing text after stripping moves');
+  }
+  await postBriefing(split.text);
+  final parsed = split.proposal;
+  if (parsed == null) {
+    if (RegExp(r'```[ \t]*moves', caseSensitive: false).hasMatch(raw)) {
+      warn('moves block present but unparseable / no valid moves — '
+          'stripped, no proposal posted');
+    }
+    return;
+  }
+  final checked = validate(parsed);
+  for (final w in checked.warnings) {
+    warn('dropped invalid move: $w');
+  }
+  final proposal = checked.proposal;
+  if (proposal == null) {
+    warn('no valid moves remain — no proposal posted');
+    return;
+  }
+  try {
+    await postProposal(proposal);
+  } catch (e) {
+    warn('moves proposal post failed: $e');
+  }
+}
+

@@ -71,9 +71,10 @@ PROMPT="$(
 # Max-plan session via the claude CLI; sonnet is plenty and gentler on
 # plan limits. Output is plain text — posted as the briefing; an optional
 # fenced ```moves block (missed-work carryover) is split off by
-# --split-moves and posted first as a kind=proposal card (a bad block is
-# stripped + logged, never blocks the briefing).
+# --split-moves, validated against TARGET's week (invalid moves dropped +
+# logged) and posted as a kind=proposal card AFTER the briefing (a bad
+# block is stripped + logged, never blocks the briefing).
 OUT="$(claude -p "$PROMPT" --model sonnet --output-format text)"
 
-printf '%s' "$OUT" | (cd "$APP" && dart run tool/coach_msg.dart post --role coach --kind briefing --split-moves --thread briefings)
+printf '%s' "$OUT" | (cd "$APP" && dart run tool/coach_msg.dart post --role coach --kind briefing --split-moves --target "$TARGET" --thread briefings)
 echo "=== coach run done $(date) ==="

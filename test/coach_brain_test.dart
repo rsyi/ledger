@@ -6,6 +6,7 @@ import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/coach_brain.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
+import 'package:airledger/services/whoop_activity.dart';
 
 /// Serves canned rows per view name. No network, no LLM calls.
 class _FakeRepo implements WarehouseConnector {
@@ -205,5 +206,33 @@ void main() {
     final out = CoachBrain.renderHistory(rows);
     // Should fall back to the raw text, not crash.
     expect(out, contains('[coach] not valid json {{{'));
+  });
+
+  test('renderActivitySection flags unlogged Whoop sessions', () {
+    final s = CoachBrain.renderActivitySection(
+      activities: [
+        WhoopActivity(
+            date: DateTime(2026, 9, 27),
+            start: DateTime(2026, 9, 27, 13, 45),
+            sport: 'running',
+            kind: ActivityKind.run,
+            strain: 9.3,
+            avgHr: 122,
+            maxHr: 170,
+            durationMin: 43),
+        WhoopActivity(
+            date: DateTime(2026, 9, 28),
+            sport: 'weightlifting',
+            kind: ActivityKind.lift,
+            strain: 11.8),
+      ],
+      strengthDays: {DateTime(2026, 9, 28)},
+      climbDays: const {},
+      today: DateTime(2026, 9, 29),
+    )!;
+    expect(s, contains('## Activity (Whoop, last 14 days)'));
+    expect(s, contains('2026-09-27 13:45 running · strain 9.3 · 43 min · HR 122/170 [unlogged]'));
+    expect(s, contains('2026-09-28 weightlifting · strain 11.8'));
+    expect(s, isNot(contains('11.8 [unlogged]')));
   });
 }

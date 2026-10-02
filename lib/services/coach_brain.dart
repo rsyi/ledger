@@ -12,6 +12,7 @@ import 'video_rpe.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 import 'week_planner.dart' show buildWeekPlannedEntries;
+import 'whoop_activity.dart';
 
 /// Fetches one coach doc by repo path (e.g. `coach/goals.md`). Returns
 /// the file's contents, or null when the file doesn't exist. Throwing is
@@ -219,6 +220,7 @@ in a desktop Claude session — you cannot edit files from here.''';
     final sliceSection = await _programSliceSection(today);
     final docs = await _docsSection();
     final dump = await _ledgerDump(today);
+    final activity = await _activitySection(today);
     final videoRpe = await _videoRpeSection();
     final sections = [
       systemPrompt,
@@ -226,6 +228,7 @@ in a desktop Claude session — you cannot edit files from here.''';
       ?sliceSection,
       '## Coach docs\n\n$docs',
       '## Ledger data (last ${dumpWindow.inDays} days + planned)\n\n$dump',
+      ?activity,
       ?videoRpe,
     ];
     return sections.join('\n\n');
@@ -316,6 +319,80 @@ in a desktop Claude session — you cannot edit files from here.''';
       out.add(row);
     }
     return out;
+  }
+
+  /// "Activity (Whoop)" section: every Whoop workout in the last 14 days
+  /// (local time), flagged `[unlogged]` when nothing else in the app
+  /// records it — so the coach knows a climb/run/hike happened even with
+  /// no Kaya export or manual log. Null when there are no activities.
+  static String? renderActivitySection({
+    required List<WhoopActivity> activities,
+    required Set<DateTime> strengthDays,
+    required Set<DateTime> climbDays,
+    required DateTime today,
+  }) {
+    final from = DateTime(today.year, today.month, today.day)
+        .subtract(const Duration(days: 13));
+    final lines = <String>[];
+    for (final a in activities) {
+      if (a.date.isBefore(from)) continue;
+      final d = '${a.date.year}-${a.date.month.toString().padLeft(2, '0')}-'
+          '${a.date.day.toString().padLeft(2, '0')}';
+      final t = a.start == null
+          ? ''
+          : ' ${a.start!.hour.toString().padLeft(2, '0')}:'
+              '${a.start!.minute.toString().padLeft(2, '0')}';
+      final parts = [
+        '$d$t ${a.sport}',
+        if (a.strain != null) 'strain ${a.strain!.toStringAsFixed(1)}',
+        if (a.durationMin != null) '${a.durationMin!.round()} min',
+        if (a.avgHr != null && a.maxHr != null)
+          'HR ${a.avgHr!.round()}/${a.maxHr!.round()}',
+      ];
+      final flag =
+          isUnlogged(a, strengthDays: strengthDays, climbDays: climbDays)
+              ? ' [unlogged]'
+              : '';
+      lines.add('- ${parts.join(' \u{b7} ')}$flag');
+    }
+    if (lines.isEmpty) return null;
+    return '## Activity (Whoop, last 14 days)\n\n'
+        'Whoop is the record that a session HAPPENED (+ strain 0-21). '
+        '[unlogged] = no Kaya ascents / logged sets that day \u{2014} treat it as '
+        'done, not missed.\n\n${lines.join('\n')}';
+  }
+
+  /// Loads today's Activity (Whoop) section: `whoop_workouts` rows +
+  /// the strength/climbing days needed to flag `[unlogged]`. Null on any
+  /// read failure or when `whoop_workouts` isn't a configured view (the
+  /// section is simply omitted).
+  Future<String?> _activitySection(DateTime today) async {
+    final wv = views['whoop_workouts'];
+    if (wv == null) return null;
+    try {
+      final acts = whoopActivitiesFromRecords(await repository.list(wv));
+      DateTime? d(Object? v) =>
+          v is DateTime ? v : DateTime.tryParse(v?.toString() ?? '');
+      Future<Set<DateTime>> days(String name) async {
+        final v = views[name];
+        if (v == null) return {};
+        final repo = v.readOnly ? readOnlyRepo : repository;
+        if (repo == null) return {};
+        return {
+          for (final r in await repo.list(v))
+            if (d(r['date']) case final x?) DateTime(x.year, x.month, x.day),
+        };
+      }
+
+      return renderActivitySection(
+        activities: acts,
+        strengthDays: await days('strength'),
+        climbDays: await days('climbing'),
+        today: today,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   /// AI-vs-logged RPE calibration lines from meta `video_rpe_log`

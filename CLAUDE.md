@@ -684,6 +684,25 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   planning target derived from ts (`briefing_target.dart`).
   Prose parser fixes: AM:/PM: label stripped, no ';' split or skip words
   inside parentheses, ". Accessories:" sentences dropped.
+- **Program card = Plan-tab numbers + Skip… (2026-10-02)**: each
+  ProgramDayCard row (Today + Log tabs) shows the Program screen's
+  PRICED lines (`program_item_pricing.dart`: `pricedWeek` = the screen's
+  exact pipeline — WmStore TMs + caps, references, accessory history →
+  buildWeekPlannedEntries(snapToWeekStart:false); `matchItemLines` maps
+  lines onto prose items, strong > loose, top/back-off intent from the
+  item NAME, moved items priced on their HOME day); unmatched items keep
+  prose. Info sheet leads with TODAY (`… (wave wk1, 81% TM)`);
+  `recommendForPrescription` never adds load over the program
+  (accessories = double-progression suggestion); last session = same
+  exercise, WORKING sets, same role (`lastComparableSession`). The old
+  "315x1 → +5 lb" came from lumping the 9/25 pre-wave single session
+  (warm-ups included) into a max-RPE heuristic. SKIPS: `program_moves`
+  rows with source `skip` (date == from_date == the day, note = required
+  reason) — ignored by activeMoves, `activeSkips`/`skipKey` resolve
+  them, detectMissedWork excludes them, card shows "skipped — reason"
+  + Undo skip (deletes the rows), not counted in k / N; CoachBrain +
+  tool/missed_work.dart print SKIPPED THIS WEEK; MCP moves_this_week
+  returns `skipped: [{item,date,reason}]` (deployed).
 - **Whoop activity layer (2026-10-01, Part 1; spec/plan in
   docs/superpowers/{specs,plans}/2026-10-01-whoop-activity-layer*)**:
   Whoop is the source of truth that a session HAPPENED (+ strain); Kaya

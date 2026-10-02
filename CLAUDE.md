@@ -86,6 +86,36 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Current feature state (all live on device as of 2026-09-28)
 
+- **IA restructure — Plan tab folded into Progress (2026-10-02, user
+  directive; SUPERSEDES the tab lists below)**: the shell is now
+  **4-tab: Today · Log · Week · Progress** (indices + labels in
+  `lib/ui/home_tabs.dart` — HomeTabs / homeNavDestinations;
+  home_screen's `_tab*` constants alias them). plan_screen.dart is
+  DELETED. PROGRESS = CUT header + Weight/Strength verdict rows (the
+  Plan Verdict card folded into their status) → PHASE section (the
+  program BLOCK timeline, "You are here · week N of M"; no target card)
+  → LIFTS rows (no info icon). Routes: Weight row → `weight_screen.dart`
+  (verdict text, bodyweight trajectory chart open, Nutrition card +
+  what-if stepper, body-fat projection, "About this phase" reason +
+  exit); Strength row (incl. the Wilks rows — the weekly-Wilks sheet is
+  gone) → `strength_screen.dart` (THIS WEEK weekly-Wilks decomposition,
+  projection summary + strength-total chart + capacity toggle,
+  climbing/VO2/fatigue folds, Model details last); each lift row →
+  `lift_screen.dart` (Now: recent e1RM vs last bulk vs all-time best;
+  session-best RPE-adjusted e1RM chart with cut/bulk shading from
+  phase.yaml versions + dashboards.yaml last_bulk; last 8 top sets;
+  training-max history from the working_max tab; per-lift projection
+  via `forecastBaselineRun`; how-it's-measured notes as small text).
+  The old Lifts text sheet is gone. Shared plumbing: `plan_data.dart`
+  (PlanSources/PlanData/loadPlanData/PlanDataPage — the old Plan
+  loader), `widgets/plan_sections.dart` (BlockTimeline,
+  PhaseVerdictCard, PhaseNotesCard, phaseHeaderMeta), ForecastSection
+  `focus:` (all | weight | strength; the what-if lives only on the
+  Weight page and moves only that page's projection). PROGRAM screen
+  entry points: Today's ProgramDayCard header "Full week ›"
+  (`onOpenWeek`), the Week tab's app-bar dumbbell, and every
+  openProgram/openWeekPlan deep link (push the Program screen
+  directly).
 - **Progress/Goals bottom-nav split (2026-09-29)**: the output-over-input
   principle made literal (user directive). The old combined Home tab
   divided into TWO tabs; the shell is now 5-tab: **Progress · Goals ·

@@ -39,7 +39,8 @@ library;
 
 import 'package:yaml/yaml.dart';
 
-import 'program_metrics.dart' show GradedSet, weekStartOf;
+import 'program_metrics.dart'
+    show GradedSet, mainLiftByExercise, weekStartOf;
 import 'whoop_activity.dart';
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,13 @@ class GoalConfig {
   /// Hard-set target per lift (~10 — the hypertrophy landmark).
   final int? hardSetTarget;
 
+  /// Per-lift overrides of [hardSetTarget] (`hard_set_targets:` map,
+  /// e.g. `{deadlift: 3}` — the routine trains deadlift once a week with
+  /// deliberately low supplemental volume, so 10 is unreachable by
+  /// design). A separate key so older apps (which cast
+  /// `hard_set_target` as num) keep parsing.
+  final Map<String, int> hardSetTargetByLift;
+
   /// The minimum RPE that counts as a "hard set" (default 7 — RPE 7 and
   /// above). Declared as a single number (`hard_rpe_min: 7`); a legacy
   /// `[lo, hi]` band is still accepted and only its lo is read (the
@@ -118,6 +126,7 @@ class GoalConfig {
     this.bandKcal,
     this.lifts = const [],
     this.hardSetTarget,
+    this.hardSetTargetByLift = const {},
     this.hardRpeMin,
     this.accessories = const {},
     this.target,
@@ -160,6 +169,7 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
       if (id.isEmpty) continue;
       final lifts = gg['lifts'];
       final acc = gg['accessories'];
+      final perLift = gg['hard_set_targets'];
       parsed.add(
         GoalConfig(
           id: id,
@@ -174,6 +184,13 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
               ? [for (final l in lifts) l.toString()]
               : const [],
           hardSetTarget: (gg['hard_set_target'] as num?)?.toInt(),
+          hardSetTargetByLift: perLift is Map
+              ? {
+                  for (final e in perLift.entries)
+                    if (e.value is num)
+                      e.key.toString(): (e.value as num).toInt(),
+                }
+              : const {},
           hardRpeMin: (gg['hard_rpe_min'] as num?)?.toDouble() ??
               _numPair(gg['hard_rpe'])?.first,
           accessories: acc is Map
@@ -223,12 +240,28 @@ class GoalLiftTick {
   /// none are declared for the lift).
   final bool? accessoriesDone;
 
+  /// Weekdays (DateTime.monday..sunday) the routine trains this lift,
+  /// in accounting-week order. Empty → unknown (no routine supplied).
+  final List<int> scheduledDays;
+
+  /// The subset of [scheduledDays] still ahead this accounting week
+  /// (today inclusive). A lift with 0 hard sets but a remaining day is
+  /// "not trained yet", not behind — e.g. deadlift is Friday-only, the
+  /// LAST day of the Sat–Fri week, so it reads 0 all week until then.
+  final List<int> remainingDays;
+
   const GoalLiftTick({
     required this.lift,
     required this.hardSets,
     required this.target,
     this.accessoriesDone,
+    this.scheduledDays = const [],
+    this.remainingDays = const [],
   });
+
+  /// True when nothing is logged yet but the lift's day hasn't passed —
+  /// the chip should say when it's due rather than read as missed.
+  bool get pending => hardSets == 0 && remainingDays.isNotEmpty;
 }
 
 /// One evaluated goal, preformatted for the row.
@@ -310,6 +343,10 @@ class GoalInputs {
   /// The user's max HR (meta `user_max_hr`). Null → zone-2 can't judge.
   final double? maxHr;
 
+  /// Main lift → weekdays the routine trains it ([mainLiftWeekdays]).
+  /// Empty → the hard-set ticks carry no schedule.
+  final Map<String, Set<int>> liftDays;
+
   const GoalInputs({
     this.graded = const [],
     this.strengthRows = const [],
@@ -323,8 +360,42 @@ class GoalInputs {
     this.cardioDates = const [],
     this.activities = const [],
     this.maxHr,
+    this.liftDays = const {},
   });
 }
+
+const _weekdayKeys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+/// Main lift → the weekdays (DateTime.monday..sunday) a resolved routine
+/// week (program_current.routineWeekFor) plans it. Reads each day's
+/// `planned` list (an alternation map contributes every variant); only
+/// exact main-lift exercise names count. Malformed → empty.
+Map<String, Set<int>> mainLiftWeekdays(Map<Object?, Object?>? week) {
+  final out = <String, Set<int>>{};
+  if (week == null) return out;
+  for (var i = 0; i < 7; i++) {
+    final day = week[_weekdayKeys[i]];
+    if (day is! Map) continue;
+    final planned = day['planned'];
+    final lists = planned is List
+        ? [planned]
+        : planned is Map
+            ? planned.values.whereType<List>().toList()
+            : const <List>[];
+    for (final list in lists) {
+      for (final item in list) {
+        if (item is! Map) continue;
+        final lift = mainLiftByExercise[item['exercise']?.toString()];
+        if (lift != null) (out[lift] ??= <int>{}).add(i + 1);
+      }
+    }
+  }
+  return out;
+}
+
+/// Short weekday label (DateTime.monday → 'Mon').
+String weekdayShort(int weekday) =>
+    const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][weekday - 1];
 
 const List<String> _defaultLifts = ['squat', 'bench', 'deadlift', 'press'];
 
@@ -486,6 +557,13 @@ List<GoalEval> evaluateGoals({
       case 'hard_sets':
         final lifts = c.lifts.isEmpty ? _defaultLifts : c.lifts;
         final target = c.hardSetTarget ?? 10;
+        int targetFor(String lift) => c.hardSetTargetByLift[lift] ?? target;
+        // Weekdays in accounting-week order; which are still ahead.
+        int pos(int weekday) => (weekday - weekStartDay + 7) % 7;
+        final todayPos = pos(_day(today).weekday);
+        List<int> ordered(String lift) =>
+            (inputs.liftDays[lift] ?? const <int>{}).toList()
+              ..sort((a, b) => pos(a).compareTo(pos(b)));
         final rpeMin = c.hardRpeMin ?? 7.0;
         int hardSets(String lift) => inputs.graded
             .where((s) =>
@@ -513,8 +591,13 @@ List<GoalEval> evaluateGoals({
             GoalLiftTick(
               lift: lift,
               hardSets: hardSets(lift),
-              target: target,
+              target: targetFor(lift),
               accessoriesDone: accessoriesDone(lift),
+              scheduledDays: ordered(lift),
+              remainingDays: [
+                for (final d in ordered(lift))
+                  if (pos(d) >= todayPos) d,
+              ],
             ),
         ];
         final atTarget = ticks.where((t) => t.hardSets >= t.target).length;
@@ -524,10 +607,13 @@ List<GoalEval> evaluateGoals({
             : anyProgress
                 ? GoalStatus.partial
                 : GoalStatus.unmet;
+        final uniform = ticks.every((t) => t.target == target);
         out.add(GoalEval(
           config: c,
           status: status,
-          value: '$atTarget/${lifts.length} lifts at $target',
+          value: uniform
+              ? '$atTarget/${lifts.length} lifts at $target'
+              : '$atTarget/${lifts.length} lifts at target',
           ticks: ticks,
         ));
 

@@ -26,7 +26,7 @@ import '../services/nutrition_model.dart'
     show buildNutritionForecast, mealRowsFromRecords;
 import '../services/phase_eigenvectors.dart' show effectivePhaseKey;
 import '../services/program_current.dart'
-    show currentVersion, weekStartDayOf;
+    show currentVersion, programCurrent, routineWeekFor, weekStartDayOf;
 import '../services/program_metrics.dart'
     show GradedSet, StrengthRow, WeightRow, gradeSets;
 import '../services/program_observed.dart' show observedWeightStats;
@@ -150,6 +150,16 @@ class GoalsScreenState extends State<GoalsScreen> {
 
     final weekStartDay = weekStartDayOf(version);
 
+    // Which weekdays the routine trains each main lift (today's block) —
+    // lets a 0-set lift say "due Fri" instead of reading as missed.
+    final program = docs?.program;
+    final blockN = program == null
+        ? null
+        : programCurrent(program, docs?.phase, _today)?.block['n'];
+    final liftDays = mainLiftWeekdays(
+      routineWeekFor(version, blockN is num ? blockN.toInt() : null),
+    );
+
     // Strength (graded main-lift sets + raw rows for the accessory check).
     final strengthRecords =
         await _rows(widget.strengthRepo, widget.strengthView);
@@ -236,6 +246,7 @@ class GoalsScreenState extends State<GoalsScreen> {
         cardioDates: cardioDates,
         activities: activities,
         maxHr: maxHr,
+        liftDays: liftDays,
       ),
       today: _today,
       weekStartDay: weekStartDay,
@@ -470,6 +481,12 @@ class _LiftChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final done = tick.hardSets >= tick.target;
     final some = tick.hardSets > 0;
+    // Grey = nothing logged yet. When the lift's routine day is still
+    // ahead, say so ("· Fri") so grey reads "not trained yet", not
+    // "missed" — deadlift is Friday-only, the last day of the week.
+    final due = tick.pending
+        ? ' · ${tick.remainingDays.map(weekdayShort).join('/')}'
+        : '';
     final color = done
         ? Colors.green.shade600
         : some
@@ -487,7 +504,7 @@ class _LiftChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            '${_liftName(tick.lift)} ${tick.hardSets}/${tick.target}',
+            '${_liftName(tick.lift)} ${tick.hardSets}/${tick.target}$due',
             style: Theme.of(context)
                 .textTheme
                 .bodySmall
@@ -521,11 +538,17 @@ class _LiftDetailLine extends StatelessWidget {
         : acc
             ? ' · accessories done'
             : ' · accessories not yet';
+    final days = tick.pending ? tick.remainingDays : tick.scheduledDays;
+    final when = days.isEmpty
+        ? ''
+        : tick.pending
+            ? ' · due ${days.map(weekdayShort).join('/')}'
+            : ' · trained ${days.map(weekdayShort).join('/')}';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Text(
         '${_liftName(tick.lift)}: ${tick.hardSets} of ${tick.target} '
-        'hard sets$accText',
+        'hard sets$when$accText',
       ),
     );
   }

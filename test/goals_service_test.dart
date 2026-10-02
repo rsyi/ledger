@@ -495,4 +495,148 @@ phases:
       expect(g.maxAvgHrPct, 0.7);
     });
   });
+
+  group('hard_sets per-lift targets + routine schedule', () {
+    test('parses hard_set_targets map alongside the scalar default', () {
+      const yaml = '''
+phases:
+  cut:
+    goals:
+      - id: hard_sets
+        hard_set_target: 10
+        hard_set_targets: {deadlift: 3, bogus: x}
+''';
+      final g = parseGoals(yaml)!['cut']!.single;
+      expect(g.hardSetTarget, 10);
+      expect(g.hardSetTargetByLift, {'deadlift': 3});
+    });
+
+    test('per-lift target overrides the default; value says "at target"',
+        () {
+      const cfg = GoalConfig(
+        id: 'hard_sets',
+        lifts: ['bench', 'deadlift'],
+        hardSetTarget: 10,
+        hardSetTargetByLift: {'deadlift': 3},
+      );
+      final r = evaluateGoals(
+        configs: [cfg],
+        inputs: GoalInputs(graded: [
+          for (var i = 0; i < 3; i++) hard('deadlift', inWeek, rpe: 8),
+        ]),
+        today: today,
+        weekStartDay: satStart,
+      ).single;
+      final dead = r.ticks.firstWhere((t) => t.lift == 'deadlift');
+      final bench = r.ticks.firstWhere((t) => t.lift == 'bench');
+      expect(dead.target, 3);
+      expect(bench.target, 10);
+      expect(r.value, '1/2 lifts at target');
+    });
+
+    test('mainLiftWeekdays reads planned main lifts per weekday', () {
+      final week = <Object?, Object?>{
+        'mon': {
+          'planned': [
+            {'exercise': 'Barbell Squat'},
+            {'exercise': 'Flat Barbell Bench Press'},
+            {'exercise': 'Bulgarian Split Squat'},
+          ],
+        },
+        'tue': {'morning': 'climb', 'planned': null},
+        'fri': {
+          'planned': [
+            {'exercise': 'Barbell Deadlift'},
+            {'exercise': 'Romanian Deadlift'},
+          ],
+        },
+        'sat': {
+          'planned': {
+            'A': [
+              {'exercise': 'Overhead Press'},
+            ],
+          },
+        },
+      };
+      expect(mainLiftWeekdays(week), {
+        'squat': {DateTime.monday},
+        'bench': {DateTime.monday},
+        'deadlift': {DateTime.friday},
+        'press': {DateTime.saturday},
+      });
+      expect(mainLiftWeekdays(null), isEmpty);
+    });
+
+    // The reported "greyed deadlift": deadlift is Friday-only and Friday
+    // is the LAST day of the Sat–Fri accounting week, so on any earlier
+    // day it has 0 hard sets — pending (due Fri), not missed.
+    test('Friday-only deadlift is pending until Friday, then counted', () {
+      const cfg = GoalConfig(
+        id: 'hard_sets',
+        lifts: ['squat', 'deadlift'],
+        hardSetTarget: 10,
+        hardSetTargetByLift: {'deadlift': 3},
+      );
+      const liftDays = {
+        'squat': {DateTime.monday, DateTime.wednesday},
+        'deadlift': {DateTime.friday},
+      };
+      // Tue 2026-09-29: squat Mon passed, Wed ahead; deadlift Fri ahead.
+      final tue = evaluateGoals(
+        configs: [cfg],
+        inputs: GoalInputs(
+          graded: [hard('squat', inWeek)],
+          liftDays: liftDays,
+        ),
+        today: today,
+        weekStartDay: satStart,
+      ).single;
+      final squatTue = tue.ticks.firstWhere((t) => t.lift == 'squat');
+      final deadTue = tue.ticks.firstWhere((t) => t.lift == 'deadlift');
+      expect(squatTue.scheduledDays, [DateTime.monday, DateTime.wednesday]);
+      expect(squatTue.remainingDays, [DateTime.wednesday]);
+      expect(squatTue.pending, isFalse); // has sets
+      expect(deadTue.hardSets, 0);
+      expect(deadTue.remainingDays, [DateTime.friday]);
+      expect(deadTue.pending, isTrue);
+
+      // Fri 2026-10-02 after the session: 3 hard sets, target met.
+      final fri = DateTime(2026, 10, 2);
+      final friEval = evaluateGoals(
+        configs: [cfg],
+        inputs: GoalInputs(
+          graded: [for (var i = 0; i < 3; i++) hard('deadlift', fri)],
+          liftDays: liftDays,
+        ),
+        today: fri,
+        weekStartDay: satStart,
+      ).single;
+      final deadFri = friEval.ticks.firstWhere((t) => t.lift == 'deadlift');
+      expect(deadFri.hardSets, 3);
+      expect(deadFri.pending, isFalse);
+      expect(deadFri.hardSets >= deadFri.target, isTrue);
+
+      // Next Sat (new week): Fri is 6 days ahead again → pending.
+      final sat = evaluateGoals(
+        configs: [cfg],
+        inputs: const GoalInputs(liftDays: liftDays),
+        today: DateTime(2026, 10, 3),
+        weekStartDay: satStart,
+      ).single;
+      expect(
+          sat.ticks.firstWhere((t) => t.lift == 'deadlift').pending, isTrue);
+    });
+
+    test('no routine → no schedule, never pending', () {
+      const cfg = GoalConfig(id: 'hard_sets', lifts: ['deadlift']);
+      final t = evaluateGoals(
+        configs: [cfg],
+        inputs: const GoalInputs(),
+        today: today,
+        weekStartDay: satStart,
+      ).single.ticks.single;
+      expect(t.scheduledDays, isEmpty);
+      expect(t.pending, isFalse);
+    });
+  });
 }

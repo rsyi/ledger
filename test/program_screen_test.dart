@@ -22,6 +22,8 @@ import 'package:airledger/services/wm_store.dart';
 import 'package:airledger/services/wm_tabs.dart';
 import 'package:airledger/ui/program_screen.dart';
 
+import 'support/travel_week_moves.dart';
+
 const _fitnessRepo = '../airledger-fitness/coach';
 
 class _FakeWmStore extends WmStore {
@@ -120,6 +122,17 @@ List<Record> _bodyweightHistory() => [
           },
     ];
 
+final _movesView = ViewSchema(
+  name: 'program_moves',
+  datasource: 'gsheets',
+  table: 'program_moves',
+  entities: const [],
+  measures: const [],
+  dimensions: [
+    Dimension(name: 'date', type: DimensionType.date, expr: 'date'),
+  ],
+);
+
 List<WorkingMaxRow> _seedRows({bool confirmed = false}) => [
       for (final (lift, variant, value) in [
         ('bench', 'paused', 240.0),
@@ -146,7 +159,10 @@ void main() {
       path == 'coach/program.yaml' ? programYaml : null;
 
   Future<void> pump(WidgetTester tester, _FakeWmStore store,
-      {List<Record>? history, Size size = const Size(420, 2400)}) async {
+      {List<Record>? history,
+      Size size = const Size(420, 2400),
+      List<Record>? moves,
+      DateTime? today}) async {
     ProgramProvider.clearCache();
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
@@ -158,8 +174,10 @@ void main() {
         wmStore: store,
         strengthRepo: history == null ? null : _FakeRepo(history),
         strengthView: history == null ? null : _strengthView,
+        programMovesView: moves == null ? null : _movesView,
+        programMovesRepo: moves == null ? null : _FakeRepo(moves),
         // Wed Sep 30 → displayed week = cut wave week 1 (Sep 28).
-        today: DateTime(2026, 9, 30),
+        today: today ?? DateTime(2026, 9, 30),
       ),
     ));
     await tester.pumpAndSettle();
@@ -315,5 +333,71 @@ void main() {
       expect(t.style?.decoration, isNot(TextDecoration.lineThrough),
           reason: '"${t.data}" is struck through');
     }
+  });
+
+  testWidgets('TRAVEL WEEK: next week renders the EFFECTIVE days — Mon/Tue '
+      'carry the moved work at home-day prices ("from Wed"), Wed–Sat read '
+      'Skipped — travel, the 4x4 lands on Sunday', (tester) async {
+    await pump(
+      tester,
+      _FakeWmStore(_seedRows(confirmed: true)),
+      moves: [for (final m in travelWeekMoves()) m.toRecord()],
+      // Mon Oct 5 → displayed week Oct 5–11 (cut wave week 2: 4 @ 84%).
+      today: DateTime(2026, 10, 5),
+    );
+    Finder inDay(String ymd, Finder f) => find.descendant(
+        of: find.byKey(ValueKey('routine-day-$ymd')), matching: f);
+    Finder rich(String t) => find.text(t, findRichText: true);
+
+    // Monday: own squat top + Wed bench + Sat OHP (summary over the
+    // effective lines); Mon's bench volume + triceps skipped.
+    expect(inDay('2026-10-05', find.text('Squat heavy · bench heavy · press heavy')),
+        findsOneWidget);
+    // Wed pricing: bench 240 × 0.837 = 200.9 → 200; back-offs 72% → 175.
+    expect(inDay('2026-10-05', rich('Bench 1×4 · 200 lb (84%) · from Wed')),
+        findsOneWidget);
+    expect(inDay('2026-10-05', rich('Bench 3×6 · 175 lb (72%) · from Wed')),
+        findsOneWidget);
+    expect(inDay('2026-10-05', rich('Press 1×4 · 115 lb (84%) · from Sat')),
+        findsOneWidget);
+    expect(inDay('2026-10-05', find.textContaining('Pull Up', findRichText: true)),
+        findsOneWidget);
+    expect(inDay('2026-10-05', find.textContaining('68%', findRichText: true)),
+        findsNothing, reason: 'Mon bench volume is skipped');
+    expect(
+        inDay('2026-10-05',
+            find.text('Skipped: Bench volume, Triceps extension '
+                '(travel Wed–Sat)')),
+        findsOneWidget);
+
+    // Tuesday: Fri deadlift + RDL, Sat row + face pulls, the hard climb;
+    // the 4x4 moved out to Sunday.
+    expect(inDay('2026-10-06', find.text('Deadlift heavy · hard climb')),
+        findsOneWidget);
+    expect(inDay('2026-10-06', rich('Deadlift 1×4 · 275 lb (84%) · from Fri')),
+        findsOneWidget);
+    expect(inDay('2026-10-06',
+            find.textContaining('Seated Cable Row', findRichText: true)),
+        findsOneWidget);
+    expect(inDay('2026-10-06', find.text('Norwegian → Sun')), findsOneWidget);
+
+    // Wed–Sat: travel — no priced lines left, muted skipped summary.
+    for (final d in ['07', '08', '09', '10']) {
+      expect(inDay('2026-10-$d', find.text('Skipped — travel Wed–Sat')),
+          findsOneWidget, reason: 'Oct $d');
+      expect(inDay('2026-10-$d', find.textContaining(' lb', findRichText: true)),
+          findsNothing, reason: 'Oct $d');
+    }
+    expect(inDay('2026-10-07',
+            find.text('Bench heavy, Bench back-offs, Pull-ups → Mon')),
+        findsOneWidget);
+    expect(inDay('2026-10-07', find.text('Skipped: Squat volume, OHP volume')),
+        findsOneWidget);
+    expect(inDay('2026-10-08', find.text('7 skipped')), findsOneWidget);
+
+    // Sunday: the moved 4x4.
+    expect(inDay('2026-10-11', find.text('4x4')), findsOneWidget);
+    expect(inDay('2026-10-11', find.text('From Tue: Norwegian')),
+        findsOneWidget);
   });
 }

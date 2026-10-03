@@ -29,6 +29,11 @@ class SessionLine {
   final num? pct;
   final bool top;
 
+  /// The program day this line was MOVED from (program_moves), or null
+  /// for the day's own work — from the `moved_from` display marker of
+  /// [effectivePlannedEntries]. Never merged with unmoved lines.
+  final DateTime? movedFrom;
+
   const SessionLine({
     required this.exercise,
     required this.sets,
@@ -37,6 +42,7 @@ class SessionLine {
     this.weight,
     this.pct,
     this.top = false,
+    this.movedFrom,
   });
 }
 
@@ -57,6 +63,7 @@ Map<DateTime, List<SessionLine>> sessionLinesByDay(
     final weight = e['weight'] as num?;
     final pct = e['pct'] as num?;
     final top = e['top'] == true;
+    final movedFrom = e['moved_from'] as DateTime?;
     final lines = out[date] ??= [];
     final last = lines.isEmpty ? null : lines.last;
     if (last != null &&
@@ -65,7 +72,8 @@ Map<DateTime, List<SessionLine>> sessionLinesByDay(
         last.repsHi == repsHi &&
         last.weight == weight &&
         last.pct == pct &&
-        last.top == top) {
+        last.top == top &&
+        last.movedFrom == movedFrom) {
       lines[lines.length - 1] = SessionLine(
         exercise: exercise,
         sets: last.sets + 1,
@@ -74,6 +82,7 @@ Map<DateTime, List<SessionLine>> sessionLinesByDay(
         weight: weight,
         pct: pct,
         top: top,
+        movedFrom: movedFrom,
       );
     } else {
       lines.add(SessionLine(
@@ -84,6 +93,7 @@ Map<DateTime, List<SessionLine>> sessionLinesByDay(
         weight: weight,
         pct: pct,
         top: top,
+        movedFrom: movedFrom,
       ));
     }
   }

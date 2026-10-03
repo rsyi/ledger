@@ -33,10 +33,13 @@ import 'package:intl/intl.dart';
 import '../models/view_schema.dart';
 import '../services/bodyweight_cache.dart' show BodyweightCache;
 import '../services/display_names.dart' show sentenceCase;
+import '../services/effective_plan.dart';
 import '../services/program_current.dart';
 import '../services/program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
+import '../services/program_moves.dart';
 import '../services/program_provider.dart';
+import '../services/program_week.dart' show prescribedWeek;
 import '../services/routine_display.dart';
 import '../services/sheets_repository.dart' show Record;
 import '../services/warehouse_connector.dart';
@@ -70,6 +73,13 @@ class ProgramScreen extends StatefulWidget {
   final WarehouseConnector? strengthRepo;
   final ViewSchema? strengthView;
 
+  /// `program_moves` (moves + skips) — each day renders its EFFECTIVE
+  /// contents: moved-in work on the target day (home-day pricing, "from
+  /// Wed" tag), moved-out / skipped work as muted notes. Null → the raw
+  /// program week.
+  final ViewSchema? programMovesView;
+  final WarehouseConnector? programMovesRepo;
+
   /// Injected for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -79,6 +89,8 @@ class ProgramScreen extends StatefulWidget {
     this.wmStore,
     this.strengthRepo,
     this.strengthView,
+    this.programMovesView,
+    this.programMovesRepo,
     this.today,
   });
 
@@ -90,7 +102,13 @@ class _RoutineData {
   final IntentDocs docs;
   final WmSnapshot? wm;
   final List<StrengthRow> history;
-  const _RoutineData({required this.docs, this.wm, this.history = const []});
+  final List<ProgramMove> moves;
+  const _RoutineData({
+    required this.docs,
+    this.wm,
+    this.history = const [],
+    this.moves = const [],
+  });
 }
 
 class _ProgramScreenState extends State<ProgramScreen> {
@@ -118,7 +136,18 @@ class _ProgramScreenState extends State<ProgramScreen> {
           history = [for (final r in recs) ?_strengthRow(r)];
         } catch (_) {}
       }
-      return _RoutineData(docs: docs, wm: wm, history: history);
+      // A failed moves read = the unmoved week (degrade honestly).
+      var moves = const <ProgramMove>[];
+      if (widget.programMovesRepo != null && widget.programMovesView != null) {
+        try {
+          moves = [
+            for (final r
+                in await widget.programMovesRepo!.list(widget.programMovesView!))
+              ?ProgramMove.fromRecord(r),
+          ];
+        } catch (_) {}
+      }
+      return _RoutineData(docs: docs, wm: wm, history: history, moves: moves);
     } catch (_) {
       return null;
     }
@@ -375,7 +404,7 @@ class _RoutineView extends StatelessWidget {
     // (Sat–Fri under program.yaml v7 `week_start: saturday`), which
     // excludes the displayed Saturday — the 2026-09-28 "Saturday shows
     // as Rest" regression.
-    final entries = buildWeekPlannedEntries(
+    var entries = buildWeekPlannedEntries(
       program,
       week.first.date,
       references: references,
@@ -384,6 +413,28 @@ class _RoutineView extends StatelessWidget {
       accessoryHistory: data.history,
       snapToWeekStart: false,
     );
+    // program_moves: the EFFECTIVE week (same transform the planner
+    // plans from) — moved items keep their home-day pricing.
+    final localMon = DateTime(weekStart.year, weekStart.month, weekStart.day);
+    final activeMv = activeMoves(data.moves, localMon);
+    final skips = activeSkips(data.moves, localMon);
+    var effWeek = const <DateTime, List<EffectiveItem>>{};
+    if (activeMv.isNotEmpty || skips.isNotEmpty) {
+      final prescribed = prescribedWeek(data.docs, localMon);
+      entries = effectivePlannedEntries(
+        entries,
+        prescribed,
+        moves: activeMv,
+        skips: skips,
+        warmupProtocol: version?['warmup_protocol'],
+      );
+      effWeek = effectiveWeek(prescribed, activeMv);
+    }
+    final pricedMovedIn = <String>{
+      for (final e in entries)
+        if (e['moved_item'] case final String item)
+          '${_ymd(e['date'] as DateTime)}|$item',
+    };
     final linesByDay = sessionLinesByDay(entries);
     final backoff = backoffLine(version?['backoff_rule']);
 
@@ -448,6 +499,14 @@ class _RoutineView extends StatelessWidget {
             day: day,
             isToday: day.date == todayUtc,
             lines: linesByDay[day.date] ?? const [],
+            info: effWeek.isEmpty
+                ? null
+                : effectiveDayInfo(
+                    DateTime(day.date.year, day.date.month, day.date.day),
+                    effWeek,
+                    skips,
+                  ),
+            pricedMovedIn: pricedMovedIn,
             maxes: maxes,
             backoff: backoff,
             bodyweight: BodyweightCache.currentLbs,
@@ -906,6 +965,14 @@ class _DayTile extends StatelessWidget {
   final DayPlan day;
   final bool isToday;
   final List<SessionLine> lines;
+
+  /// What program_moves did to this day (null = no moves this week).
+  final EffectiveDayInfo? info;
+
+  /// `yyyy-mm-dd|item` of moved-in items that have priced lines — the
+  /// others (a moved 4x4, a climb) get a "From Tue: …" note instead.
+  final Set<String> pricedMovedIn;
+
   final Map<String, double> maxes;
   final String? backoff;
 
@@ -916,10 +983,41 @@ class _DayTile extends StatelessWidget {
     required this.day,
     required this.isToday,
     required this.lines,
+    this.info,
+    this.pricedMovedIn = const {},
     required this.maxes,
     required this.backoff,
     this.bodyweight,
   });
+
+  /// Muted per-day notes for program_moves (pure strings):
+  ///   `From Tue: Norwegian`           moved-in work with no priced line
+  ///   `Bench heavy, Pull-ups → Mon`   moved out
+  ///   `Skipped: Bench volume (travel Wed–Sat)` / `7 skipped` — the
+  ///   reason is dropped when the summary already says it.
+  List<String> _moveNotes(String summary) {
+    final i = info;
+    if (i == null || !i.touched) return const [];
+    final local = DateTime(day.date.year, day.date.month, day.date.day);
+    final out = <String>[];
+    final unpriced = <DateTime, List<String>>{};
+    for (final e in i.movedIn) {
+      if (pricedMovedIn.contains('${_ymd(local)}|${e.item.name}')) continue;
+      (unpriced[e.movedFrom!] ??= []).add(e.item.name);
+    }
+    unpriced.forEach((from, names) =>
+        out.add('From ${weekdayShort(from)}: ${names.join(', ')}'));
+    i.movedOut.forEach((to, names) =>
+        out.add('${names.join(', ')} → ${weekdayShort(to)}'));
+    i.skipped.forEach((reason, names) {
+      final list = names.length <= 3
+          ? 'Skipped: ${names.join(', ')}'
+          : '${names.length} skipped';
+      final showReason = reason.isNotEmpty && !summary.contains(reason);
+      out.add(showReason ? '$list ($reason)' : list);
+    });
+    return out;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -930,14 +1028,20 @@ class _DayTile extends StatelessWidget {
     final weekdayLabel = DateFormat('EEE').format(date);
     final dateLabel = DateFormat('MMM d').format(date);
 
+    final effective = info == null ? null : effectiveDaySummary(info!, lines);
     final summary = slice == null
         ? 'No program'
-        : daySummary(
-            lines: lines,
-            morning: slice.todayTemplate['morning']?.toString(),
-            afternoon: slice.todayTemplate['afternoon']?.toString(),
-          );
-    final muted = slice == null || summary == 'Rest';
+        : effective ??
+            daySummary(
+              lines: lines,
+              morning: slice.todayTemplate['morning']?.toString(),
+              afternoon: slice.todayTemplate['afternoon']?.toString(),
+            );
+    final muted = slice == null ||
+        summary == 'Rest' ||
+        summary.startsWith('Skipped') ||
+        summary.startsWith('Moved to');
+    final notes = _moveNotes(summary);
     final hasTop = lines.any((l) => l.top);
 
     // The dense per-exercise lines (the redesign's reference style):
@@ -996,11 +1100,25 @@ class _DayTile extends StatelessWidget {
                   for (final l in lines)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 1),
-                      child: Text(
-                        formatSessionLine(
-                          l,
-                          tm: maxes[mainLiftByExercise[l.exercise]],
-                          bodyweight: bodyweight,
+                      child: Text.rich(
+                        TextSpan(
+                          text: formatSessionLine(
+                            l,
+                            tm: maxes[mainLiftByExercise[l.exercise]],
+                            bodyweight: bodyweight,
+                          ),
+                          children: [
+                            if (l.movedFrom != null)
+                              TextSpan(
+                                text: ' · from ${weekdayShort(l.movedFrom!)}',
+                                style: meta.copyWith(
+                                  fontWeight: FontWeight.w400,
+                                  fontStyle: FontStyle.italic,
+                                  color: scheme.onSurfaceVariant
+                                      .withValues(alpha: 0.75),
+                                ),
+                              ),
+                          ],
                         ),
                         style: l.top
                             ? meta.copyWith(
@@ -1016,6 +1134,21 @@ class _DayTile extends StatelessWidget {
                       child: Text('Back-offs: $backoff', style: meta),
                     ),
                 ],
+                if (notes.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  for (final n in notes)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 1),
+                      child: Text(
+                        n,
+                        style: meta.copyWith(
+                          fontStyle: FontStyle.italic,
+                          color:
+                              scheme.onSurfaceVariant.withValues(alpha: 0.75),
+                        ),
+                      ),
+                    ),
+                ],
               ],
             ),
           ),
@@ -1024,5 +1157,7 @@ class _DayTile extends StatelessWidget {
     );
   }
 }
+
+String _ymd(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
 
 String _fmtShort(DateTime d) => DateFormat('MMM d').format(d);

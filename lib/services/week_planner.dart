@@ -44,7 +44,11 @@ import 'program_current.dart'
         weekStartDayOf;
 import 'program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
+import 'effective_plan.dart' show effectivePlannedEntries;
+import 'program_moves.dart'
+    show ProgramMove, activeMoves, activeSkips;
 import 'program_provider.dart';
+import 'program_week.dart' show dayOnly, prescribedWeek;
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 import 'wm_tabs.dart'
@@ -500,8 +504,14 @@ Map<String, Object?> plannedValuesOf(Map<String, Object?> e) => {
 /// the persisted shape + [WeekPlanner.planVersion]). Equal signatures ⇒
 /// the program prescribes the same rows for that day, so the planner
 /// leaves the day's PlanStore rows (and the user's deletions) alone.
-String planDaySignature(List<Map<String, Object?>> dayEntries) {
+///
+/// [moveKeys] (plan_v9): the day's program_moves fingerprint —
+/// [dayMoveKeys] — so a new move or skip touching the day rewrites it
+/// even when the priced rows happen not to change (a skipped climb).
+String planDaySignature(List<Map<String, Object?>> dayEntries,
+    {String moveKeys = ''}) {
   final b = StringBuffer(WeekPlanner.planVersion);
+  if (moveKeys.isNotEmpty) b.write('\n#moves $moveKeys');
   for (final e in dayEntries) {
     final v = plannedValuesOf(e);
     b.write('\n${v['exercise']}|${v['reps']}|${v['weight'] ?? ''}|'
@@ -513,6 +523,24 @@ String planDaySignature(List<Map<String, Object?>> dayEntries) {
     h = (h * 0x01000193) & 0xffffffff;
   }
   return h.toRadixString(16).padLeft(8, '0');
+}
+
+/// Stable fingerprint of every active move / skip touching [day] (moved
+/// in, moved out, or skipped there) — folded into [planDaySignature].
+String dayMoveKeys(
+  DateTime day,
+  Map<String, ProgramMove> moves,
+  Map<String, ProgramMove> skips,
+) {
+  final d = dayOnly(day);
+  final keys = <String>[
+    for (final m in moves.values)
+      if (dayOnly(m.from) == d || dayOnly(m.to) == d)
+        'm:${m.key}>${m.to.year}-${m.to.month}-${m.to.day}',
+    for (final e in skips.entries)
+      if (dayOnly(e.value.to) == d) 's:${e.key}',
+  ]..sort();
+  return keys.join(',');
 }
 
 /// [built] (one day's entries) minus the sets already LOGGED that day,
@@ -562,8 +590,10 @@ class WeekPlanner {
   /// v4: strength-wave tops + accessories + volume multipliers; v5: cut
   /// wave + %TM rows; v6: v12 routine merge + accessory double
   /// progression; v7: v13 two-loop TM; v8: rolling Mon–Sun-priced
-  /// window, per-day signatures, warm-up rows stamped set_type warmup).
-  static const planVersion = 'plan_v8';
+  /// window, per-day signatures, warm-up rows stamped set_type warmup;
+  /// v9: program_moves applied — moved work planned on its target day,
+  /// moved-out + skipped work not planned, moves/skips fingerprinted).
+  static const planVersion = 'plan_v9';
 
   /// Ledger meta key the runner writes the last swallowed error into.
   static const metaErrorKey = 'week_planner_error';
@@ -590,10 +620,19 @@ class WeekPlanner {
   /// ([remainingAfterLogged] over [loggedRows]). Coach proposals, user
   /// entries (any other templateName) and days outside the window are
   /// never touched.
+  ///
+  /// Moves (plan_v9): [moves] = every `program_moves` row (moves AND
+  /// skips). Each week is relocated through [effectivePlannedEntries]
+  /// (the Program screen's exact transform — moved items keep their
+  /// home-day pricing and bring their warm-up ramps), and each day's
+  /// signature folds in [dayMoveKeys]. [phase] feeds the prose
+  /// prescription the moves key on (`prescribedWeek`).
   static Future<Map<String, String>> syncPlannedDays({
     required ViewSchema strengthView,
     required Map<Object?, Object?> program,
     required DateTime today,
+    Map<Object?, Object?>? phase,
+    List<ProgramMove> moves = const [],
     Map<String, String> storedSignatures = const {},
     List<Map<String, Object?>> loggedRows = const [],
     Map<String, double> references = const {},
@@ -615,8 +654,10 @@ class WeekPlanner {
     final mondays = {
       for (final d in days) d.subtract(Duration(days: d.weekday - 1)),
     };
+    final moveKeysByDay = <String, String>{};
+    final warmupProtocol = currentVersion(program)?['warmup_protocol'];
     for (final monday in mondays) {
-      final built = buildWeekPlannedEntries(
+      var built = buildWeekPlannedEntries(
         program,
         monday,
         references: references,
@@ -625,6 +666,23 @@ class WeekPlanner {
         accessoryHistory: accessoryHistory,
         snapToWeekStart: false,
       );
+      final localMon = DateTime(monday.year, monday.month, monday.day);
+      final active = activeMoves(moves, localMon);
+      final skips = activeSkips(moves, localMon);
+      if (active.isNotEmpty || skips.isNotEmpty) {
+        built = effectivePlannedEntries(
+          built,
+          prescribedWeek(
+              (program: program, phase: phase, strategy: null), localMon),
+          moves: active,
+          skips: skips,
+          warmupProtocol: warmupProtocol,
+        );
+        for (var i = 0; i < 7; i++) {
+          final d = DateTime(localMon.year, localMon.month, localMon.day + i);
+          moveKeysByDay[fmt.format(d)] = dayMoveKeys(d, active, skips);
+        }
+      }
       for (final e in built) {
         byDay[fmt.format(e['date'] as DateTime)]?.add(e);
       }
@@ -647,7 +705,8 @@ class WeekPlanner {
     final added = <PlannedEntry>[];
     for (final d in days) {
       final k = fmt.format(d);
-      final sig = planDaySignature(byDay[k]!);
+      final sig =
+          planDaySignature(byDay[k]!, moveKeys: moveKeysByDay[k] ?? '');
       signatures[k] = sig;
       if (storedSignatures[k] == sig) continue;
       rewrite.add(k);
@@ -805,16 +864,33 @@ class WeekPlanner {
     required WarehouseConnector connector,
     required ProgramProvider provider,
     required ViewSchema strengthView,
+    ViewSchema? programMovesView,
     Future<WmSnapshot?> Function()? wmSnapshotOf,
     DateTime Function() now = DateTime.now,
   }) {
     final running = _inFlight;
-    if (running != null) return running;
+    if (running != null) {
+      // A run is already in flight but may have read the moves BEFORE
+      // the change that triggered this call: queue exactly one re-run.
+      return _rerun ??= running.then((_) {
+        _rerun = null;
+        return ensureCurrentWeek(
+          repo: repo,
+          connector: connector,
+          provider: provider,
+          strengthView: strengthView,
+          programMovesView: programMovesView,
+          wmSnapshotOf: wmSnapshotOf,
+          now: now,
+        );
+      });
+    }
     final run = _ensure(
       repo: repo,
       connector: connector,
       provider: provider,
       strengthView: strengthView,
+      programMovesView: programMovesView,
       wmSnapshotOf: wmSnapshotOf,
       now: now,
     ).whenComplete(() => _inFlight = null);
@@ -822,12 +898,14 @@ class WeekPlanner {
   }
 
   static Future<void>? _inFlight;
+  static Future<void>? _rerun;
 
   static Future<void> _ensure({
     required EngineLedgerRepository repo,
     required WarehouseConnector connector,
     required ProgramProvider provider,
     required ViewSchema strengthView,
+    ViewSchema? programMovesView,
     Future<WmSnapshot?> Function()? wmSnapshotOf,
     required DateTime Function() now,
   }) async {
@@ -869,11 +947,25 @@ class WeekPlanner {
         );
       }
 
+      // program_moves (moves + skips). A failed read = an unmoved week
+      // (WeekStateLoader's degrade-honestly rule).
+      var moves = const <ProgramMove>[];
+      if (programMovesView != null) {
+        try {
+          moves = [
+            for (final r in await connector.list(programMovesView))
+              ?ProgramMove.fromRecord(r),
+          ];
+        } catch (_) {}
+      }
+
       final stored = decodeDaySignatures(
           await repo.metaGet(metaDaySignaturesKey));
       final signatures = await syncPlannedDays(
         strengthView: strengthView,
         program: program,
+        phase: docs.phase,
+        moves: moves,
         today: today,
         storedSignatures: stored,
         loggedRows: rows,

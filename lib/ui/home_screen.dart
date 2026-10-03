@@ -40,6 +40,7 @@ import '../services/coach_brain.dart';
 import '../services/day_synthesis_service.dart';
 import '../services/domain_config.dart';
 import '../services/github_client.dart';
+import '../services/log_event_bus.dart';
 import '../services/llm_client.dart';
 import '../services/llm_response_cache.dart';
 import '../services/notification_service.dart';
@@ -153,6 +154,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// schema changes can't ride in on a launch — this timer pulls them in
   /// while the app is live. Null until the first bootstrap wires it up.
   Timer? _syncTimer;
+
+  /// Re-runs the week planner when a program_moves row is written or
+  /// deleted (moves/skips change which days carry which work).
+  StreamSubscription<LogEvent>? _movesSub;
+
+  /// The week-planner run (set by bootstrap); also re-run on resume so
+  /// moves that arrived by sync (coach, nightly) reach the plan.
+  Future<void> Function()? _replan;
 
   /// Signature of the cache state the CURRENT UI was built from (recorded
   /// by [_initialize]). Distinct from the cache's own signature on disk: a
@@ -277,12 +286,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _syncTimer?.cancel();
+    _movesSub?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _runCarryoverCheck();
+    if (state == AppLifecycleState.resumed) {
+      _runCarryoverCheck();
+      final replan = _replan;
+      if (replan != null) unawaited(replan().catchError((Object _) {}));
+    }
   }
 
   void _runCarryoverCheck() {
@@ -467,19 +481,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // idempotent per week (meta-keyed) and swallows its own errors
       // into the `week_planner_error` meta.
       ViewSchema? strengthView;
+      ViewSchema? movesView;
       for (final v in views) {
         if (v.name == 'strength') strengthView = v;
+        if (v.name == 'program_moves') movesView = v;
       }
       if (github != null && strengthView != null) {
-        unawaited(
-          WeekPlanner.ensureCurrentWeek(
-            repo: repo.repo,
-            connector: repo,
-            provider: ProgramProvider(CoachBrain.githubFetcher(github)),
-            strengthView: strengthView,
-            wmSnapshotOf: wmStore.snapshot,
-          ),
-        );
+        final sv = strengthView;
+        final provider = ProgramProvider(CoachBrain.githubFetcher(github));
+        // program_moves applied (plan_v9): a move/skip/undo re-plans the
+        // affected days right away (LogEventBus fires on program_moves
+        // create AND delete).
+        Future<void> replan() => WeekPlanner.ensureCurrentWeek(
+              repo: repo.repo,
+              connector: repo,
+              provider: provider,
+              strengthView: sv,
+              programMovesView: movesView,
+              wmSnapshotOf: wmStore.snapshot,
+            );
+        _replan = replan;
+        unawaited(replan());
+        await _movesSub?.cancel();
+        _movesSub = LogEventBus.instance.stream
+            .where((e) => e.view == 'program_moves')
+            .listen((_) => unawaited(replan()));
       }
     }
     // Read-only views: connect a direct SheetsRepository that bypasses the
@@ -1092,6 +1118,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ? null
                           : data.registry.forView(dashStrengthView),
                       strengthView: dashStrengthView,
+                      programMovesView: programMovesView,
+                      programMovesRepo: programMovesRepo,
                     ),
                   ),
                 );

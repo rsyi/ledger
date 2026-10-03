@@ -12,7 +12,10 @@ import 'package:yaml/yaml.dart';
 import 'package:airledger/models/planned_entry.dart';
 import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/plan_store.dart';
+import 'package:airledger/services/program_moves.dart';
 import 'package:airledger/services/week_planner.dart';
+
+import 'support/travel_week_moves.dart';
 
 const _fitnessRepo = '../airledger-fitness/coach';
 
@@ -1044,6 +1047,144 @@ void main() {
         'Barbell Deadlift 250x4',
         'Barbell Deadlift 250x4',
       ]);
+    });
+
+    group('program_moves (travel week of Mon Oct 5)', () {
+      final phase = _loadYamlMap('$_fitnessRepo/phase.yaml');
+      final sunday = DateTime(2026, 10, 4); // window Sun 4 .. Sat 10
+      Future<List<String>> planned(ViewSchema view, int day) async => stored([
+            for (final e in await PlanStore.loadForDate(
+                view, DateTime(2026, 10, day)))
+              if (e.templateName == WeekPlanner.templateLabel) e,
+          ]);
+
+      test('Mon/Tue carry the moved work (home-day pricing + ramps), '
+          'skipped work is gone, Wed–Sat plan nothing; coach rows stand',
+          () async {
+        final view = _strengthView();
+        final coachWed = PlannedEntry.create(
+          view: view,
+          date: DateTime(2026, 10, 7),
+          values: {'exercise': 'Face Pull', 'reps': 15},
+          templateName: 'coach: hotel gym',
+        );
+        await PlanStore.addAll(view, [coachWed]);
+        await WeekPlanner.syncPlannedDays(
+          strengthView: view,
+          program: program,
+          phase: phase,
+          moves: travelWeekMoves(),
+          today: sunday,
+          workingMaxes: wms,
+        );
+        final mon = await planned(view, 5);
+        expect(mon, containsAllInOrder([
+          'Barbell Squat 270x4',
+          'Flat Barbell Bench Press 45x10 (warm-up)',
+          'Flat Barbell Bench Press 200x4',
+          'Flat Barbell Bench Press 175x6',
+          'Pull Up -x6',
+          'Overhead Press 45x10 (warm-up)',
+          'Overhead Press 115x4',
+          'Overhead Press 100x6',
+        ]));
+        // Mon's own bench volume (165x8 @ 68%) + triceps are skipped.
+        expect(mon.where((r) => r.contains('x8') && r.startsWith('Flat')),
+            isEmpty);
+        expect(mon.where((r) => r.contains('Triceps')), isEmpty);
+        final tue = await planned(view, 6);
+        expect(tue.first, 'Barbell Deadlift 135x5 (warm-up)');
+        expect(tue, containsAll([
+          'Barbell Deadlift 275x4',
+          'Romanian Deadlift -x8',
+          'Seated Cable Row -x8',
+          'Cable Face Pull -x12',
+        ]));
+        for (final d in [7, 8, 9, 10]) {
+          expect(await planned(view, d), isEmpty, reason: 'Oct $d');
+        }
+        final wed = await PlanStore.loadForDate(view, DateTime(2026, 10, 7));
+        expect(wed.map((e) => e.localId), [coachWed.localId]);
+      });
+
+      test('a NEW move rewrites only the days it touches', () async {
+        final view = _strengthView();
+        final base = travelWeekMoves();
+        final sigs = await WeekPlanner.syncPlannedDays(
+          strengthView: view,
+          program: program,
+          phase: phase,
+          moves: base,
+          today: sunday,
+          workingMaxes: wms,
+        );
+        final idsBefore = {
+          for (var d = 4; d <= 10; d++)
+            d: (await PlanStore.loadForDate(view, DateTime(2026, 10, d)))
+                .map((e) => e.localId)
+                .toList(),
+        };
+        // Move Mon's lateral raise to Tue.
+        final sigs2 = await WeekPlanner.syncPlannedDays(
+          strengthView: view,
+          program: program,
+          phase: phase,
+          moves: [
+            ...base,
+            ProgramMove(
+              id: 'new',
+              to: DateTime(2026, 10, 6),
+              from: DateTime(2026, 10, 5),
+              item: 'Lateral raise',
+              source: 'manual',
+              createdAt: DateTime(2026, 10, 3),
+            ),
+          ],
+          today: sunday,
+          workingMaxes: wms,
+          storedSignatures: sigs,
+        );
+        for (var d = 4; d <= 10; d++) {
+          final k = '2026-10-${d.toString().padLeft(2, '0')}';
+          final ids = (await PlanStore.loadForDate(view, DateTime(2026, 10, d)))
+              .map((e) => e.localId)
+              .toList();
+          if (d == 5 || d == 6) {
+            expect(sigs2[k], isNot(sigs[k]), reason: k);
+          } else {
+            expect(sigs2[k], sigs[k], reason: k);
+            expect(ids, idsBefore[d], reason: '$k untouched');
+          }
+        }
+        expect((await planned(view, 5)).where((r) => r.startsWith('Lateral')),
+            isEmpty);
+        expect((await planned(view, 6)).where((r) => r.startsWith('Lateral')),
+            hasLength(3));
+      });
+
+      test('a new SKIP on a day with no priced line for it still rewrites '
+          'that day (moves/skips are in the fingerprint)', () async {
+        final view = _strengthView();
+        final sigs = await WeekPlanner.syncPlannedDays(
+          strengthView: view, program: program, phase: phase,
+          moves: travelWeekMoves(), today: sunday, workingMaxes: wms);
+        final sigs2 = await WeekPlanner.syncPlannedDays(
+          strengthView: view, program: program, phase: phase,
+          moves: [
+            ...travelWeekMoves(),
+            ProgramMove(
+              id: 'sk-x',
+              to: DateTime(2026, 10, 6),
+              from: DateTime(2026, 10, 6),
+              item: 'Climb — HARD session',
+              source: skipSource,
+              note: 'tired',
+            ),
+          ],
+          today: sunday, workingMaxes: wms, storedSignatures: sigs);
+        expect(sigs2['2026-10-06'], isNot(sigs['2026-10-06']));
+        expect(sigs2['2026-10-05'], sigs['2026-10-05']);
+      });
     });
 
     test('decodeDaySignatures tolerates junk', () {

@@ -40,7 +40,7 @@ import '../services/github_client.dart';
 import '../services/home_synthesis.dart' show strengthRowFromRecord;
 import '../services/llm_client.dart';
 import '../services/llm_response_cache.dart';
-import '../services/program_current.dart' show currentVersion, weekStartDayOf;
+import '../services/app_settings.dart' show effectiveWeekStartDay;
 import '../services/program_metrics.dart' show StrengthRow, WeightRow;
 import '../services/program_provider.dart';
 import '../services/qbo_service.dart';
@@ -200,15 +200,15 @@ class _DomainScreenState extends State<DomainScreen> {
       } catch (_) {}
     }
 
-    // Accounting-week keying for the weekly Wilks stat (program.yaml
-    // v7 `week_start: saturday`, amendment 2026-09-22). Cheap: the doc
-    // cache is 1 h; failures fall back to ISO Monday weeks.
-    var weekStartDay = DateTime.monday;
+    // THE week start (week_start.dart) for weekly keying (Wilks stat,
+    // sessions per week). Without docs: the synced setting / last-seen
+    // program default; docs are loaded only when a metric needs them.
+    var weekStartDay = effectiveWeekStartDay(null);
     if (widget.programProvider != null &&
         ids.any(_bodyweightRefMetricIds.contains)) {
       try {
         final docs = await widget.programProvider!.load();
-        weekStartDay = weekStartDayOf(currentVersion(docs.program));
+        weekStartDay = effectiveWeekStartDay(docs.program);
       } catch (_) {}
     }
 

@@ -32,14 +32,16 @@ import '../services/nutrition_model.dart'
     show buildNutritionForecast, mealRowsFromRecords;
 import '../services/phase_eigenvectors.dart' show effectivePhaseKey;
 import '../services/program_current.dart'
-    show currentVersion, programCurrent, routineWeekFor, weekStartDayOf;
+    show currentVersion, programCurrent, routineWeekFor;
 import '../services/program_metrics.dart'
     show GradedSet, StrengthRow, WeightRow, gradeSets;
 import '../services/program_observed.dart' show observedWeightStats;
 import '../services/program_item_pricing.dart'
     show mainLiftByItem, pricedWeek;
 import '../services/program_provider.dart' show IntentDocs, ProgramProvider;
-import '../services/program_week.dart' show mondayOf, prescribedWeek;
+import '../services/app_settings.dart'
+    show AppSettings, effectiveWeekStartDay;
+import '../services/week_start.dart' show weekStartOf;
 import '../services/week_state_loader.dart';
 import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart' show loadDailyWeighIns;
@@ -55,7 +57,7 @@ class _GoalsData {
 
   /// The accounting week's first weekday (program.yaml `week_start`) —
   /// climbing / cardio / zone-2 count over it; program sets + muscle
-  /// groups count over the Mon–Sun program week the header shows.
+  /// groups count over the configured program week the header shows.
   final int weekStartDay;
   const _GoalsData({
     required this.phaseTitle,
@@ -180,7 +182,9 @@ class GoalsScreenState extends State<GoalsScreen> {
     final configs = byPhase[phaseKey];
     if (configs == null || configs.isEmpty) return null;
 
-    final weekStartDay = weekStartDayOf(version);
+    // THE week start (synced setting > program default > Monday) — every
+    // goal on this tab counts the same configured week.
+    final weekStartDay = effectiveWeekStartDay(docs?.program);
 
     // Which weekdays the routine trains each main lift (today's block) —
     // lets a 0-set lift say "due Fri" instead of reading as missed.
@@ -192,7 +196,7 @@ class GoalsScreenState extends State<GoalsScreen> {
       routineWeekFor(version, blockN is num ? blockN.toInt() : null),
     );
 
-    // The effective Mon–Sun program week + its working sets, via the
+    // The effective program week + its working sets, via the
     // SAME loader the program day card uses (moves, skips, warm-up rule,
     // calisthenics) so "program sets per lift" agrees with the card.
     final provider = widget.provider;
@@ -206,6 +210,7 @@ class GoalsScreenState extends State<GoalsScreen> {
               strengthRepo: widget.strengthRepo,
               calisthenicsView: widget.calisthenicsView,
               calisthenicsRepo: widget.calisthenicsRepo,
+              weekStartSetting: () => AppSettings.weekStartSetting.value,
             ).load(_today));
     // Which main lift each prescribed item trains — the program card's
     // own priced-line matching (sets don't depend on weights, so no TM
@@ -214,8 +219,9 @@ class GoalsScreenState extends State<GoalsScreen> {
     if (state != null && program != null) {
       try {
         itemLifts = mainLiftByItem(
-          prescribedWeek(state.docs, _today),
-          pricedWeek(program, docs?.phase, mondayOf(_today), today: _today),
+          state.prescribed,
+          pricedWeek(program, docs?.phase, state.weekStart,
+              today: _today, extraDays: state.prescribed.keys),
         );
       } catch (_) {/* honest: name fallback */}
     }
@@ -358,11 +364,11 @@ class GoalsScreenState extends State<GoalsScreen> {
           children: [
             SectionHeader(
               label: 'This week — ${data.phaseTitle}',
-              count: programWeekRange(_today),
+              count: programWeekRange(_today, data.weekStartDay),
             ),
             GoalList(
               goals: data.goals,
-              onTap: (g) => _openSheet(g, data.weekStartDay),
+              onTap: _openSheet,
             ),
           ],
         );
@@ -370,16 +376,13 @@ class GoalsScreenState extends State<GoalsScreen> {
     );
   }
 
-  Future<void> _openSheet(GoalEval g, int weekStartDay) async {
+  Future<void> _openSheet(GoalEval g) async {
     if (!mounted) return;
     await showDetailSheet(
       context: context,
       title: g.label,
       subtitle: '${goalStatusWord(g.status)} · ${g.value}',
-      body: GoalDetail(
-        goal: g,
-        windowNote: goalWindowNote(g, _today, weekStartDay),
-      ),
+      body: GoalDetail(goal: g),
     );
   }
 }
@@ -388,37 +391,15 @@ class GoalsScreenState extends State<GoalsScreen> {
 // Display helpers (pure — pinned by test/goals_screen_test.dart)
 // ---------------------------------------------------------------------------
 
-/// 'Mon Sep 28 – Sun Oct 4' — the Mon–Sun program week holding [today].
-String programWeekRange(DateTime today) {
-  final monday = DateTime(
-    today.year,
-    today.month,
-    today.day,
-  ).subtract(Duration(days: today.weekday - DateTime.monday));
-  final sunday = monday.add(const Duration(days: 6));
+/// 'Sat Oct 3 – Fri Oct 9' — the configured week ([weekStartDay],
+/// week_start.dart) holding [today]. Every goal on the tab counts this
+/// one window (the old "Counted Sat–Fri (your accounting week)" note is
+/// gone — there is no second window any more).
+String programWeekRange(DateTime today, [int weekStartDay = DateTime.monday]) {
+  final start = weekStartOf(today, weekStartDay);
+  final end = DateTime(start.year, start.month, start.day + 6);
   final f = DateFormat('EEE MMM d');
-  return '${f.format(monday)} – ${f.format(sunday)}';
-}
-
-/// The counting window for goals evaluated over the ACCOUNTING week
-/// (climbing, cardio, zone-2, legacy hard sets) when it isn't the Mon–Sun
-/// week the header shows — e.g. 'Counted Sat Sep 26 – Fri Oct 2 (your
-/// accounting week).' Null when the windows agree.
-String? goalWindowNote(GoalEval g, DateTime today, int weekStartDay) {
-  if (weekStartDay == DateTime.monday) return null;
-  final programWeek =
-      g.muscles.isNotEmpty ||
-      (g.ticks.isNotEmpty && g.ticks.any((t) => t.fromProgram)) ||
-      g.config.id == 'muscle_stimulus';
-  if (programWeek) return null;
-  final day = DateTime(today.year, today.month, today.day);
-  final start = day.subtract(
-    Duration(days: (day.weekday - weekStartDay + 7) % 7),
-  );
-  final end = start.add(const Duration(days: 6));
-  final f = DateFormat('EEE MMM d');
-  return 'Counted ${f.format(start)} – ${f.format(end)} '
-      '(your accounting week).';
+  return '${f.format(start)} – ${f.format(end)}';
 }
 
 /// The row's one meta line. Program sets read 'done of prescribed sets'
@@ -727,11 +708,7 @@ class _MiniBar extends StatelessWidget {
 class GoalDetail extends StatelessWidget {
   final GoalEval goal;
 
-  /// Counting-window note for accounting-week goals (see
-  /// [goalWindowNote]).
-  final String? windowNote;
-
-  const GoalDetail({super.key, required this.goal, this.windowNote});
+  const GoalDetail({super.key, required this.goal});
 
   @override
   Widget build(BuildContext context) {
@@ -745,10 +722,6 @@ class GoalDetail extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (g.detail.isNotEmpty) Text(g.detail, style: meta),
-          if (windowNote != null) ...[
-            const SizedBox(height: 4),
-            Text(windowNote!, style: meta),
-          ],
           if (g.config.description != null) ...[
             const SizedBox(height: 10),
             Text(g.config.description!, style: body),

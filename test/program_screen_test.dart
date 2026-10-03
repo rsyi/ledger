@@ -15,6 +15,7 @@ import 'package:airledger/ui/design/design.dart' show AppCard;
 
 import 'package:airledger/models/database_config.dart';
 import 'package:airledger/models/view_schema.dart';
+import 'package:airledger/services/app_settings.dart';
 import 'package:airledger/services/program_provider.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
@@ -152,6 +153,12 @@ List<WorkingMaxRow> _seedRows({bool confirmed = false}) => [
     ];
 
 void main() {
+  // The cases below pin Mon–Sun weeks (the live program.yaml DEFAULTS to
+  // saturday): the synced setting wins over the program default. The
+  // SATURDAY-week case sets its own.
+  setUp(() => AppSettings.debugSet('monday'));
+  tearDown(() => AppSettings.debugSet(null));
+
   final programYaml =
       File('$_fitnessRepo/program.yaml').readAsStringSync();
 
@@ -399,5 +406,79 @@ void main() {
     expect(inDay('2026-10-11', find.text('4x4')), findsOneWidget);
     expect(inDay('2026-10-11', find.text('From Tue: Norwegian')),
         findsOneWidget);
+  });
+
+  testWidgets('SATURDAY WEEK (live travel moves): Sat 10/3 – Fri 10/9; '
+      'next week\'s Sat items pulled forward onto Tue; the Tue→Sun '
+      'Norwegian (a later move across the boundary) is ignored',
+      (tester) async {
+    AppSettings.debugSet('saturday');
+    final moves = [for (final m in liveTravelMoves()) m.toRecord()];
+    await pump(
+      tester,
+      _FakeWmStore(_seedRows(confirmed: true)),
+      moves: moves,
+      today: DateTime(2026, 10, 3), // Sat — the week's first day
+    );
+    Finder inDay(String ymd, Finder f) => find.descendant(
+        of: find.byKey(ValueKey('routine-day-$ymd')), matching: f);
+    Finder rich(String t) => find.text(t, findRichText: true);
+
+    // Header: the configured range.
+    expect(find.text('Oct 3 – Oct 9'), findsOneWidget);
+    for (var d = 3; d <= 9; d++) {
+      expect(find.byKey(ValueKey('routine-day-2026-10-0$d')), findsOneWidget);
+    }
+    expect(find.byKey(const ValueKey('routine-day-2026-10-10')), findsNothing);
+
+    // Sat 10/3: the untouched OHP day (wave week of Mon 9/28: 5 @ 81%).
+    expect(inDay('2026-10-03', rich('Press 1×5 · 115 lb (81%)')),
+        findsOneWidget);
+    // Sun 10/4: rest.
+    expect(inDay('2026-10-04', find.text('Rest')), findsOneWidget);
+
+    // Mon 10/5: squat top + Wed bench + pull-ups; the OHP now lives Tue.
+    expect(inDay('2026-10-05', rich('Bench 1×4 · 200 lb (84%) · from Wed')),
+        findsOneWidget);
+    expect(inDay('2026-10-05', find.textContaining('from Sat',
+            findRichText: true)),
+        findsNothing);
+
+    // Tue 10/6: Fri deadlift + Sat 10/10 (NEXT week) OHP/row/face pulls
+    // pulled forward, priced on their home day (wave week of 10/5).
+    expect(inDay('2026-10-06', rich('Deadlift 1×4 · 275 lb (84%) · from Fri')),
+        findsOneWidget);
+    expect(inDay('2026-10-06', rich('Press 1×4 · 115 lb (84%) · from Sat')),
+        findsOneWidget);
+    expect(inDay('2026-10-06',
+            find.textContaining('Seated Cable Row', findRichText: true)),
+        findsOneWidget);
+    expect(inDay('2026-10-06',
+            find.textContaining('Cable Face Pull', findRichText: true)),
+        findsOneWidget);
+    // Norwegian stays home (Tue→Sun 10/11 crosses into next week: not
+    // allowed for a LATER move).
+    expect(inDay('2026-10-06', find.text('Norwegian → Sun')), findsNothing);
+
+    expect(
+        inDay('2026-10-06',
+            find.text('Deadlift heavy · press heavy · 4x4 · hard climb')),
+        findsOneWidget);
+    // Wed–Fri: travel.
+    for (final d in ['07', '08', '09']) {
+      expect(inDay('2026-10-$d', find.text('Skipped — travel Wed–Sat')),
+          findsOneWidget, reason: 'Oct $d');
+    }
+
+    // Next week (Sat 10/10 – Fri 10/16): the pulled-forward items leave
+    // Sat 10/10; its remaining items are the travel skips.
+    await tester.tap(find.byTooltip('Next week'));
+    await tester.pumpAndSettle();
+    expect(find.text('Oct 10 – Oct 16'), findsOneWidget);
+    expect(inDay('2026-10-10', find.textContaining(' lb', findRichText: true)),
+        findsNothing);
+    expect(inDay('2026-10-10', find.text('Skipped — travel Wed–Sat')),
+        findsOneWidget);
+    expect(inDay('2026-10-11', find.text('Rest')), findsOneWidget);
   });
 }

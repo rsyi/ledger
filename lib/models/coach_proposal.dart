@@ -78,7 +78,8 @@ class CoachProposal {
 }
 
 /// One proposed relocation of a prescribed program item within its
-/// Mon–Sun week. Accepting it writes a `program_moves` row.
+/// configured week (or pulled forward ≤7 days from next week). Accepting
+/// it writes a `program_moves` row.
 class ProposedMove {
   final String item; // display name, e.g. "Bench heavy"
   final DateTime from; // date-only — the day the program prescribed it

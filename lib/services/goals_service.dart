@@ -33,7 +33,7 @@
 ///                    no program week supplied it falls back to the
 ///                    legacy hard-sets-vs-~10 count over the accounting
 ///                    week. Plus a per-lift "accessories done" check.
-///   3b. muscle_stimulus  per-muscle-group working sets this Mon–Sun week
+///   3b. muscle_stimulus  per-muscle-group working sets this week (configured start day)
 ///                    vs a band (8–12) via the program's
 ///                    exercise_muscle_map (muscle_volume.dart — the same
 ///                    counter as the hypertrophy_volume driver), climbing
@@ -58,8 +58,8 @@ import 'muscle_volume.dart';
 import 'program_item_pricing.dart' show itemLiftKey, mainLiftOfItemName;
 import 'program_metrics.dart'
     show GradedSet, mainLiftByExercise, weekStartOf;
+import 'week_start.dart' show weekdayShortName, weekEndDay;
 import 'program_moves.dart' show EffectiveItem;
-import 'program_week.dart' show mondayOf;
 import 'whoop_activity.dart';
 
 // ---------------------------------------------------------------------------
@@ -271,7 +271,7 @@ Map<String, List<GoalConfig>>? parseGoals(String? raw) {
 enum GoalStatus { met, partial, unmet, unknown, optional }
 
 /// One per-lift tick (hard_sets). Program mode: [done] = working sets
-/// credited to the lift's prescribed items this Mon–Sun week, [target] =
+/// credited to the lift's prescribed items this week (configured start day), [target] =
 /// the sets the effective week prescribes (or the declared override);
 /// legacy mode: [done] = [hardSets], [target] = the flat ~10.
 class GoalLiftTick {
@@ -335,7 +335,7 @@ class GoalLiftTick {
 class GoalMuscleRow {
   final String group;
 
-  /// Working sets credited this Mon–Sun week (fractional).
+  /// Working sets credited this week (configured start day) (fractional).
   final double sets;
 
   /// The band.
@@ -476,7 +476,7 @@ class GoalInputs {
   /// program mode reads the days off [programWeek].)
   final Map<String, Set<int>> liftDays;
 
-  /// The EFFECTIVE Mon–Sun program week (program_moves applied) —
+  /// The EFFECTIVE program week (configured start day; program_moves applied) —
   /// WeekStateLoader.week. Non-null switches hard_sets to program
   /// progress.
   final Map<DateTime, List<EffectiveItem>>? programWeek;
@@ -490,7 +490,7 @@ class GoalInputs {
   final Map<String, String> itemLifts;
 
   /// WORKING sets (warm-ups excluded — working_sets.dart) logged this
-  /// Mon–Sun week, strength + calisthenics, one entry per set — the
+  /// configured week, strength + calisthenics, one entry per set — the
   /// program-credit and muscle-stimulus source.
   final List<({DateTime date, String exercise})> weekWorkingSets;
 
@@ -558,6 +558,10 @@ Map<String, Set<int>> mainLiftWeekdays(Map<Object?, Object?>? week) {
   return out;
 }
 
+/// 'Sat–Fri' — the configured week's span (week_start.dart).
+String weekSpanLabel(int weekStartDay) =>
+    '${weekdayShortName(weekStartDay)}–${weekdayShortName(weekEndDay(weekStartDay))}';
+
 /// Short weekday label (DateTime.monday → 'Mon').
 String weekdayShort(int weekday) =>
     const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][weekday - 1];
@@ -596,12 +600,10 @@ List<GoalEval> evaluateGoals({
   bool inWeek(DateTime d) =>
       _daysBetween(d, today) >= 0 &&
       weekStartOf(_day(d), weekStartDay) == weekStart;
-  // The program's Mon–Sun week (to date) — program progress + muscle
-  // stimulus, consistent with the program card. The other goals keep
-  // the accounting week.
-  final monday = mondayOf(_day(today));
-  bool inProgramWeek(DateTime d) =>
-      _daysBetween(d, today) >= 0 && !_day(d).isBefore(monday);
+  // ONE week for every goal (2026-10-03 week-start setting): program
+  // progress + muscle stimulus count the same configured week as
+  // climbing/cardio/zone-2 — no more Mon–Sun vs Sat–Fri split.
+  final inProgramWeek = inWeek;
 
   final out = <GoalEval>[];
   for (final c in configs) {
@@ -726,10 +728,11 @@ List<GoalEval> evaluateGoals({
         }
 
       case 'hard_sets' when inputs.programWeek != null:
-        out.add(_programSets(c, inputs, today, inProgramWeek));
+        out.add(_programSets(c, inputs, today, inProgramWeek, weekStartDay));
 
       case 'muscle_stimulus':
-        out.add(_muscleStimulus(c, inputs, today, inProgramWeek));
+        out.add(
+            _muscleStimulus(c, inputs, today, inProgramWeek, weekStartDay));
 
       case 'hard_sets':
         final lifts = c.lifts.isEmpty ? _defaultLifts : c.lifts;
@@ -890,6 +893,7 @@ GoalEval _programSets(
   GoalInputs inputs,
   DateTime today,
   bool Function(DateTime) inWeek,
+  int weekStartDay,
 ) {
   final t = _day(today);
   final lifts = c.lifts.isEmpty ? _defaultLifts : c.lifts;
@@ -898,6 +902,7 @@ GoalEval _programSets(
     strengthRows: inputs.weekWorkingSets,
     today: t,
     skipped: inputs.programSkips,
+    weekStartDay: weekStartDay,
   );
   String? liftOf(ItemCredit ic) =>
       inputs.itemLifts[itemLiftKey(ic.home, ic.item.name)] ??
@@ -964,12 +969,13 @@ GoalEval _programSets(
       : behind.isNotEmpty
           ? GoalStatus.unmet
           : GoalStatus.partial;
+  final span = weekSpanLabel(weekStartDay);
   final detail = complete == ticks.length
-      ? 'all program sets done · Mon–Sun program week'
+      ? 'all program sets done · $span program week'
       : behind.isNotEmpty
           ? 'behind on ${behind.map((k) => liftDisplayName(k.lift)).join(', ')}'
-              ' · Mon–Sun program week'
-          : 'on schedule · Mon–Sun program week';
+              ' · $span program week'
+          : 'on schedule · $span program week';
   return GoalEval(
     config: c,
     status: status,
@@ -995,6 +1001,7 @@ GoalEval _muscleStimulus(
   GoalInputs inputs,
   DateTime today,
   bool Function(DateTime) inWeek,
+  int weekStartDay,
 ) {
   final map = inputs.muscleMap;
   if (map == null) {
@@ -1035,7 +1042,8 @@ GoalEval _muscleStimulus(
     ],
     climbSessions: climbSessions,
   );
-  final pace = lo * _day(today).weekday / 7;
+  // Pace through the CONFIGURED week (day 1 = its start day).
+  final pace = lo * ((_day(today).weekday - weekStartDay) % 7 + 1) / 7;
   final rows = <GoalMuscleRow>[
     for (final g in groups)
       GoalMuscleRow(
@@ -1073,7 +1081,7 @@ GoalEval _muscleStimulus(
       '$behind behind pace'
     else if (under > 0)
       '${over > 0 ? 'the rest' : 'all'} on pace',
-    'Mon–Sun',
+    weekSpanLabel(weekStartDay),
   ];
   return GoalEval(
     config: c,

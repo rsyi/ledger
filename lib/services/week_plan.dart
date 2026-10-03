@@ -47,8 +47,9 @@ DateTime defaultWeekStart(DateTime today, {int weekStartDay = DateTime.monday}) 
   return start;
 }
 
-/// Builds the full 7-day plan for the ISO week containing [anyDayInWeek]
-/// (Mon–Sun). Always returns exactly 7 [DayPlan] entries in weekday order.
+/// Builds the full 7-day plan for the week containing [anyDayInWeek] —
+/// the [weekStartDay] week (week_start.dart; Monday = ISO Mon–Sun).
+/// Always returns exactly 7 [DayPlan] entries in day order.
 ///
 /// [programYaml] is the parsed `coach/program.yaml` map.
 /// [phaseYaml] is the parsed `coach/phase.yaml` map (may be null).
@@ -58,12 +59,13 @@ DateTime defaultWeekStart(DateTime today, {int weekStartDay = DateTime.monday}) 
 List<DayPlan> buildWeekPlan(
   Map<Object?, Object?> programYaml,
   Map<Object?, Object?>? phaseYaml,
-  DateTime anyDayInWeek,
-) {
+  DateTime anyDayInWeek, {
+  int weekStartDay = DateTime.monday,
+}) {
   final day = DateTime.utc(
       anyDayInWeek.year, anyDayInWeek.month, anyDayInWeek.day);
-  // Normalise to Monday of this ISO week.
-  final monday = day.subtract(Duration(days: day.weekday - 1));
+  // Normalise to the week's first day.
+  final monday = day.subtract(Duration(days: (day.weekday - weekStartDay) % 7));
 
   return [
     for (var i = 0; i < 7; i++)

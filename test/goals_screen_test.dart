@@ -228,13 +228,11 @@ void main() {
     final fri = DateTime(2026, 10, 2);
     expect(programWeekRange(fri), 'Mon Sep 28 – Sun Oct 4');
     expect(programWeekRange(DateTime(2026, 10, 4)), 'Mon Sep 28 – Sun Oct 4');
-    expect(
-      goalWindowNote(climbing, fri, DateTime.saturday),
-      'Counted Sat Sep 26 – Fri Oct 2 (your accounting week).',
-    );
-    expect(goalWindowNote(climbing, fri, DateTime.monday), isNull);
-    expect(goalWindowNote(programEval, fri, DateTime.saturday), isNull);
-    expect(goalWindowNote(muscleEval, fri, DateTime.saturday), isNull);
+    // The configured week (2026-10-03 week-start setting): one window
+    // for every goal — the header shows it, no per-goal mismatch note.
+    expect(programWeekRange(fri, DateTime.saturday), 'Sat Sep 26 – Fri Oct 2');
+    expect(programWeekRange(DateTime(2026, 10, 3), DateTime.saturday),
+        'Sat Oct 3 – Fri Oct 9');
     expect(goalMeta(climbing), '3/2 sessions');
     expect(goalMeta(muscleEval), '1 of 2 groups in 8–12');
     expect(goalStatusWord(GoalStatus.optional), 'Nice to have');

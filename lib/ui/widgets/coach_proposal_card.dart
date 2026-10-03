@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../models/coach_proposal.dart';
+import '../../services/app_settings.dart' show effectiveWeekStartDay;
 import '../../services/coach_proposal_store.dart';
+import '../../services/program_moves.dart' show isAllowedMove;
+import '../../services/week_start.dart';
 
 /// In-bubble card for a `kind=proposal` coach message. Pure
 /// presentation — the chat screen owns PlanStore writes, state
@@ -188,7 +191,7 @@ class MovesProposalCard extends StatelessWidget {
   final VoidCallback onDismiss;
 
   /// Today (local). When set, a stale proposal — a move into a past day
-  /// or outside today's Mon–Sun week — gets Schedule disabled with
+  /// or outside today's configured week — gets Schedule disabled with
   /// [staleReason]. Null skips the check.
   final DateTime? today;
 
@@ -207,15 +210,22 @@ class MovesProposalCard extends StatelessWidget {
   static final _day = DateFormat('EEE M/d');
 
   /// Why [p] can no longer be scheduled on [today] (null = it can): a
-  /// move outside today's Mon–Sun week (moves never cross weeks; the
-  /// resolver would ignore it) or targeting a day before today (the item
-  /// would be missed again at once).
-  static String? staleReason(MovesProposal p, DateTime today) {
+  /// move the resolver would ignore in today's CONFIGURED week
+  /// ([weekStartDay], week_start.dart) — its target outside the week, or
+  /// its from day neither in the week nor a ≤7-day pull-forward from
+  /// next week — or targeting a day before today (the item would be
+  /// missed again at once).
+  static String? staleReason(MovesProposal p, DateTime today,
+      {int? weekStartDay}) {
+    final ws = weekStartDay ?? effectiveWeekStartDay(null);
     final t = DateTime(today.year, today.month, today.day);
-    final mon = DateTime(t.year, t.month, t.day - (t.weekday - 1));
-    final sun = DateTime(mon.year, mon.month, mon.day + 6);
+    final mon = weekStartOf(t, ws);
+    final sun = weekEndOf(t, ws);
     bool inWeek(DateTime d) => !d.isBefore(mon) && !d.isAfter(sun);
-    if (p.moves.any((m) => !inWeek(m.from) || !inWeek(m.to))) {
+    bool fromOk(ProposedMove m) =>
+        inWeek(m.from) ||
+        (m.from.isAfter(sun) && isAllowedMove(m.from, m.to, weekStartDay: ws));
+    if (p.moves.any((m) => !inWeek(m.to) || !fromOk(m))) {
       return 'Expired — this proposal is for another week.';
     }
     if (p.moves.any((m) => m.to.isBefore(t))) {

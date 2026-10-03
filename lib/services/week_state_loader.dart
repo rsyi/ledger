@@ -1,4 +1,6 @@
-/// One loader for "this Mon–Sun week, as it stands": the program's
+/// One loader for "this week, as it stands" — the CONFIGURED week
+/// (week_start.dart: synced setting > program.yaml `week_start` >
+/// Monday; Saturday for the user since 2026-10-03): the program's
 /// prescription with the week's `program_moves` applied, the week's
 /// logged work, and (optionally) the missed-work detector over it.
 ///
@@ -17,8 +19,12 @@ import 'day_prescription.dart' show DayPrescription;
 import 'day_status.dart';
 import 'intent_docs.dart';
 import 'missed_work.dart';
+import 'prescribed_exercises.dart' show PrescribedItem;
 import 'program_moves.dart';
-import 'program_week.dart' show dayOnly, mondayOf, prescribedDay, prescribedWeek;
+import 'program_current.dart' show currentVersion;
+import 'program_week.dart' show dayOnly, prescribedDay;
+import 'resolved_week.dart';
+import 'week_start.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 import '../models/view_schema.dart';
@@ -45,8 +51,15 @@ class WeekState {
   /// The week's intentional skips, keyed by [skipKey] (day|item).
   final Map<String, ProgramMove> skips;
 
-  /// The effective (post-moves) Mon–Sun week.
+  /// The effective (post-moves) week — exactly its 7 days, in order.
   final Map<DateTime, List<EffectiveItem>> week;
+
+  /// `DateTime.monday..sunday` the week starts on (resolved).
+  final int weekStartDay;
+
+  /// The week's prescribed items — its 7 days + any next-week home day a
+  /// move pulls work from (ResolvedWeek.prescribed).
+  final Map<DateTime, List<PrescribedItem>> prescribed;
 
   /// Every strength row (null when no strength source / the read
   /// failed) — the card's info sheet reuses it.
@@ -62,7 +75,7 @@ class WeekState {
   final List<Record?> loggedRecordsOnDate;
 
   /// The week's WORKING sets (strength + calisthenics, warm-ups
-  /// excluded), one entry per set, Mon..Sun — what the missed-work
+  /// excluded), one entry per set, over the week — what the missed-work
   /// detector allocates; the Week tab's program progress reuses it.
   final List<({DateTime date, String exercise})> weekSets;
 
@@ -87,6 +100,8 @@ class WeekState {
     required this.moves,
     this.skips = const {},
     required this.week,
+    this.weekStartDay = DateTime.monday,
+    this.prescribed = const {},
     required this.strengthRows,
     required this.loggedOnDate,
     this.loggedRecordsOnDate = const [],
@@ -96,6 +111,9 @@ class WeekState {
     this.kayaDays = const [],
     this.cardio4x4Days = const {},
   });
+
+  /// The week's first day (local midnight).
+  DateTime get weekStart => weekStartOf(date, weekStartDay);
 
   /// [date]'s effective items (ghosts included).
   List<EffectiveItem> get day => week[date] ?? const <EffectiveItem>[];
@@ -154,6 +172,10 @@ class WeekStateLoader {
   /// Clock for the Kaya cache TTL.
   final DateTime Function() now;
 
+  /// The synced week-start setting (app: `AppSettings.weekStartSetting`)
+  /// — resolved against the loaded program's `week_start` default.
+  final Object? Function()? weekStartSetting;
+
   const WeekStateLoader({
     required this.loadDocs,
     this.programMovesView,
@@ -169,6 +191,7 @@ class WeekStateLoader {
     this.calisthenicsView,
     this.calisthenicsRepo,
     this.now = DateTime.now,
+    this.weekStartSetting,
   });
 
   /// Whether the strength source is configured (missed work needs it).
@@ -241,7 +264,11 @@ class WeekStateLoader {
       return null;
     }
     final day = dayOnly(date);
-    final mon = mondayOf(day);
+    final wsDay = resolveWeekStartDay(
+      setting: weekStartSetting?.call(),
+      programVersion: currentVersion(docs.program),
+    );
+    final mon = weekStartOf(day, wsDay); // the week's first day
     final (prescription, _) = prescribedDay(docs, day, label: label);
     if (prescription == null) return null;
 
@@ -277,16 +304,17 @@ class WeekStateLoader {
     final cardioRows = reads[4] as List<Record>?;
     final calisthenicsRows = reads[5] as List<Record>?;
 
-    var moves = const <String, ProgramMove>{};
-    var skips = const <String, ProgramMove>{};
+    var allMoves = const <ProgramMove>[];
     if (moveRows != null) {
       try {
-        final all = [for (final r in moveRows) ?ProgramMove.fromRecord(r)];
-        moves = activeMoves(all, mon);
-        skips = activeSkips(all, mon);
+        allMoves = [for (final r in moveRows) ?ProgramMove.fromRecord(r)];
       } catch (_) {/* honest: unmoved week */}
     }
-    final week = effectiveWeek(prescribedWeek(docs, day, label: label), moves);
+    final rw = resolveProgramWeek(docs, day, allMoves,
+        weekStartDay: wsDay, label: label);
+    final moves = rw.moves;
+    final skips = rw.skips;
+    final week = rw.week;
 
     List<Record>? strengthRows;
     final logged = <String>[];
@@ -304,7 +332,7 @@ class WeekStateLoader {
             logged.add(ex);
             loggedRecords.add(r);
           }
-          if (mondayOf(d) == mon) {
+          if (weekStartOf(d, wsDay) == mon) {
             strengthWeek.add((date: dayOnly(d), exercise: ex));
           }
         }
@@ -318,7 +346,7 @@ class WeekStateLoader {
             logged.add(c.exercise);
             loggedRecords.add(null);
           }
-          if (mondayOf(c.date) == mon) strengthWeek.add(c);
+          if (weekStartOf(c.date, wsDay) == mon) strengthWeek.add(c);
         }
       } catch (_) {/* honest: strength-only */}
     }
@@ -348,6 +376,7 @@ class WeekStateLoader {
         cardio4x4Days: cardioDays,
         today: day,
         skipped: skips.keys.toSet(),
+        weekStartDay: wsDay,
       );
     }
 
@@ -358,6 +387,8 @@ class WeekStateLoader {
       moves: moves,
       skips: skips,
       week: week,
+      weekStartDay: wsDay,
+      prescribed: rw.prescribed,
       strengthRows: strengthRows,
       loggedOnDate: logged,
       loggedRecordsOnDate: loggedRecords,

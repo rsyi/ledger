@@ -45,13 +45,18 @@ class CoachToolset {
   /// omitted from [build].
   final MovesProposalSink? onMovesProposal;
 
-  /// Clock: `propose_moves` validates against this Mon–Sun week.
+  /// Clock: `propose_moves` validates against this week.
   final DateTime Function() now;
 
-  /// The effective (post-moves) Mon–Sun week of [now] — `propose_moves`
+  /// The effective (post-moves) week of [now] — plus next week's days, so
+  /// a pulled-forward item's from day checks too — `propose_moves`
   /// checks each item exists on its from_date. Null, a null result or a
   /// throw skips the item check (dates are still validated).
   final Future<Map<DateTime, List<EffectiveItem>>?> Function()? movesWeek;
+
+  /// The configured week start (week_start.dart), read AFTER [movesWeek]
+  /// ran. Null → Monday.
+  final int Function()? weekStartDay;
 
   CoachToolset({
     required this.views,
@@ -60,6 +65,7 @@ class CoachToolset {
     this.onMovesProposal,
     this.now = DateTime.now,
     this.movesWeek,
+    this.weekStartDay,
   });
 
   List<ChatTool> build() => [
@@ -227,12 +233,15 @@ class CoachToolset {
     return ChatTool(
       name: 'propose_moves',
       description: 'Proposes moving program items between days of THIS '
-          'Mon–Sun week (missed-work carryover). Shows him a card with '
+          'week (missed-work carryover; the week runs on the user\'s '
+          'configured start day — see the moves section). Shows him a card with '
           'Schedule / Not now; Schedule records the moves. Writes NOTHING '
           'itself. Copy `item`, `from_date` and `period` EXACTLY from the '
           'missed list (from_date = the program\'s original day, even if '
           'the item was already moved once). to_date must be a remaining '
-          'day of this week (today..Sunday) and differ from from_date. '
+          'day of this week (today..the week\'s last day) and differ from '
+          'from_date; it may PULL an item from next week up to 7 days '
+          'earlier, never push one past the week end. '
           'Items you let expire are simply left out. After calling, never '
           'claim anything moved; the card handles it.',
       inputSchema: const {
@@ -271,7 +280,8 @@ class CoachToolset {
         try {
           week = await movesWeek?.call();
         } catch (_) {/* program unavailable: dates-only validation */}
-        final proposal = validateMovesInput(input, now(), week: week);
+        final proposal = validateMovesInput(input, now(),
+            week: week, weekStartDay: weekStartDay?.call() ?? DateTime.monday);
         await onMovesProposal!(proposal);
         return 'Moves proposal presented to the user — they will confirm '
             'or decline on the card. Do not claim anything moved.';
@@ -279,7 +289,7 @@ class CoachToolset {
     );
   }
 
-  /// Validates a `propose_moves` input against [now]'s Mon–Sun week
+  /// Validates a `propose_moves` input against [now]'s [weekStartDay] week
   /// via the shared [checkProposedMove]: every move needs an item,
   /// parseable yyyy-MM-dd dates, from AND to inside the week, to not
   /// before today, to != from and — when [week] is given — an item that
@@ -288,7 +298,8 @@ class CoachToolset {
   /// tool loop reports it to the model, which can retry).
   static MovesProposal validateMovesInput(
       Map<String, dynamic> input, DateTime now,
-      {Map<DateTime, List<EffectiveItem>>? week}) {
+      {Map<DateTime, List<EffectiveItem>>? week,
+      int weekStartDay = DateTime.monday}) {
     final rawMoves = input['moves'];
     if (rawMoves is! List || rawMoves.isEmpty) {
       throw StateError('moves must be a non-empty array of objects');
@@ -321,6 +332,7 @@ class CoachToolset {
         today: now,
         week: week,
         label: 'moves[$i]',
+        weekStartDay: weekStartDay,
       ));
     }
     return MovesProposal(

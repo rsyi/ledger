@@ -302,17 +302,19 @@ final _numericVGrade = RegExp(r'^v(\d+)', caseSensitive: false);
   );
 }
 
-/// Sessions per ISO week: distinct days with at least one row, bucketed
-/// by week (Monday start), zero-filled over the trailing [weeks] weeks
-/// ending with today's week. Points are (week's Monday, count).
+/// Sessions per week: distinct days with at least one row, bucketed by
+/// the configured week ([weekStartDay], week_start.dart; Monday = ISO),
+/// zero-filled over the trailing [weeks] weeks ending with today's week.
+/// Points are (week's first day, count).
 List<({DateTime day, double value})> sessionsPerWeek(
   Iterable<Map<String, Object?>> records, {
   required DateTime today,
   int weeks = 12,
   String dateKey = 'date',
+  int weekStartDay = DateTime.monday,
 }) {
-  DateTime monday(DateTime d) =>
-      DateTime.utc(d.year, d.month, d.day - (d.weekday - 1));
+  DateTime monday(DateTime d) => DateTime.utc(
+      d.year, d.month, d.day - ((d.weekday - weekStartDay) % 7));
   final thisMonday = monday(today);
   final firstMonday = thisMonday.subtract(Duration(days: 7 * (weeks - 1)));
 
@@ -645,7 +647,8 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
         return const MetricUnavailable('no sessions yet');
       }
       return MetricSeries(
-        points: sessionsPerWeek(inputs.records, today: inputs.today),
+        points: sessionsPerWeek(inputs.records,
+            today: inputs.today, weekStartDay: inputs.weekStartDay),
         goal: m.goal,
         unit: m.unit,
       );

@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:airledger/models/database_config.dart';
 import 'package:airledger/models/view_schema.dart';
+import 'package:airledger/services/app_settings.dart';
 import 'package:airledger/services/program_moves.dart';
 import 'package:airledger/services/program_provider.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
@@ -100,7 +101,11 @@ void main() {
   setUp(() {
     ProgramProvider.clearCache();
     WeekStateLoader.clearKayaCache();
+    // These cases pin a Mon–Sun week (the live program.yaml DEFAULTS to
+    // saturday): the synced setting wins over the program default.
+    AppSettings.debugSet('monday');
   });
+  tearDown(() => AppSettings.debugSet(null));
 
   Record benchMove() => ProgramMove(
     id: 'm1',
@@ -389,6 +394,8 @@ void main() {
       climbing: climbing,
     );
     expect(find.text('MISSED THIS WEEK'), findsOneWidget);
+    // Monday weeks (this file's setting) expire at the end of Sunday.
+    expect(find.text('expires end of Sun'), findsOneWidget);
     expect(find.textContaining('Squat heavy  due Mon · 0 of 1 sets'), findsOneWidget);
     expect(find.textContaining('Norwegian  due Tue · not logged'), findsOneWidget);
     // Climb logged Tue; pull-ups logged Wed; bench moved to today.
@@ -741,5 +748,32 @@ void main() {
     final ghost = tester.widget<ExerciseRow>(rowOf('Bench heavy  moved → Fri'));
     expect(ghost.muted, isTrue);
     expect(ghost.status, ItemStatus.muted);
+  });
+
+  testWidgets('SATURDAY week: Move to… on next week\'s Sat item offers this '
+      'week\'s remaining days as "earlier — pull forward"', (tester) async {
+    if (!hasFitness) return;
+    AppSettings.debugSet('saturday');
+    final sat = DateTime(2026, 10, 3); // next week's first day (today Fri)
+    final moves = _FakeRepo();
+    await pump(tester, date: sat, moves: moves);
+    await tester.tap(menuOf('OHP heavy'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(PopupMenuItem<String>, 'Move to…'));
+    await tester.pumpAndSettle();
+    ListTile tile(String label) => tester.widget<ListTile>(
+        find.ancestor(of: find.text(label), matching: find.byType(ListTile)));
+    // Today (Fri 10/2, last day of Sat 9/26–Fri 10/2) is a pull-forward.
+    expect(tile('Fri 10/2 · today').enabled, isTrue);
+    expect(find.text('earlier — pull forward'), findsOneWidget);
+    // The item's own week runs Sat 10/3 – Fri 10/9.
+    expect(tile('Fri 10/9').enabled, isTrue);
+    expect(find.text('Sat 10/10'), findsNothing);
+    await tester.tap(find.text('Fri 10/2 · today'));
+    await tester.pumpAndSettle();
+    final m = ProgramMove.fromRecord(moves.created.single)!;
+    expect(m.from, sat);
+    expect(m.to, DateTime(2026, 10, 2));
+    expect(find.textContaining('moved → Fri'), findsOneWidget);
   });
 }

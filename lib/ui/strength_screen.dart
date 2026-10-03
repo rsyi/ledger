@@ -15,7 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../services/home_synthesis.dart' show fmtLb;
-import '../services/program_current.dart';
+import '../services/app_settings.dart' show effectiveWeekStartDay;
 import '../services/program_metrics.dart' show StrengthRow, WeightRow;
 import '../services/wilks.dart'
     show WilksLiftPart, weeklyWilksSeries, wilksWeekDecomposition;
@@ -50,7 +50,7 @@ class StrengthScreen extends StatelessWidget {
         WeeklyWilksCard(
           rows: data.strengthRows,
           daily: data.daily,
-          weekStartDay: weekStartDayOf(currentVersion(data.docs.program)),
+          weekStartDay: effectiveWeekStartDay(data.docs.program),
           today: now,
         ),
         if (data.forecast != null)

@@ -30,10 +30,11 @@
 ///     → trend is honestly null.
 ///   • Pain OUTRANKS numeric targets: any pain text in the week turns
 ///     the recovery verdict red regardless of the averages.
-///   • Review week is Mon→Sun (the default weekly schedule's shape) —
-///     the Sunday-night job reviews the week just finishing. This is
-///     deliberately NOT the Saturday accounting week the driver strip
-///     uses; the two answer different questions.
+///   • Review week = the CONFIGURED week (week_start.dart — synced
+///     setting > program.yaml `week_start` > Monday; Sat→Fri for the
+///     user since 2026-10-03, when the Mon→Sun review week was retired so
+///     every surface agrees): the job on the week's last day reviews the
+///     week just finishing. The functions here take any [weekStart].
 library;
 
 import 'muscle_volume.dart' show weeklyMuscleVolume;

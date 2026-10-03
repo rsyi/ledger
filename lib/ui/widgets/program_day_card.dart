@@ -18,7 +18,9 @@ import '../../services/program_metrics.dart'
     show StrengthRow, mainLiftByExercise;
 import '../../services/program_moves.dart';
 import '../../services/program_provider.dart' show ProgramProvider;
-import '../../services/program_week.dart' show dayOnly, mondayOf;
+import '../../services/app_settings.dart' show AppSettings;
+import '../../services/program_week.dart' show dayOnly;
+import '../../services/week_start.dart';
 import '../../services/routine_display.dart' show SessionLine;
 import '../../services/set_recommendation.dart';
 import '../../services/video_rpe.dart' show mediaIdFieldFor;
@@ -61,7 +63,7 @@ class ProgramDayCard extends StatefulWidget {
   final ViewSchema? calisthenicsView;
   final WarehouseConnector? calisthenicsRepo;
 
-  /// `program_moves` — relocations within the Mon–Sun week. Null → the
+  /// `program_moves` — relocations within the configured week (or pulled forward from next week). Null → the
   /// card shows the plain prescription (no Move to… / Undo).
   final ViewSchema? programMovesView;
   final WarehouseConnector? programMovesRepo;
@@ -121,9 +123,12 @@ class _DayData {
   /// applied) — the SAME [DayStatus] the coach's read + coach chat get.
   final DayStatus status;
 
-  /// The whole effective Mon–Sun week — feeds the Move to… sheet's
-  /// per-day load summary.
+  /// The whole effective week (configured start day) — feeds the Move
+  /// to… sheet's per-day load summary.
   final Map<DateTime, List<EffectiveItem>> week;
+
+  /// `DateTime.monday..sunday` the week starts on (resolved).
+  final int weekStartDay;
 
   /// Today's card only; null elsewhere.
   final MissedWork? missed;
@@ -144,6 +149,7 @@ class _DayData {
     this.priced = PricedWeek.empty,
     this.lines = const {},
     this.history = const [],
+    this.weekStartDay = DateTime.monday,
   });
 
   List<SessionLine> linesOf(EffectiveItem e) =>
@@ -153,17 +159,14 @@ class _DayData {
 String _itemKey(DateTime home, String name) =>
     '${dayOnly(home).toIso8601String()}|${name.trim().toLowerCase()}';
 
-/// Each item's priced lines for the effective [week], matched per HOME
-/// day over that day's own items (ghosts included, moved-in excluded) so
-/// a moved item keeps the load its home day priced it at.
+/// Each item's priced lines, matched per HOME day over that day's
+/// prescribed items ([prescribed] = the week's days + next-week home days
+/// of pulled-forward items) so a moved item keeps the load its home day
+/// priced it at.
 Map<String, List<SessionLine>> _matchWeek(
-    Map<DateTime, List<EffectiveItem>> week, PricedWeek priced) {
+    Map<DateTime, List<PrescribedItem>> prescribed, PricedWeek priced) {
   final out = <String, List<SessionLine>>{};
-  week.forEach((day, entries) {
-    final own = [
-      for (final e in entries)
-        if (e.movedFrom == null) e.item,
-    ];
+  prescribed.forEach((day, own) {
     final lines = priced.on(day);
     if (own.isEmpty || lines.isEmpty) return;
     final m = matchItemLines(own, lines);
@@ -270,6 +273,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       climbingRepo: widget.climbingRepo,
       calisthenicsView: widget.calisthenicsView,
       calisthenicsRepo: widget.calisthenicsRepo,
+      weekStartSetting: () => AppSettings.weekStartSetting.value,
     ).load(date, label: widget.label, withMissed: isToday);
     if (state == null) return null;
 
@@ -294,9 +298,12 @@ class ProgramDayCardState extends State<ProgramDayCard> {
           for (final r in state.strengthRows ?? const <Map<String, Object?>>[])
             ?strengthRowFromRecord(r),
         ];
-        priced = pricedWeek(program, state.docs.phase, mondayOf(date),
-            wm: wm, history: history, today: dayOnly(widget.now()));
-        lines = _matchWeek(state.week, priced);
+        priced = pricedWeek(program, state.docs.phase, state.weekStart,
+            wm: wm,
+            history: history,
+            today: dayOnly(widget.now()),
+            extraDays: state.prescribed.keys);
+        lines = _matchWeek(state.prescribed, priced);
       } catch (_) {/* honest: prose schemes */}
     }
 
@@ -313,7 +320,10 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       },
     );
     return _DayData(state.prescription, status, state.week, state.missed,
-        priced: priced, lines: lines, history: history);
+        priced: priced,
+        lines: lines,
+        history: history,
+        weekStartDay: state.weekStartDay);
   }
 
   /// Every clip attached to [date]'s strength rows (warm-ups included —
@@ -352,15 +362,28 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   bool get _canMove =>
       widget.programMovesView != null && widget.programMovesRepo != null;
 
-  /// Bottom sheet of the week's days (Mon–Sun of [anyDay]); the
-  /// [current] day and days before today are disabled (a missed item
-  /// moved into the past is immediately missed again) — except [home],
-  /// which stays pickable when the item lives elsewhere (= back home).
-  /// Returns the picked day or null.
+  /// Bottom sheet of the item's week's days (the CONFIGURED week of
+  /// [anyDay] — its home day) — plus, when that is NEXT week, this week's
+  /// remaining days ("earlier": pulling work forward, at most 7 days —
+  /// [isAllowedMove]). The [current] day and days before today are
+  /// disabled (a missed item moved into the past is immediately missed
+  /// again) — except [home], which stays pickable when the item lives
+  /// elsewhere (= back home). Returns the picked day or null.
   Future<DateTime?> _pickDay(BuildContext context, String itemName,
       DateTime anyDay, DateTime current, DateTime home, _DayData data) {
-    final mon = mondayOf(anyDay);
     final today = dayOnly(widget.now());
+    final ws = data.weekStartDay;
+    final homeWeek = weekDaysOf(anyDay, ws);
+    final thisWeekStart = weekStartOf(today, ws);
+    final earlier = [
+      if (homeWeek.first.isAfter(thisWeekStart))
+        for (final d in weekDaysOf(today, ws))
+          if (!d.isBefore(today) &&
+              !homeWeek.contains(d) &&
+              isAllowedMove(home, d, weekStartDay: ws))
+            d,
+    ];
+    final candidates = [...earlier, ...homeWeek];
     return showModalBottomSheet<DateTime>(
       context: context,
       showDragHandle: true,
@@ -377,9 +400,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                 child: Text('Move $itemName to…',
                     style: theme.textTheme.titleMedium),
               ),
-              for (var i = 0; i < 7; i++)
+              for (final d in candidates)
                 () {
-                  final d = DateTime(mon.year, mon.month, mon.day + i);
+                  final inView = data.week.containsKey(d);
                   final live = (data.week[d] ?? const <EffectiveItem>[])
                       .where((e) => !e.isGhost)
                       .length;
@@ -402,7 +425,11 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                               ? 'back home (program day)'
                               : past
                                   ? 'past'
-                                  : live == 0
+                                  : earlier.contains(d)
+                                      ? 'earlier — pull forward'
+                                      : !inView
+                                          ? ''
+                                          : live == 0
                               ? 'rest'
                               : '$live item${live == 1 ? '' : 's'}',
                       style: TextStyle(color: muted),
@@ -692,7 +719,13 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       minimumSize: const Size(0, 32),
     );
     return [
-      const SectionHeader(label: 'Missed this week'),
+      // Unplaced work expires at the end of the CONFIGURED week's last
+      // day (Fri for a Saturday start).
+      SectionHeader(
+        label: 'Missed this week',
+        count: 'expires end of '
+            '${weekdayShortName(weekEndDay(data.weekStartDay))}',
+      ),
       for (final m in missed.missed)
         ExerciseRow(
           name: m.item.name,

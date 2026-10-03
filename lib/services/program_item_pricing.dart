@@ -24,7 +24,8 @@ import 'week_planner.dart' show buildWeekPlannedEntries;
 import 'wm_tabs.dart';
 import 'working_max.dart' show LoadPolicy, loadPolicies, policyForDate;
 
-/// A Mon–Sun week of priced session lines (Plan-tab numbers).
+/// A week of priced session lines (Plan-tab numbers) — plus any
+/// pulled-in home days from the next week.
 class PricedWeek {
   /// Working lines per day (local midnight), warm-ups dropped.
   final Map<DateTime, List<SessionLine>> lines;
@@ -58,19 +59,23 @@ class PricedWeek {
   double? tmFor(SessionLine line) => maxes[mainLiftByExercise[line.exercise]];
 }
 
-/// Prices [monday]'s Mon–Sun week exactly as the Program screen does.
-/// [wm] null (tabs unreadable / no store) → the reference-e1rm fallback.
+/// Prices the seven days from [weekStart] (the configured week's first
+/// day — used as given, never snapped) exactly as the Program screen
+/// does, plus [extraDays] (next-week home days of pulled-forward moves
+/// — `ResolvedWeek.extraDays`). [wm] null (tabs unreadable / no store) →
+/// the reference-e1rm fallback.
 PricedWeek pricedWeek(
   Map<Object?, Object?> program,
   Map<Object?, Object?>? phase,
-  DateTime monday, {
+  DateTime weekStart, {
   WmSnapshot? wm,
   List<StrengthRow> history = const [],
   required DateTime today,
+  Iterable<DateTime> extraDays = const [],
 }) {
   final version = currentVersion(program);
   if (version == null) return PricedWeek.empty;
-  final mon = DateTime(monday.year, monday.month, monday.day - (monday.weekday - 1));
+  final mon = DateTime(weekStart.year, weekStart.month, weekStart.day);
   final maxes = wm == null
       ? const <String, double>{}
       : currentWorkingMaxesByLift(wm.workingMax);
@@ -89,22 +94,33 @@ PricedWeek pricedWeek(
   final caps = wm == null
       ? const <String, double>{}
       : activeCapsByLift(wm, policyOn);
-  final entries = buildWeekPlannedEntries(
-    program,
-    mon,
-    references: liftReferencesAsOf(history, today),
-    workingMaxes: maxes,
-    capRpeByLift: caps,
-    accessoryHistory: history,
-    snapToWeekStart: false,
-  );
+  List<Map<String, Object?>> price(DateTime start) => buildWeekPlannedEntries(
+        program,
+        start,
+        references: liftReferencesAsOf(history, today),
+        workingMaxes: maxes,
+        capRpeByLift: caps,
+        accessoryHistory: history,
+        snapToWeekStart: false,
+      );
   final lines = <DateTime, List<SessionLine>>{};
-  sessionLinesByDay(entries).forEach((d, ls) {
+  sessionLinesByDay(price(mon)).forEach((d, ls) {
     lines[DateTime(d.year, d.month, d.day)] = ls;
   });
+  final extra = {
+    for (final d in extraDays) DateTime(d.year, d.month, d.day),
+  }..removeAll(lines.keys);
+  for (final d in extra) {
+    sessionLinesByDay(price(d)).forEach((x, ls) {
+      final k = DateTime(x.year, x.month, x.day);
+      if (k == d) lines[k] = ls;
+    });
+  }
   final cut = <DateTime, CutWaveWeekSpec?>{};
-  for (var i = 0; i < 7; i++) {
-    final d = DateTime(mon.year, mon.month, mon.day + i);
+  for (final d in [
+    for (var i = 0; i < 7; i++) DateTime(mon.year, mon.month, mon.day + i),
+    ...extra,
+  ]) {
     final slice = programCurrent(program, phase, d);
     cut[d] = strengthWaveCutFor(version,
         blockN: slice?.block['number'] as int?, day: d);

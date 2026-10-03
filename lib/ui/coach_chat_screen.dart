@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../models/coach_proposal.dart';
 import '../models/planned_entry.dart';
 import '../models/view_schema.dart';
+import '../services/app_settings.dart' show effectiveWeekStartDay;
 import '../services/coach_brain.dart';
 import '../services/coach_proposal_store.dart';
 import '../services/coach_thread_const.dart';
@@ -640,7 +641,8 @@ class _CoachChatScreenState extends State<CoachChatScreen> {
       final now = DateTime.now();
       final sent = <String>{};
       for (final m in p.moves) {
-        final active = activeMoves(remaining, m.from);
+        final active = activeMoves(remaining, m.from,
+            weekStartDay: effectiveWeekStartDay(null));
         final key = ProgramMove(id: '', to: m.to, from: m.from, item: m.item)
             .key;
         final still = active[key];

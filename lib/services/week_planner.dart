@@ -44,11 +44,13 @@ import 'program_current.dart'
         weekStartDayOf;
 import 'program_metrics.dart'
     show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
-import 'effective_plan.dart' show effectivePlannedEntries;
-import 'program_moves.dart'
-    show ProgramMove, activeMoves, activeSkips;
+import 'program_moves.dart' show ProgramMove;
 import 'program_provider.dart';
-import 'program_week.dart' show dayOnly, prescribedWeek;
+import 'program_week.dart' show dayOnly;
+import 'resolved_week.dart';
+import 'effective_plan.dart' show effectivePricedWeek;
+import 'app_settings.dart' show effectiveWeekStartDay;
+import 'week_start.dart' show weekStartOf;
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 import 'wm_tabs.dart'
@@ -192,14 +194,15 @@ List<Map<String, Object?>> buildWeekPlannedEntries(
   Map<String, double> capRpeByLift = const {},
   List<StrengthRow> accessoryHistory = const [],
   bool snapToWeekStart = true,
+  int? weekStartDay,
 }) {
   final version = currentVersion(program);
   if (version == null) return const [];
 
-  // Accounting week window (v7 week_start — saturday runs Sat–Fri so
-  // the planner window matches the rollup/strip weeks). Normalised to
-  // the week's start day.
-  final wsDay = weekStartDayOf(version);
+  // Accounting week window (snap mode only): [weekStartDay] — the
+  // resolved week start (week_start.dart) — else the program's
+  // `week_start` default. Normalised to the week's start day.
+  final wsDay = weekStartDay ?? weekStartDayOf(version);
   final day0 = DateTime.utc(weekMonday.year, weekMonday.month, weekMonday.day);
   final weekStart = snapToWeekStart
       ? day0.subtract(Duration(days: (day0.weekday - wsDay) % 7))
@@ -593,7 +596,10 @@ class WeekPlanner {
   /// window, per-day signatures, warm-up rows stamped set_type warmup;
   /// v9: program_moves applied — moved work planned on its target day,
   /// moved-out + skipped work not planned, moves/skips fingerprinted).
-  static const planVersion = 'plan_v9';
+  /// v10 (2026-10-03): the CONFIGURED week (week_start.dart — Sat–Fri for
+  /// the user) instead of hard-coded Mon–Sun; moves may pull next week's
+  /// items forward (resolved_week.dart).
+  static const planVersion = 'plan_v10';
 
   /// Ledger meta key the runner writes the last swallowed error into.
   static const metaErrorKey = 'week_planner_error';
@@ -611,7 +617,7 @@ class WeekPlanner {
   /// drop out).
   ///
   /// Each day is priced exactly as the Program screen prices it:
-  /// [buildWeekPlannedEntries] over the day's own Mon–Sun week with
+  /// [buildWeekPlannedEntries] over the day's own [weekStartDay] week with
   /// `snapToWeekStart: false` (the accounting-week snap is what used to
   /// leave the displayed Saturday/Sunday unplanned). A day is rewritten
   /// only when its [planDaySignature] differs from [storedSignatures]:
@@ -621,9 +627,10 @@ class WeekPlanner {
   /// entries (any other templateName) and days outside the window are
   /// never touched.
   ///
-  /// Moves (plan_v9): [moves] = every `program_moves` row (moves AND
-  /// skips). Each week is relocated through [effectivePlannedEntries]
-  /// (the Program screen's exact transform — moved items keep their
+  /// Moves (plan_v9; pull-forward plan_v10): [moves] = every
+  /// `program_moves` row (moves AND skips). Each week is resolved by
+  /// [resolveProgramWeek] + [effectivePricedWeek] (the Program screen's
+  /// exact transform — moved items keep their
   /// home-day pricing and bring their warm-up ramps), and each day's
   /// signature folds in [dayMoveKeys]. [phase] feeds the prose
   /// prescription the moves key on (`prescribedWeek`).
@@ -640,6 +647,7 @@ class WeekPlanner {
     Map<String, double> capRpeByLift = const {},
     List<StrengthRow> accessoryHistory = const [],
     int horizon = horizonDays,
+    int weekStartDay = DateTime.monday,
   }) async {
     final fmt = DateFormat('yyyy-MM-dd');
     final day0 = DateTime.utc(today.year, today.month, today.day);
@@ -647,40 +655,36 @@ class WeekPlanner {
       for (var i = 0; i < horizon; i++) day0.add(Duration(days: i)),
     ];
 
-    // Price each Mon–Sun week touching the window once.
+    // Price each configured week touching the window once.
     final byDay = <String, List<Map<String, Object?>>>{
       for (final d in days) fmt.format(d): <Map<String, Object?>>[],
     };
-    final mondays = {
-      for (final d in days) d.subtract(Duration(days: d.weekday - 1)),
-    };
+    final starts = {for (final d in days) weekStartOf(d, weekStartDay)};
     final moveKeysByDay = <String, String>{};
     final warmupProtocol = currentVersion(program)?['warmup_protocol'];
-    for (final monday in mondays) {
-      var built = buildWeekPlannedEntries(
-        program,
-        monday,
-        references: references,
-        workingMaxes: workingMaxes,
-        capRpeByLift: capRpeByLift,
-        accessoryHistory: accessoryHistory,
-        snapToWeekStart: false,
+    for (final start in starts) {
+      final rw = resolveProgramWeek(
+        (program: program, phase: phase, strategy: null),
+        start,
+        moves,
+        weekStartDay: weekStartDay,
       );
-      final localMon = DateTime(monday.year, monday.month, monday.day);
-      final active = activeMoves(moves, localMon);
-      final skips = activeSkips(moves, localMon);
-      if (active.isNotEmpty || skips.isNotEmpty) {
-        built = effectivePlannedEntries(
-          built,
-          prescribedWeek(
-              (program: program, phase: phase, strategy: null), localMon),
-          moves: active,
-          skips: skips,
-          warmupProtocol: warmupProtocol,
-        );
-        for (var i = 0; i < 7; i++) {
-          final d = DateTime(localMon.year, localMon.month, localMon.day + i);
-          moveKeysByDay[fmt.format(d)] = dayMoveKeys(d, active, skips);
+      final built = effectivePricedWeek(
+        rw,
+        (s) => buildWeekPlannedEntries(
+          program,
+          s,
+          references: references,
+          workingMaxes: workingMaxes,
+          capRpeByLift: capRpeByLift,
+          accessoryHistory: accessoryHistory,
+          snapToWeekStart: false,
+        ),
+        warmupProtocol: warmupProtocol,
+      );
+      if (rw.moves.isNotEmpty || rw.skips.isNotEmpty) {
+        for (final d in rw.days) {
+          moveKeysByDay[fmt.format(d)] = dayMoveKeys(d, rw.moves, rw.skips);
         }
       }
       for (final e in built) {
@@ -749,13 +753,13 @@ class WeekPlanner {
       );
 
   /// Manual "Schedule this week" (Program screen): writes the whole
-  /// displayed [weekStart] Mon–Sun week's planned strength rows into
+  /// displayed [weekStart] week's planned strength rows into
   /// PlanStore, replacing any still-planned program rows already in that
   /// window (same replace semantics as [syncPlannedDays] but user-invoked,
   /// with NO today-forward cutoff — a user scheduling a week wants every
   /// day, including earlier ones). Returns the entries it added.
   ///
-  /// The week is priced for EXACTLY the displayed Mon–Sun days
+  /// The week is priced for EXACTLY the displayed seven days
   /// (`snapToWeekStart: false`), matching the routine screen's window.
   static Future<List<PlannedEntry>> scheduleWeek({
     required ViewSchema strengthView,
@@ -811,7 +815,8 @@ class WeekPlanner {
   }) async {
     final fmt = DateFormat('yyyy-MM-dd');
     final src = DateTime.utc(sourceDay.year, sourceDay.month, sourceDay.day);
-    // Price the source day in its own Mon–Sun window, then pick just it.
+    // Price the source day in its own ISO (Mon-anchored) window, then
+    // pick just it — every day resolves from itself, so any window works.
     final srcMonday = src.subtract(Duration(days: src.weekday - 1));
     final built = buildWeekPlannedEntries(
       program,
@@ -973,6 +978,8 @@ class WeekPlanner {
         workingMaxes: workingMaxes,
         capRpeByLift: capRpeByLift,
         accessoryHistory: history,
+        // THE week start (synced setting > program default > Monday).
+        weekStartDay: effectiveWeekStartDay(program),
       );
       await repo.metaSet(metaDaySignaturesKey, jsonEncode(signatures));
     } catch (e) {

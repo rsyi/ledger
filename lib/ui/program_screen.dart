@@ -36,10 +36,12 @@ import '../services/display_names.dart' show sentenceCase;
 import '../services/effective_plan.dart';
 import '../services/program_current.dart';
 import '../services/program_metrics.dart'
-    show StrengthRow, liftReferencesAsOf, mainLiftByExercise;
+    show StrengthRow, anchorMondayOf, liftReferencesAsOf, mainLiftByExercise;
 import '../services/program_moves.dart';
 import '../services/program_provider.dart';
-import '../services/program_week.dart' show prescribedWeek;
+import '../services/app_settings.dart'
+    show AppSettings, effectiveWeekStartDay;
+import '../services/resolved_week.dart';
 import '../services/routine_display.dart';
 import '../services/sheets_repository.dart' show Record;
 import '../services/warehouse_connector.dart';
@@ -61,6 +63,8 @@ import 'widgets/pinned_tooltip_line_chart.dart';
 /// [strengthRepo] (references + accessory double-progression). Left/
 /// right chevrons navigate weeks; the default week follows
 /// [defaultWeekStart] (next week when opened on the week's last day).
+/// Weeks are the CONFIGURED week (week_start.dart: synced setting >
+/// program.yaml `week_start` > Monday) — Sat–Fri for the user.
 class ProgramScreen extends StatefulWidget {
   final ProgramProvider provider;
 
@@ -113,7 +117,9 @@ class _RoutineData {
 
 class _ProgramScreenState extends State<ProgramScreen> {
   late final DateTime _today;
-  late DateTime _weekStart; // Monday of the displayed week
+  // Weeks paged away from the default week (the displayed week start is
+  // resolved per build: the week start needs the loaded program default).
+  int _weekOffset = 0;
   late Future<_RoutineData?> _load;
   bool _wmBusy = false;
 
@@ -121,8 +127,25 @@ class _ProgramScreenState extends State<ProgramScreen> {
   void initState() {
     super.initState();
     _today = widget.today ?? DateTime.now();
-    _weekStart = defaultWeekStart(_today);
     _load = _fetch();
+    AppSettings.weekStartSetting.addListener(_onWeekStartChanged);
+  }
+
+  @override
+  void dispose() {
+    AppSettings.weekStartSetting.removeListener(_onWeekStartChanged);
+    super.dispose();
+  }
+
+  void _onWeekStartChanged() {
+    if (mounted) setState(() => _weekOffset = 0);
+  }
+
+  /// The displayed week's first day (UTC midnight, buildWeekPlan's key).
+  DateTime _weekStartFor(IntentDocs docs) {
+    final start = defaultWeekStart(_today,
+        weekStartDay: effectiveWeekStartDay(docs.program));
+    return start.add(Duration(days: 7 * _weekOffset));
   }
 
   Future<_RoutineData?> _fetch() async {
@@ -250,16 +273,12 @@ class _ProgramScreenState extends State<ProgramScreen> {
           IconButton(
             icon: const Icon(Icons.chevron_left),
             tooltip: 'Previous week',
-            onPressed: () => setState(() {
-              _weekStart = _weekStart.subtract(const Duration(days: 7));
-            }),
+            onPressed: () => setState(() => _weekOffset--),
           ),
           IconButton(
             icon: const Icon(Icons.chevron_right),
             tooltip: 'Next week',
-            onPressed: () => setState(() {
-              _weekStart = _weekStart.add(const Duration(days: 7));
-            }),
+            onPressed: () => setState(() => _weekOffset++),
           ),
         ],
       ),
@@ -289,7 +308,7 @@ class _ProgramScreenState extends State<ProgramScreen> {
               onRefresh: _refresh,
               child: _RoutineView(
                 data: data,
-                weekStart: _weekStart,
+                weekStart: _weekStartFor(data.docs),
                 today: _today,
                 hasWmStore: widget.wmStore != null,
                 wmBusy: _wmBusy,
@@ -364,10 +383,18 @@ class _RoutineView extends StatelessWidget {
     final program = data.docs.program!;
     final phase = data.docs.phase;
     final version = currentVersion(program);
-    final week = buildWeekPlan(program, phase, weekStart);
+    final wsDay = effectiveWeekStartDay(program);
+    final week = buildWeekPlan(program, phase, weekStart, weekStartDay: wsDay);
 
+    // The header's block/wave status reads the program STRUCTURE week
+    // the displayed week mostly covers: its anchor Monday (a Sat–Fri
+    // week's Mon–Fri) — the cut wave stays calendar(Monday)-anchored.
+    final anchor = anchorMondayOf(weekStart);
     ProgramSlice? repSlice;
-    for (final d in week) {
+    for (final d in [
+      ...week.where((d) => d.date == DateTime.utc(anchor.year, anchor.month, anchor.day)),
+      ...week,
+    ]) {
       if (d.slice != null) {
         repSlice = d.slice;
         break;
@@ -399,37 +426,32 @@ class _RoutineView extends StatelessWidget {
         : activeCapsByLift(wm, policyOn);
     final references = liftReferencesAsOf(data.history, today);
 
-    // Plan entries for EXACTLY the displayed Mon–Sun days. The default
-    // (snapped) call would price the Sat-start ACCOUNTING window
-    // (Sat–Fri under program.yaml v7 `week_start: saturday`), which
-    // excludes the displayed Saturday — the 2026-09-28 "Saturday shows
-    // as Rest" regression.
-    var entries = buildWeekPlannedEntries(
-      program,
-      week.first.date,
-      references: references,
-      workingMaxes: maxes,
-      capRpeByLift: caps,
-      accessoryHistory: data.history,
-      snapToWeekStart: false,
+    // Plan entries for EXACTLY the displayed days (never the snapped
+    // window — the 2026-09-28 "Saturday shows as Rest" regression), then
+    // program_moves: the EFFECTIVE week (same resolution + transform the
+    // planner plans from; moved items keep their home-day pricing, items
+    // pulled forward from next week land here).
+    final localStart =
+        DateTime(weekStart.year, weekStart.month, weekStart.day);
+    final rw = resolveProgramWeek(data.docs, localStart, data.moves,
+        weekStartDay: wsDay);
+    final entries = effectivePricedWeek(
+      rw,
+      (s) => buildWeekPlannedEntries(
+        program,
+        s,
+        references: references,
+        workingMaxes: maxes,
+        capRpeByLift: caps,
+        accessoryHistory: data.history,
+        snapToWeekStart: false,
+      ),
+      warmupProtocol: version?['warmup_protocol'],
     );
-    // program_moves: the EFFECTIVE week (same transform the planner
-    // plans from) — moved items keep their home-day pricing.
-    final localMon = DateTime(weekStart.year, weekStart.month, weekStart.day);
-    final activeMv = activeMoves(data.moves, localMon);
-    final skips = activeSkips(data.moves, localMon);
-    var effWeek = const <DateTime, List<EffectiveItem>>{};
-    if (activeMv.isNotEmpty || skips.isNotEmpty) {
-      final prescribed = prescribedWeek(data.docs, localMon);
-      entries = effectivePlannedEntries(
-        entries,
-        prescribed,
-        moves: activeMv,
-        skips: skips,
-        warmupProtocol: version?['warmup_protocol'],
-      );
-      effWeek = effectiveWeek(prescribed, activeMv);
-    }
+    final skips = rw.skips;
+    final effWeek = rw.moves.isEmpty && skips.isEmpty
+        ? const <DateTime, List<EffectiveItem>>{}
+        : rw.week;
     final pricedMovedIn = <String>{
       for (final e in entries)
         if (e['moved_item'] case final String item)
@@ -541,7 +563,10 @@ class _HeaderCard extends StatelessWidget {
     if (s == null || version == null) return null;
     final blockN = s.block['number'] as int?;
     return weekStatusLine(
-      cut: strengthWaveCutFor(version, blockN: blockN, day: weekStart),
+      // Wave = training calendar (Monday-anchored): the week's anchor
+      // Monday, not its (Saturday) start.
+      cut: strengthWaveCutFor(version,
+          blockN: blockN, day: anchorMondayOf(weekStart)),
       waveWeek: strengthWaveWeek(version,
           blockN: blockN, weekInBlock: s.weekInBlock),
       waveReps: strengthWaveTopReps(version,

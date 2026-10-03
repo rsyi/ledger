@@ -10,7 +10,8 @@ import 'missed_work.dart';
 import 'program_current.dart';
 import 'program_moves.dart';
 import 'program_provider.dart';
-import 'program_week.dart' show mondayOf;
+import 'app_settings.dart' show AppSettings;
+import 'week_start.dart';
 import 'program_slice_text.dart';
 import 'video_rpe.dart';
 import 'sheets_repository.dart' show Record;
@@ -182,14 +183,26 @@ class CoachBrain {
     MovesProposalSink? onMovesProposal,
   }) async {
     final system = await buildSystemPrompt(now());
+    var movesWeekStart = DateTime.monday;
     final tools = CoachToolset(
       views: views,
       onProposal: onProposal,
       programDay: _programDayResolver,
       onMovesProposal: onMovesProposal,
       now: now,
-      // propose_moves checks each item exists on its from_date.
-      movesWeek: () async => (await weekStateLoader().load(now()))?.week,
+      // propose_moves checks each item exists on its from_date — this
+      // week AND next (a pulled-forward item's home day).
+      movesWeek: () async {
+        final loader = weekStateLoader();
+        final s = await loader.load(now());
+        if (s == null) return null;
+        movesWeekStart = s.weekStartDay;
+        final ws = s.weekStart;
+        final next =
+            await loader.load(DateTime(ws.year, ws.month, ws.day + 7));
+        return {...s.week, ...?next?.week};
+      },
+      weekStartDay: () => movesWeekStart,
     ).build();
     final runner = ChatRunner(model);
     final texts = <String>[];
@@ -445,7 +458,9 @@ in a desktop Claude session — you cannot edit files from here.''';
   /// Placement rules for carried work (spec 2026-10-02 §6) — the same
   /// wording as coach/PROMPT.md's nightly "Missed work" section.
   static const placementRules =
-      'Within this week only · no lifting on Tuesday (program says "NO '
+      'Within this week only (earlier days may PULL an item forward from '
+      'next week, at most 7 days earlier; nothing is pushed past the '
+      'week end) · no lifting on Tuesday (program says "NO '
       'lifting today, ever") · squat and deadlift never on the same day · '
       'at most one carried MAIN lift per day · mains before accessories; '
       "if it can't all fit, accessories expire first · never on a day with "
@@ -463,17 +478,22 @@ in a desktop Claude session — you cannot edit files from here.''';
     required Map<DateTime, List<EffectiveItem>> week,
     required DateTime today,
     Map<String, ProgramMove> skips = const {},
+    int weekStartDay = DateTime.monday,
   }) {
     const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     String label(DateTime d) => '${wd[d.weekday - 1]} ${d.month}/${d.day}';
     final t = DateTime(today.year, today.month, today.day);
-    final mon = mondayOf(t);
-    final sun = DateTime(mon.year, mon.month, mon.day + 6);
+    // The CONFIGURED week (week_start.dart) — Sat–Fri for the user.
+    final mon = weekStartOf(t, weekStartDay);
+    final sun = weekEndOf(t, weekStartDay);
+    final span = '${weekdayShortName(weekStartDay)}–'
+        '${weekdayShortName(weekEndDay(weekStartDay))}';
     final b = StringBuffer()
       ..writeln('## This week: moves + missed work')
       ..writeln()
-      ..writeln('Week ${label(mon)} – ${label(sun)} (Mon–Sun). Unplaced '
-          'work expires at the end of Sunday; next week starts clean.')
+      ..writeln('Week ${label(mon)} – ${label(sun)} ($span). Unplaced '
+          'work expires at the end of ${weekdayName(weekEndDay(weekStartDay))}'
+          '; next week starts clean.')
       ..writeln()
       ..writeln('MOVES THIS WEEK:');
     if (moves.isEmpty) {
@@ -574,6 +594,7 @@ in a desktop Claude session — you cannot edit files from here.''';
           missed: state.missed,
           week: state.week,
           today: today,
+          weekStartDay: state.weekStartDay,
         ),
       );
     } catch (_) {
@@ -617,6 +638,7 @@ in a desktop Claude session — you cannot edit files from here.''';
       climbingRepo: repoFor(climbing),
       calisthenicsView: calisthenics,
       calisthenicsRepo: repoFor(calisthenics),
+      weekStartSetting: () => AppSettings.weekStartSetting.value,
     );
   }
 

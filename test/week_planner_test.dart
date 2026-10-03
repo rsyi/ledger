@@ -1107,6 +1107,48 @@ void main() {
         expect(wed.map((e) => e.localId), [coachWed.localId]);
       });
 
+      test('SATURDAY week start + the LIVE rows: next Saturday\'s OHP, row '
+          'and face pulls are PULLED FORWARD onto Tue 10/6 (home-day '
+          'pricing) and gone from Sat 10/10; Mon keeps no OHP', () async {
+        final view = _strengthView();
+        await WeekPlanner.syncPlannedDays(
+          strengthView: view,
+          program: program,
+          phase: phase,
+          moves: liveTravelMoves(),
+          today: DateTime(2026, 10, 3), // Sat — window Sat 3 .. Fri 9
+          workingMaxes: wms,
+          weekStartDay: DateTime.saturday,
+        );
+        final tue = await planned(view, 6);
+        expect(tue, containsAll([
+          'Barbell Deadlift 275x4',
+          'Overhead Press 115x4',
+          'Overhead Press 100x6',
+          'Seated Cable Row -x8',
+          'Cable Face Pull -x12',
+        ]));
+        final mon = await planned(view, 5);
+        expect(mon.where((r) => r.startsWith('Overhead Press')), isEmpty);
+        expect(mon, contains('Flat Barbell Bench Press 200x4'));
+        for (final d in [7, 8, 9]) {
+          expect(await planned(view, d), isEmpty, reason: 'Oct $d');
+        }
+
+        // A later window spanning both weeks (Thu 8 .. Wed 14): Sat 10/10
+        // plans nothing — its work was pulled forward or skipped.
+        await WeekPlanner.syncPlannedDays(
+          strengthView: view,
+          program: program,
+          phase: phase,
+          moves: liveTravelMoves(),
+          today: DateTime(2026, 10, 8),
+          workingMaxes: wms,
+          weekStartDay: DateTime.saturday,
+        );
+        expect(await planned(view, 10), isEmpty);
+      });
+
       test('a NEW move rewrites only the days it touches', () async {
         final view = _strengthView();
         final base = travelWeekMoves();

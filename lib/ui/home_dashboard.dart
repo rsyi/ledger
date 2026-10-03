@@ -139,6 +139,7 @@ import '../services/domain_metrics.dart'
 import '../services/bodyweight_cache.dart';
 import '../services/home_synthesis.dart';
 import '../services/phase_eigenvectors.dart';
+import '../services/app_settings.dart' show effectiveWeekStartDay;
 import '../services/program_current.dart';
 import '../services/program_metrics.dart'
     show
@@ -147,7 +148,6 @@ import '../services/program_metrics.dart'
         WeightRow,
         anchorMondayOf,
         gradeSets,
-        mondayOf,
         weekStartOf;
 import '../services/program_observed.dart';
 import '../services/program_provider.dart';
@@ -478,7 +478,7 @@ class HomeDashboardState extends State<HomeDashboard> {
   late Future<List<DriverEval>?> _drivers;
 
   /// Recomp one-screen status (tracking spec 2026-09-27): the weekly
-  /// review computed live from local rows for the current Mon-Sun week.
+  /// review computed live from local rows for the current configured week.
   /// Non-null ONLY when the effective phase is recomp — every other
   /// phase keeps the driver checklist strip untouched.
   late Future<_RecompData?> _recomp;
@@ -645,10 +645,10 @@ class HomeDashboardState extends State<HomeDashboard> {
     return climbDaysUnion(kaya, whoopDays).toList();
   }
 
-  /// Accounting-week start day (program.yaml v7 `week_start` —
-  /// saturday since 2026-09-22). Monday when docs are missing.
+  /// THE week start (week_start.dart: synced setting > program.yaml
+  /// `week_start` > Monday).
   Future<int> _weekStartDay() async =>
-      weekStartDayOf(currentVersion((await _docs)?.program));
+      effectiveWeekStartDay((await _docs)?.program);
 
   /// LIVE current-week counts (sets / near-max / bench days / climb
   /// sessions) from local rows — §2.5 semantics over full history so
@@ -869,8 +869,8 @@ class HomeDashboardState extends State<HomeDashboard> {
   }
 
   /// The recomp weekly review, live from local rows, for the CURRENT
-  /// Mon-Sun week (the review's own week shape — recomp_review.dart
-  /// documents why it differs from the Saturday accounting week). Null
+  /// configured week (week_start.dart — the same week every surface
+  /// uses). Null
   /// unless the effective phase is recomp; every load degrades to
   /// empty → honest "no data" rows, never fabricated zeros.
   Future<_RecompData?> _computeRecomp() async {
@@ -1042,7 +1042,7 @@ class HomeDashboardState extends State<HomeDashboard> {
 
     final slice = _slice(docs);
     final review = buildWeeklyReview(
-      weekStart: mondayOf(_today),
+      weekStart: weekStartOf(_today, effectiveWeekStartDay(docs?.program)),
       inputs: RecompInputs(
         meals: meals,
         strengthSets: strength,
@@ -1126,7 +1126,7 @@ class HomeDashboardState extends State<HomeDashboard> {
     // controller/planner is untouched and stays plain Epley.
     final docs = await _docs;
     final program = docs?.program;
-    final wsDay = weekStartDayOf(currentVersion(program));
+    final wsDay = effectiveWeekStartDay(program);
     String? weekTypeOf(DateTime weekStart) => program == null
         ? null
         : programCurrent(

@@ -19,6 +19,9 @@ import 'package:airledger/services/whoop_activity.dart';
 
 final today = DateTime(2026, 9, 29);
 const satStart = DateTime.saturday;
+// The program-progress + muscle groups below use a Mon–Sun fixture week:
+// Monday-start weeks stay a valid configuration (week_start.dart).
+const monStart = DateTime.monday;
 final inWeek = DateTime(2026, 9, 28); // Mon, this accounting week
 final lastWeek = DateTime(2026, 9, 24); // Thu, previous week
 
@@ -648,6 +651,70 @@ phases:
   });
 
   // -------------------------------------------------------------------------
+  // ONE window (2026-10-03 week-start setting): with a Saturday start the
+  // program sets, muscle stimulus and climbing all count Sat..Fri.
+  // -------------------------------------------------------------------------
+  group('configured Saturday week — every goal agrees on the window', () {
+    // Week Sat 10/3 – Fri 10/9; today Tue 10/6.
+    DateTime d(int i) => DateTime(2026, 10, 3 + i);
+    final tue = d(3);
+    PrescribedItem pi(String name, int sets) =>
+        PrescribedItem(name: name, scheme: '', period: 'AM', targetSets: sets);
+    final week = effectiveWeek({
+      d(0): [pi('OHP heavy', 1)], // Sat
+      d(1): const [], // Sun
+      d(2): [pi('Squat heavy', 1)], // Mon
+      d(3): const [],
+      d(4): [pi('Bench heavy', 1)],
+      d(5): const [],
+      d(6): [pi('Deadlift heavy', 1)],
+    }, const {});
+    const map = MuscleMap(
+      exercises: {'Overhead Press': {'shoulders': 1.0}},
+      climbingSession: {'back': 3.0},
+    );
+    final rows = [
+      (date: DateTime(2026, 10, 2), exercise: 'Overhead Press'), // Fri before
+      (date: d(0), exercise: 'Overhead Press'), // Sat — this week
+    ];
+    final goals = evaluateGoals(
+      configs: const [
+        GoalConfig(id: 'hard_sets', lifts: ['press', 'squat']),
+        GoalConfig(id: 'muscle_stimulus'),
+        GoalConfig(id: 'climbing', target: 2),
+      ],
+      inputs: GoalInputs(
+        programWeek: week,
+        weekWorkingSets: rows,
+        muscleMap: map,
+        muscleGroups: const ['shoulders', 'back'],
+        climbingDates: [DateTime(2026, 10, 2), d(0), d(1)],
+      ),
+      today: tue,
+      weekStartDay: satStart,
+    );
+    GoalEval byId(String id) => goals.firstWhere((g) => g.config.id == id);
+
+    test('Saturday\'s work counts for the week it STARTS (program sets)', () {
+      final press = byId('hard_sets').ticks.firstWhere((t) => t.lift == 'press');
+      expect(press.done, 1);
+      expect(press.complete, isTrue);
+      expect(byId('hard_sets').detail, contains('Sat–Fri program week'));
+    });
+
+    test('muscle stimulus + climbing count the same Sat..Fri window', () {
+      final shoulders =
+          byId('muscle_stimulus').muscles.firstWhere((m) => m.group == 'shoulders');
+      expect(shoulders.sets, 1); // Fri 10/2 is LAST week
+      final back =
+          byId('muscle_stimulus').muscles.firstWhere((m) => m.group == 'back');
+      expect(back.sets, 2 * 3.0); // Sat + Sun climbs; Fri 10/2 excluded
+      expect(byId('climbing').value, startsWith('2/2'));
+      expect(byId('muscle_stimulus').detail, contains('Sat–Fri'));
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Program progress (hard_sets with a program week) — Mon–Sun week.
   // Week of Mon 2026-09-28; the cut routine's main-lift slots.
   // -------------------------------------------------------------------------
@@ -701,7 +768,7 @@ phases:
             graded: graded,
           ),
           today: today,
-          weekStartDay: satStart,
+          weekStartDay: monStart,
         ).single;
     GoalLiftTick tick(GoalEval e, String lift) =>
         e.ticks.firstWhere((t) => t.lift == lift);
@@ -821,7 +888,7 @@ phases:
         configs: [cfg],
         inputs: GoalInputs(graded: [hard('squat', inWeek)]),
         today: today,
-        weekStartDay: satStart,
+        weekStartDay: monStart,
       ).single;
       expect(tick(e, 'squat').target, 10);
       expect(tick(e, 'squat').done, 1);
@@ -860,7 +927,7 @@ phases:
             climbingDates: climbs,
           ),
           today: today,
-          weekStartDay: satStart,
+          weekStartDay: monStart,
         ).single;
 
     test('parses band + muscle_groups', () {
@@ -960,7 +1027,7 @@ phases:
           climbingDates: [d(2)],
         ),
         today: d(6),
-        weekStartDay: satStart,
+        weekStartDay: monStart,
       ).single;
       // Banded rows only decide status: hams 14 (over), lats 9.5.
       expect(

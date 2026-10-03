@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/model_config.dart';
 import '../models/view_schema.dart';
 import 'analytics_engine.dart';
+import 'app_settings.dart' show AppSettings;
 import 'day_status.dart';
 import 'day_synthesis.dart';
 import 'llm_client.dart';
@@ -305,6 +306,7 @@ class DaySynthesisService {
             calisthenicsView: calisthenicsView,
             calisthenicsRepo: calisthenicsRepo,
             now: now,
+            weekStartSetting: () => AppSettings.weekStartSetting.value,
           ).load(dayStart, withMissed: true);
           if (state != null) {
             status = state.dayStatus(

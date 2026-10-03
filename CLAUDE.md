@@ -754,6 +754,14 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     coach/{goals,routine,metrics,PROMPT}.md` — goals: CUT active;
     routine.md is a DEPRECATED readable fallback (program.yaml `routine:`
     is authoritative; templates retired 2026-09-30).
+- **Day status = one source of truth (2026-10-02)**: lib/services/day_status.dart
+  computes per-item DONE/PENDING/MOVED/SKIPPED (sets via allocateDay, Whoop
+  + Kaya climb credit, logged 4x4, moves, skips) via WeekState.dayStatus().
+  The Today card, the coach's read (day synthesis) and CoachBrain all use
+  it — never re-derive program completion in a prompt. The read's prompt
+  is a "PROGRAM STATUS (authoritative)" block; only PENDING items may be
+  nudged. Cache v6 keyed by a fingerprint (status block + macros bucket +
+  recovery + daypart), re-checked on open, log events and every sync.
 - **UI redesign (2026-10-02, spec docs/superpowers/specs/2026-10-02-ui-
   redesign-design.md)**: ALL new UI uses `lib/ui/design/` (design.dart:
   tokens AppText title/row/meta/section, AppSpace, AppRadius, ItemStatus +

@@ -8,6 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:airledger/models/model_config.dart';
 import 'package:airledger/services/day_synthesis_service.dart';
 import 'package:airledger/services/llm_client.dart';
+import 'package:airledger/models/view_schema.dart';
+import 'package:airledger/services/warehouse_connector.dart';
 
 ModelConfig _anthropic() => ModelConfig(
       name: 'sonnet',
@@ -41,6 +43,26 @@ DaySynthesisService _svc(LlmClient? llm, {String? model = 'sonnet'}) =>
       provider: null,
       now: () => DateTime(2026, 9, 30, 15),
     );
+
+final _mealsView = ViewSchema(
+  name: 'meals',
+  datasource: 'gsheets',
+  table: 'meals',
+  entities: const [],
+  measures: const [],
+  dimensions: const [],
+);
+
+class _Meals implements WarehouseConnector {
+  final List<Map<String, Object?>> rows;
+  _Meals(this.rows);
+  @override
+  Future<List<Map<String, Object?>>> list(ViewSchema view,
+          {DateTime? onDate}) async =>
+      [...rows];
+  @override
+  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
+}
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -122,6 +144,69 @@ void main() {
     final m = jsonDecode(prefs.getString('day_synthesis')!)
         as Map<String, Object?>;
     expect(m['v'], isNotNull);
+  });
+
+  test('a pre-status (v5) cache is ignored — its read may nudge a DONE item',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'day_synthesis': jsonEncode({
+        'v': 5,
+        'day': '2026-09-30',
+        'result': {
+          'text': 'Make sure that PM light climbing session happens.',
+          'generated_at': '2026-09-30T15:00:00.000',
+          'lifts_hit': 4,
+          'lifts_planned': 4,
+          'climb_to_come': false,
+        },
+      }),
+    });
+    final llm = LlmClient([_anthropic()], httpClient: _reply('Fresh.'));
+    expect(await _svc(llm).cached(), isNull);
+  });
+
+  test('refreshIfStale: same context → no LLM call; a changed context '
+      '(new meal) → regenerates', () async {
+    var calls = 0;
+    final llm = LlmClient([_anthropic()],
+        httpClient: MockClient((_) async {
+          calls++;
+          return http.Response(
+              jsonEncode({
+                'content': [
+                  {'type': 'text', 'text': 'Read $calls.'},
+                ],
+              }),
+              200);
+        }));
+    final meals = _Meals([]);
+    final svc = DaySynthesisService(
+      llm: llm,
+      modelName: 'sonnet',
+      mealsView: _mealsView,
+      mealsRepo: meals,
+      strengthView: null,
+      strengthRepo: null,
+      cardioView: null,
+      cardioRepo: null,
+      climbingView: null,
+      climbingRepo: null,
+      provider: null,
+      now: () => DateTime(2026, 9, 30, 15),
+    );
+    final first = await svc.refreshIfStale();
+    expect(first?.text, 'Read 1.');
+    expect(first!.fingerprint, isNotEmpty);
+    expect(await svc.refreshIfStale(), isNull); // fresh — no call
+    expect(calls, 1);
+    meals.rows.add({
+      'eaten_at': '2026-09-30T12:00:00',
+      'protein_g': 50,
+      'calories': 600,
+    });
+    final second = await svc.refreshIfStale();
+    expect(second?.text, 'Read 2.');
+    expect(calls, 2);
   });
 
   test('LLM failure returns null (keeps the previous synthesis)', () async {

@@ -7,6 +7,7 @@ import '../../models/view_schema.dart';
 import '../../services/accessory_progression.dart';
 import '../../services/day_achievement.dart';
 import '../../services/day_prescription.dart';
+import '../../services/day_status.dart';
 import '../../services/display_names.dart' show exerciseLabel;
 import '../../services/home_synthesis.dart' show strengthRowFromRecord;
 import '../../services/log_event_bus.dart';
@@ -24,7 +25,6 @@ import '../../services/video_rpe.dart' show mediaIdFieldFor;
 import '../../services/sync_scheduler.dart';
 import '../../services/warehouse_connector.dart';
 import '../../services/week_state_loader.dart';
-import '../../services/whoop_activity.dart';
 import '../../services/wm_tabs.dart' show WmSnapshot;
 import '../design/design.dart';
 import 'video_preview.dart';
@@ -116,9 +116,10 @@ class ProgramDayCard extends StatefulWidget {
 class _DayData {
   final DayPrescription prescription;
 
-  /// The card day's effective items (ghosts of moved-out items included,
-  /// moved-in items appended), done-marked + Whoop-credited.
-  final List<EffectiveItem> items;
+  /// The card day's per-item status (ghosts of moved-out items included,
+  /// moved-in items appended; done-marked, session-credited, skips
+  /// applied) — the SAME [DayStatus] the coach's read + coach chat get.
+  final DayStatus status;
 
   /// The whole effective Mon–Sun week — feeds the Move to… sheet's
   /// per-day load summary.
@@ -132,45 +133,21 @@ class _DayData {
   final PricedWeek priced;
   final Map<String, List<SessionLine>> lines;
 
-  /// The week's skips ([skipKey] → row).
-  final Map<String, ProgramMove> skips;
-
   /// Strength history (accessory suggestions in the info sheet).
   final List<StrengthRow> history;
 
-  /// Per live item (identity): the working sets shown as its achievement
-  /// and the clips of its sets ([achieveDay]).
-  final Map<EffectiveItem, (List<AchievedSet>, List<DayClip>)> achieved;
-
-  /// Logged work that matched no item ("Also logged").
-  final List<ExtraWork> extra;
-
   const _DayData(
     this.prescription,
-    this.items,
+    this.status,
     this.week,
     this.missed, {
     this.priced = PricedWeek.empty,
     this.lines = const {},
-    this.skips = const {},
     this.history = const [],
-    this.achieved = const {},
-    this.extra = const [],
   });
 
   List<SessionLine> linesOf(EffectiveItem e) =>
       lines[_itemKey(e.home, e.item.name)] ?? const [];
-
-  /// The skip row when [e] is skipped on [day] (ghosts never are).
-  ProgramMove? skipOf(EffectiveItem e, DateTime day) =>
-      e.isGhost ? null : skips[skipKey(day, e.item.name)];
-
-  /// Items that live on the card's day and aren't skipped — the "k / N
-  /// done" denominator.
-  List<EffectiveItem> liveOn(DateTime day) => [
-        for (final e in items)
-          if (!e.isGhost && skipOf(e, day) == null) e,
-      ];
 }
 
 String _itemKey(DateTime home, String name) =>
@@ -211,6 +188,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   /// One delayed retry when the training-max read came back empty.
   bool _wmRetried = false;
   StreamSubscription<LogEvent>? _logSub;
+  SyncScheduler? _sched;
 
   /// Strength rows from the last [_load] — reused by the info sheet so a
   /// tap doesn't re-list the whole table (thousands of rows) before the
@@ -229,6 +207,10 @@ class ProgramDayCardState extends State<ProgramDayCard> {
     if (widget.strengthView != null) {
       _logSub = LogEventBus.instance.stream.listen((_) => reload());
     }
+    // Integration pulls (a Whoop climb, a Kaya import) ingest without a
+    // LogEvent — a finished sync reloads the ticks too.
+    _sched = SyncScheduler.instance;
+    _sched?.lastSync.addListener(reload);
   }
 
   @override
@@ -243,6 +225,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   @override
   void dispose() {
     _logSub?.cancel();
+    _sched?.lastSync.removeListener(reload);
     super.dispose();
   }
 
@@ -289,7 +272,6 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       calisthenicsRepo: widget.calisthenicsRepo,
     ).load(date, label: widget.label, withMissed: isToday);
     if (state == null) return null;
-    var entries = state.day;
 
     // Plan-tab pricing (training max / wave / %TM / double progression).
     final wm = await wmFuture;
@@ -318,88 +300,20 @@ class ProgramDayCardState extends State<ProgramDayCard> {
       } catch (_) {/* honest: prose schemes */}
     }
 
-    // What each live item ACHIEVED (+ its clips) and what was logged
-    // outside the program — one exclusive allocation (each working set
-    // credits one item), the same one the missed-work detector runs.
-    final achieved = <EffectiveItem, (List<AchievedSet>, List<DayClip>)>{};
-    var extra = const <ExtraWork>[];
-    if (widget.strengthView != null && widget.strengthRepo != null) {
-      if (state.strengthRows != null) _strengthRows = state.strengthRows;
-      final names = state.loggedOnDate;
-      final recs = state.loggedRecordsOnDate;
-      final logged = [
-        for (var j = 0; j < names.length; j++)
-          AchievedSet.fromRecord(names[j], j < recs.length ? recs[j] : null),
-      ];
-      final clips = _dayClips(state.strengthRows, date);
-      final live = [for (final e in entries) if (!e.isGhost) e];
-      final r = achieveDay(
-        items: [for (final e in live) e.item],
-        logged: logged,
-        clips: clips,
-        isTop: [
-          for (final e in live)
-            () {
-              final l = lines[_itemKey(e.home, e.item.name)] ?? const [];
-              return l.isNotEmpty && l.every((x) => x.top);
-            }(),
-        ],
-      );
-      extra = r.extra;
-      var i = 0;
-      entries = [
-        for (final e in entries)
-          e.isGhost
-              ? e
-              : () {
-                  final k = i++;
-                  final marked = EffectiveItem(
-                    item: r.items[k],
-                    home: e.home,
-                    movedFrom: e.movedFrom,
-                    movedTo: e.movedTo,
-                    move: e.move,
-                  );
-                  achieved[marked] = (r.sets[k], r.clips[k]);
-                  return marked;
-                }(),
-      ];
-    }
-    final day = [
-      for (final a in state.whoop)
-        if (_sameDay(a.date, date)) a,
-    ];
-    if (day.isNotEmpty) {
-      final live = [for (final e in entries) if (!e.isGhost) e];
-      if (live.isNotEmpty) {
-        final credited = creditClimbItems([for (final e in live) e.item], day);
-        var i = 0;
-        entries = [
-          for (final e in entries)
-            e.isGhost
-                ? e
-                : () {
-                    final next = EffectiveItem(
-                      item: credited[i++],
-                      home: e.home,
-                      movedFrom: e.movedFrom,
-                      movedTo: e.movedTo,
-                      move: e.move,
-                    );
-                    final a = achieved.remove(e);
-                    if (a != null) achieved[next] = a;
-                    return next;
-                  }(),
-        ];
-      }
-    }
-    return _DayData(state.prescription, entries, state.week, state.missed,
-        priced: priced,
-        lines: lines,
-        skips: state.skips,
-        history: history,
-        achieved: achieved,
-        extra: extra);
+    // What each item ACHIEVED (+ its clips), session credits (Whoop /
+    // Kaya climb, logged 4x4), skips and moves — ONE shared resolution
+    // (day_status.dart), the same one the coach's read + coach chat use.
+    if (state.strengthRows != null) _strengthRows = state.strengthRows;
+    final status = state.dayStatus(
+      trackSets: widget.strengthView != null && widget.strengthRepo != null,
+      clips: _dayClips(state.strengthRows, date),
+      isTop: (e) {
+        final l = lines[_itemKey(e.home, e.item.name)] ?? const [];
+        return l.isNotEmpty && l.every((x) => x.top);
+      },
+    );
+    return _DayData(state.prescription, status, state.week, state.missed,
+        priced: priced, lines: lines, history: history);
   }
 
   /// Every clip attached to [date]'s strength rows (warm-ups included —
@@ -627,9 +541,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
         if (data == null) return const SizedBox.shrink();
         final p = data.prescription;
         final showChecks = widget.strengthView != null;
-        final live = data.liveOn(dayOnly(widget.date));
-        final doneCount = live.where((e) => e.item.done).length;
-        final allDone = showChecks && live.isNotEmpty && doneCount == live.length;
+        final live = data.status.live;
+        final doneCount = data.status.doneCount;
+        final allDone = showChecks && data.status.allDone;
         final missed = data.missed;
 
         return AppCard(
@@ -674,7 +588,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                     ),
                 ],
               ),
-              if (data.items.isEmpty && !p.isRest)
+              if (data.status.items.isEmpty && !p.isRest)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
                       AppSpace.gutter, 0, AppSpace.gutter, 8),
@@ -688,7 +602,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
               else
                 for (final period in const ['AM', 'PM'])
                   ..._periodBlock(context, data, period, showChecks),
-              if (data.extra.isNotEmpty) ..._extraBlock(context, data),
+              if (data.status.extra.isNotEmpty) ..._extraBlock(context, data),
               if (missed != null && !missed.isEmpty)
                 ..._missedBlock(context, data, missed),
             ],
@@ -706,32 +620,26 @@ class ProgramDayCardState extends State<ProgramDayCard> {
 
   List<Widget> _periodBlock(
       BuildContext context, _DayData data, String period, bool showChecks) {
-    final items = data.items;
-    final group = items.where((e) => e.item.period == period).toList();
+    final items = data.status.items;
+    final group = items.where((s) => s.item.period == period).toList();
     if (group.isEmpty) return const [];
-    final bothPeriods = items.any((e) => e.item.period == 'AM') &&
-        items.any((e) => e.item.period == 'PM');
+    final bothPeriods = items.any((s) => s.item.period == 'AM') &&
+        items.any((s) => s.item.period == 'PM');
     return [
       if (bothPeriods) _subLabel(context, period),
-      for (final e in group)
+      for (final st in group)
         () {
           final day = dayOnly(widget.date);
-          final skip = data.skipOf(e, day);
+          final e = st.entry;
+          final skipped = st.state == DayItemState.skipped;
           final lines = data.linesOf(e);
-          final got = data.achieved[e];
           return _ItemRow(
-            item: e.item,
+            status: st,
             showCheck: showChecks,
-            movedTo: e.movedTo,
-            movedFrom: e.movedFrom,
             pricedLines: [
               for (final l in lines)
                 itemLineText(l, e.item, tm: data.priced.tmFor(l)),
             ],
-            top: lines.isNotEmpty && lines.every((l) => l.top),
-            sets: got?.$1 ?? const [],
-            clips: got?.$2 ?? const [],
-            skipReason: skip?.note,
             onTap: widget.strengthView == null
                 ? null
                 : () => _showExerciseInfo(context, e, data),
@@ -743,7 +651,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
                     ? (e.move == null
                         ? null
                         : _RowMenu(onUndo: () => _undoMove(e.move!)))
-                    : skip != null
+                    : skipped
                         ? _RowMenu(
                             onUndoSkip: () => _undoSkip(e.item.name, day))
                         : _RowMenu(
@@ -763,7 +671,7 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   /// program item — same row style, achieved meta + clips.
   List<Widget> _extraBlock(BuildContext context, _DayData data) => [
         const SectionHeader(label: 'Also logged'),
-        for (final x in data.extra)
+        for (final x in data.status.extra)
           ExerciseRow(
             // Calisthenics skills arrive lowercase ("handstand").
             name: exerciseLabel(x.exercise),
@@ -1100,16 +1008,12 @@ class _MoreClips extends StatelessWidget {
 /// "2×4 · 255 lb"), else the priced prescription — then the clips of its
 /// sets inline. Ghosts / skipped rows are muted.
 class _ItemRow extends StatelessWidget {
-  final PrescribedItem item;
+  /// The item's shared resolution ([DayItemStatus]): ghost (moved-out
+  /// origin: muted, "moved → Fri"), skipped (muted, "skipped — …"),
+  /// done / partial / pending + what was achieved, moved-in ("from Wed").
+  final DayItemStatus status;
   final bool showCheck;
   final VoidCallback? onTap;
-
-  /// Ghost (moved-out origin): muted, "moved → Fri"; its menu only
-  /// offers Undo move.
-  final DateTime? movedTo;
-
-  /// Moved-in: the meta leads with "from Wed".
-  final DateTime? movedFrom;
 
   /// Trailing overflow menu (Move to… / Skip… / Undo); null → none.
   final _RowMenu? menu;
@@ -1117,37 +1021,26 @@ class _ItemRow extends StatelessWidget {
   /// The Plan tab's priced lines — replace the prose scheme when present.
   final List<String> pricedLines;
 
-  /// Every priced line is a top set (achievement reads "top 275×6").
-  final bool top;
-
-  /// The working sets credited to (or folded into) this item.
-  final List<AchievedSet> sets;
-  final List<DayClip> clips;
-
-  /// Non-null when the item was skipped that day (muted, "skipped — …").
-  final String? skipReason;
-
   const _ItemRow({
-    required this.item,
+    required this.status,
     required this.showCheck,
     this.onTap,
-    this.movedTo,
-    this.movedFrom,
     this.menu,
     this.pricedLines = const [],
-    this.top = false,
-    this.sets = const [],
-    this.clips = const [],
-    this.skipReason,
   });
+
+  PrescribedItem get item => status.item;
 
   @override
   Widget build(BuildContext context) {
-    final ghost = movedTo != null;
-    final skipped = !ghost && skipReason != null;
-    final done = !ghost && !skipped && item.done;
-    final partial = !ghost && !skipped && !done && item.loggedSets > 0;
-    final status = ghost || skipped
+    final st = status;
+    final movedTo = st.entry.movedTo;
+    final movedFrom = st.entry.movedFrom;
+    final ghost = st.state == DayItemState.movedOut;
+    final skipped = st.state == DayItemState.skipped;
+    final done = st.state == DayItemState.done;
+    final partial = st.state == DayItemState.partial;
+    final rowStatus = ghost || skipped
         ? ItemStatus.muted
         : !showCheck
             ? ItemStatus.pending
@@ -1163,28 +1056,22 @@ class _ItemRow extends StatelessWidget {
     if (ghost) {
       meta = 'moved → ${_wd(movedTo!)}';
     } else if (skipped) {
-      meta = 'skipped — $skipReason';
+      meta = 'skipped — ${st.skipReason}';
     } else {
-      // A Whoop credit note ("strain 8.0") is the achievement for a climb.
-      final achieved = item.creditNote ??
-          (done || partial
-              ? achievedMeta(sets, target: item.targetSets, top: top) ??
-                  (done
-                      ? '${item.loggedSets} set${item.loggedSets == 1 ? '' : 's'}'
-                      : '${item.loggedSets} of ${item.targetSets} sets')
-              : null);
-      final body = achieved ?? prescription;
+      // A session credit note ("strain 8.0") is the achievement for a
+      // climb; otherwise what the sets achieved ("top 275×6").
+      final body = st.achievedText ?? prescription;
       meta = movedFrom == null
           ? body
-          : 'from ${_wd(movedFrom!)}${body.isEmpty ? '' : ' · $body'}';
+          : 'from ${_wd(movedFrom)}${body.isEmpty ? '' : ' · $body'}';
     }
     return ExerciseRow(
       name: item.name,
       meta: meta,
-      status: status,
+      status: rowStatus,
       muted: ghost || skipped,
       onTap: onTap,
-      chips: clipChips(context, clips, item.name),
+      chips: clipChips(context, st.clips, item.name),
       trailing: menu == null ? null : _menuButton(context),
     );
   }

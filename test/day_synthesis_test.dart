@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:airledger/services/day_achievement.dart';
+import 'package:airledger/services/day_status.dart';
 import 'package:airledger/services/day_synthesis.dart';
 import 'package:airledger/services/prescribed_exercises.dart';
 import 'package:airledger/services/program_moves.dart';
@@ -8,18 +10,20 @@ void main() {
   DaySynthesisContext ctx({
     int hour = 15,
     String phase = 'cut',
-    SynthProgramDay? program,
+    DayStatus? status,
     SynthLogged? logged,
     SynthTargets? targets,
     SynthRecovery? recovery,
+    List<WhoopActivity> activities = const [],
   }) =>
       DaySynthesisContext(
         hour: hour,
         phase: phase,
-        program: program ?? const SynthProgramDay(),
+        status: status,
         logged: logged ?? const SynthLogged(),
         targets: targets ?? const SynthTargets(),
         recovery: recovery ?? const SynthRecovery(),
+        activities: activities,
       );
 
   group('derived tallies', () {
@@ -36,83 +40,24 @@ void main() {
       expect(c.kcalSoFar, 1000);
     });
 
-    test('lifts done/planned/remaining are distinct and lower-cased', () {
-      final c = ctx(
-        program: const SynthProgramDay(plannedLifts: ['Squat', 'Bench', 'Row']),
-        logged: const SynthLogged(sets: [
-          SynthSet(exercise: 'Squat'),
-          SynthSet(exercise: 'squat'),
-        ]),
-      );
-      expect(c.liftsDone, ['squat']);
-      expect(c.liftsPlanned, ['squat', 'bench', 'row']);
-      expect(c.liftsRemaining, ['bench', 'row']);
-    });
-
-    test('climbToCome true when scheduled and none logged', () {
-      final c = ctx(
-        program: const SynthProgramDay(climbCall: 'hard session'),
-        logged: const SynthLogged(climbCount: 0),
-      );
-      expect(c.climbToCome, isTrue);
-    });
-
-    test('climbToCome false once climbing is logged', () {
-      final c = ctx(
-        program: const SynthProgramDay(climbCall: 'hard session'),
-        logged: const SynthLogged(climbCount: 3),
-      );
-      expect(c.climbToCome, isFalse);
-    });
-
-    test('cardioToCome tracks the 4x4', () {
-      expect(
-        ctx(program: const SynthProgramDay(wants4x4: true)).cardioToCome,
-        isTrue,
-      );
-      expect(
-        ctx(
-          program: const SynthProgramDay(wants4x4: true),
-          logged: const SynthLogged(did4x4: true),
-        ).cardioToCome,
-        isFalse,
-      );
-    });
   });
 
   group('buildDaySynthesisPrompt', () {
-    test('the climb-still-to-come case never reads as a rest day', () {
-      // User's example: 3pm, 4x4 done this morning, hard climb still to
-      // come. The prompt must carry the climb as outstanding.
-      final c = ctx(
-        hour: 15,
-        program: const SynthProgramDay(
-          morning: 'AM 4x4 intervals',
-          afternoon: 'PM hard climbing session',
-          wants4x4: true,
-          climbCall: 'hard session',
-        ),
+    test('protein floor shortfall surfaces under the targets', () {
+      final p = buildDaySynthesisPrompt(ctx(
         logged: const SynthLogged(
-          did4x4: true,
-          meals: [SynthMeal(calories: 600, proteinG: 40, carbsG: 45)],
-        ),
+            meals: [SynthMeal(calories: 600, proteinG: 40, carbsG: 45)]),
         targets: const SynthTargets(
           proteinGDay: [140, 160],
           carbsGDay: [225, 300],
         ),
-      );
-      final p = buildDaySynthesisPrompt(c);
-      expect(p, contains('climbing (hard session)'));
-      expect(p, contains('STILL TO COME'));
-      expect(p, contains('4x4: done'));
-      expect(p, isNot(contains('rest day')));
-      // Protein floor is 140, ate 40 → 100 remaining surfaced.
+      ));
       expect(p, contains('100g more protein to the floor'));
     });
 
-    test('true rest day is labelled a rest day', () {
-      final p = buildDaySynthesisPrompt(ctx(program: const SynthProgramDay()));
-      expect(p, contains('rest day'));
+    test('no program → status unavailable, no training commentary', () {
+      final p = buildDaySynthesisPrompt(ctx());
+      expect(p, contains('PROGRAM STATUS: unavailable'));
     });
 
     test('protein target absent → no target, no floor nudge', () {
@@ -277,188 +222,117 @@ void main() {
     });
   });
 
-  group('Whoop activity in the prompt', () {
-    test('prompt lists Whoop activity and counts a Whoop climb', () {
-      final c = DaySynthesisContext(
-        hour: 20,
-        phase: 'cut',
-        program: const SynthProgramDay(climbCall: 'LIGHT'),
-        logged: const SynthLogged(),
-        targets: const SynthTargets(),
-        activities: [
-          WhoopActivity(
-            date: DateTime(2026, 10, 1),
-            start: DateTime(2026, 10, 1, 14, 58),
-            sport: 'rock-climbing',
-            kind: ActivityKind.climb,
-            strain: 14.8,
-            durationMin: 86,
-          ),
-        ],
-      );
-      expect(c.climbToCome, isFalse);
-      final p = buildDaySynthesisPrompt(c);
-      expect(p, contains('ACTIVITY (Whoop'));
-      expect(p, contains('rock-climbing 14:58 · strain 14.8 · 86 min'));
-    });
-
-    test('M5: a Whoop lift does not leave the prompt nagging about '
-        'remaining planned lifts', () {
-      final c = DaySynthesisContext(
-        hour: 20,
-        phase: 'cut',
-        program: const SynthProgramDay(plannedLifts: ['Squat', 'Bench']),
-        logged: const SynthLogged(), // nothing logged in-app
-        targets: const SynthTargets(),
-        activities: [
-          WhoopActivity(
-            date: DateTime(2026, 10, 1),
-            sport: 'weightlifting',
-            kind: ActivityKind.lift,
-            strain: 11.8,
-          ),
-        ],
-      );
-      expect(c.liftsRemaining, ['squat', 'bench']); // unlogged in-app
-      final p = buildDaySynthesisPrompt(c);
-      expect(
-        p,
-        contains("(Whoop saw a lifting session — remaining lifts may "
-            "simply be unlogged; don't nag about them.)"),
-      );
-    });
-
-    test('no contradiction note when there is no Whoop lift activity', () {
-      final c = DaySynthesisContext(
-        hour: 20,
-        phase: 'cut',
-        program: const SynthProgramDay(plannedLifts: ['Squat']),
-        logged: const SynthLogged(),
-        targets: const SynthTargets(),
-        activities: const [],
-      );
-      final p = buildDaySynthesisPrompt(c);
-      expect(p, isNot(contains('Whoop saw a lifting session')));
-    });
-
-    test('no contradiction note when nothing is left to do', () {
-      final c = DaySynthesisContext(
-        hour: 20,
-        phase: 'cut',
-        program: const SynthProgramDay(plannedLifts: ['Squat']),
-        logged: const SynthLogged(sets: [SynthSet(exercise: 'Squat')]),
-        targets: const SynthTargets(),
-        activities: [
-          WhoopActivity(
-            date: DateTime(2026, 10, 1),
-            sport: 'weightlifting',
-            kind: ActivityKind.lift,
-          ),
-        ],
-      );
-      expect(c.liftsRemaining, isEmpty);
-      final p = buildDaySynthesisPrompt(c);
-      expect(p, isNot(contains('Whoop saw a lifting session')));
-    });
-  });
-
-  group('synthProgramWithMoves', () {
-    final wed = DateTime(2026, 9, 30);
+  group('PROGRAM STATUS drives training (2026-10-02 morning-climb bug)', () {
+    // Live Fri 10/2: AM deadlift session + PM "Climb — LIGHT session";
+    // the user climbed in the MORNING (Whoop rock-climbing 10:25). The
+    // old prompt carried "TODAY'S PROGRAM: climbing (light session)",
+    // the routine prose "PM: Climb — LIGHT session" and "climbing: not
+    // logged" — the read told him to make sure the PM climb happens.
     final fri = DateTime(2026, 10, 2);
-    final sat = DateTime(2026, 10, 3);
-    PrescribedItem item(String name, {String scheme = '1x3', int sets = 1}) =>
-        PrescribedItem(name: name, scheme: scheme, period: 'PM',
-            targetSets: sets);
+    PrescribedItem it(String n, String sc, String p, int sets) =>
+        PrescribedItem(name: n, scheme: sc, period: p, targetSets: sets);
+    final entries = [
+      EffectiveItem(item: it('Deadlift heavy', 'top set', 'AM', 1), home: fri),
+      EffectiveItem(
+          item: it('Bench volume', '3x8-10 @ 65% TM.', 'AM', 3), home: fri),
+      EffectiveItem(
+          item: it('Climb — LIGHT session',
+              '(technique/volume, movement quality; low fatigue).', 'PM', 1),
+          home: fri),
+    ];
+    final climb = WhoopActivity(
+      date: fri,
+      start: DateTime(2026, 10, 2, 10, 25),
+      sport: 'rock-climbing',
+      kind: ActivityKind.climb,
+      strain: 8.0,
+      durationMin: 25,
+    );
+    AchievedSet set(String ex, double w, int r) =>
+        AchievedSet(exercise: ex, weight: w, reps: r);
+    DayStatus status({bool whoop = true, bool bench = false}) =>
+        buildDayStatus(
+          date: fri,
+          entries: entries,
+          logged: [
+            set('Barbell Deadlift', 275, 6),
+            if (bench)
+              for (var i = 0; i < 3; i++) set('Flat Barbell Bench Press', 155, 8),
+          ],
+          whoop: whoop ? [climb] : const [],
+        );
 
-    test('no moves → base unchanged', () {
-      const base = SynthProgramDay(plannedLifts: ['Deadlift']);
-      final out = synthProgramWithMoves(base, [
-        EffectiveItem(item: item('Deadlift top set'), home: fri),
-      ]);
-      expect(identical(out, base), isTrue);
+    test('Whoop morning climb → DONE; no pending-climb instruction anywhere',
+        () {
+      final c = ctx(hour: 15, status: status(), activities: [climb]);
+      expect(c.climbToCome, isFalse);
+      expect(c.climbPrescribed, isTrue);
+      final p = buildDaySynthesisPrompt(c);
+      expect(p, contains('- DONE Climb — LIGHT session — Whoop rock-climbing '
+          '10:25, strain 8.0, 25 min (planned PM, done earlier — complete)'));
+      expect(p, isNot(contains('PENDING Climb')));
+      expect(p, isNot(contains('PM: Climb')));
+      expect(p, isNot(contains('climbing (light')));
+      expect(p, isNot(contains('climbing: not logged')));
+      expect(p, isNot(contains('STILL TO COME')));
+      expect(p, contains('TRAINING LEFT TODAY: Bench volume'));
+      expect(p, contains('Only nudge items marked PENDING'));
+      expect(p, contains('Never suggest repeating, or "making sure" of, an '
+          'item marked DONE'));
+      // Whoop sessions are context only, flagged as already reflected.
+      expect(p, contains('already reflected in PROGRAM STATUS'));
     });
 
-    test('moved-in lift joins today; moved-out lift leaves it', () {
-      const base = SynthProgramDay(
-        plannedLifts: ['Lateral Raise', 'Deadlift', 'Romanian Deadlift'],
-        afternoon: 'PM: Deadlift top set; RDL 2x8-12; laterals',
-      );
-      final out = synthProgramWithMoves(base, [
-        EffectiveItem(item: item('Deadlift top set'), home: fri),
-        EffectiveItem(
-            item: item('Lateral raise', scheme: '3x12', sets: 3),
-            home: fri,
-            movedTo: sat),
-        EffectiveItem(
-            item: item('Bench top set'), home: wed, movedFrom: wed),
-      ]);
-      // Laterals left; "Romanian Deadlift" stays (ambiguous vs the
-      // staying deadlift — kept rather than over-excluded).
-      expect(out.plannedLifts, ['Deadlift', 'Romanian Deadlift']);
-      expect(out.movedOut.single.name, 'Lateral raise');
-      expect(out.movedOut.single.otherDay, sat);
-      expect(out.movedIn.single.name, 'Bench top set');
-      expect(out.movedIn.single.done, isFalse);
-
-      final prompt = buildDaySynthesisPrompt(ctx(program: out));
-      expect(prompt, contains('- moved in from Wed: Bench top set (1x3)'));
-      expect(prompt, contains('moved OUT of today'));
-      expect(prompt, contains('Lateral raise → Sat'));
-      expect(prompt, contains('Bench top set (moved from Wed)'));
+    test('everything done → the training day is complete', () {
+      final p = buildDaySynthesisPrompt(
+          ctx(status: status(bench: true), activities: [climb]));
+      expect(p, contains("TRAINING LEFT TODAY: none — today's training is "
+          'complete'));
+      expect(p, isNot(contains('- PENDING')));
     });
 
-    test('moved-in lift logged today reads done, not still to come', () {
-      final out = synthProgramWithMoves(const SynthProgramDay(), [
-        EffectiveItem(item: item('Bench top set'), home: wed, movedFrom: wed),
-      ], loggedToday: ['Bench Press']);
-      expect(out.movedIn.single.done, isTrue);
-      final prompt = buildDaySynthesisPrompt(ctx(program: out));
-      expect(prompt, contains('Bench top set (1x3) — done'));
-      expect(prompt, isNot(contains('(moved from Wed)')));
+    test('no Whoop climb → the climb is PENDING (still to come)', () {
+      final c = ctx(status: status(whoop: false));
+      expect(c.climbToCome, isTrue);
+      final p = buildDaySynthesisPrompt(c);
+      expect(p, contains('- PENDING Climb — LIGHT session — not done yet'));
     });
 
-    test('moved-in done uses the shared exclusive allocation', () {
-      // Own bench volume (3 sets) claims today's 3 bench sets first; the
-      // moved-in top set is still to come (matches card + detector).
-      final out = synthProgramWithMoves(const SynthProgramDay(), [
-        EffectiveItem(
-            item: item('Bench volume', scheme: '3x8-10', sets: 3), home: fri),
-        EffectiveItem(item: item('Bench heavy'), home: wed, movedFrom: wed),
-      ], loggedToday: ['Bench Press', 'Bench Press', 'Bench Press']);
-      expect(out.movedIn.single.done, isFalse);
-      final out2 = synthProgramWithMoves(const SynthProgramDay(), [
-        EffectiveItem(
-            item: item('Bench volume', scheme: '3x8-10', sets: 3), home: fri),
-        EffectiveItem(item: item('Bench heavy'), home: wed, movedFrom: wed),
-      ], loggedToday: List.filled(4, 'Bench Press'));
-      expect(out2.movedIn.single.done, isTrue);
+    test('tally: lifts hit / planned from the status', () {
+      final c = ctx(status: status());
+      expect(c.liftsPlanned, 2);
+      expect(c.liftsHit, 1);
     });
 
-    test('climb / 4x4 moves flip climbCall + wants4x4', () {
-      final tue = DateTime(2026, 9, 29);
-      final out = synthProgramWithMoves(
-        const SynthProgramDay(wants4x4: true),
-        [
-          EffectiveItem(
-              item: item('Bike 4x4', scheme: '4x4', sets: 4),
-              home: fri,
-              movedTo: sat),
-          EffectiveItem(
-              item: item('Hard climb', scheme: '(limit)'),
-              home: tue,
-              movedFrom: tue),
-        ],
-      );
-      expect(out.wants4x4, isFalse);
-      expect(out.climbCall, 'Hard climb');
-      final gone = synthProgramWithMoves(
-        const SynthProgramDay(climbCall: 'hard session'),
-        [
-          EffectiveItem(
-              item: item('Hard climb'), home: fri, movedTo: sat),
-        ],
-      );
-      expect(gone.climbCall, isNull);
+    test('fingerprint changes when a Whoop climb appears', () {
+      final before = ctx(status: status(whoop: false)).fingerprint;
+      final after =
+          ctx(status: status(), activities: [climb]).fingerprint;
+      expect(after, isNot(before));
+    });
+
+    test('fingerprint changes on a logged set, a meal bucket and recovery; '
+        'stable otherwise', () {
+      final base = ctx(status: status());
+      expect(ctx(status: status()).fingerprint, base.fingerprint);
+      expect(ctx(status: status(bench: true)).fingerprint,
+          isNot(base.fingerprint));
+      expect(
+          ctx(
+            status: status(),
+            logged: const SynthLogged(meals: [SynthMeal(proteinG: 40)]),
+          ).fingerprint,
+          isNot(base.fingerprint));
+      expect(
+          ctx(
+            status: status(),
+            recovery: const SynthRecovery(recoveryScore: 64),
+          ).fingerprint,
+          isNot(base.fingerprint));
+      // Same hour bucket → same fingerprint; evening → new read.
+      expect(ctx(hour: 16, status: status()).fingerprint, base.fingerprint);
+      expect(ctx(hour: 19, status: status()).fingerprint,
+          isNot(base.fingerprint));
     });
   });
 }

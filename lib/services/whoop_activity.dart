@@ -66,7 +66,11 @@ DateTime? _dt(Object? v) {
   if (v == null) return null;
   final s = v.toString().trim();
   if (s.isEmpty) return null;
-  return DateTime.tryParse(s.replaceFirst(' ', 'T'));
+  // Sheets can hand back a single-digit hour ("2026-10-02 9:14:00"),
+  // which DateTime.tryParse rejects — pad it.
+  return DateTime.tryParse(s
+      .replaceFirst(' ', 'T')
+      .replaceFirstMapped(RegExp(r'T(\d):'), (m) => 'T0${m[1]}:'));
 }
 
 double? _num(Object? v) {

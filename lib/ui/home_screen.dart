@@ -927,6 +927,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 // ones don't.
                 programMovesView: programMovesView,
                 programMovesRepo: programMovesRepo,
+                // Calisthenics sets tick skill items (same as the card).
+                calisthenicsView: dashCalisthenicsView,
+                calisthenicsRepo: dashCalisthenicsView == null
+                    ? null
+                    : data.registry.forView(dashCalisthenicsView),
                 provider: programProvider,
               );
               // Feature 3: post-log notification driver — one boot-time

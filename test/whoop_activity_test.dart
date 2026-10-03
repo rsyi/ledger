@@ -54,6 +54,18 @@ void main() {
     expect(acts.last.durationMin, 40);
   });
 
+  test('a single-digit-hour start (Sheets round-trip "9:14:00") parses',
+      () {
+    final a = whoopActivitiesFromRecords([
+      {
+        'date': '2026-10-02',
+        'start_time': '2026-10-02 9:14:00',
+        'sport': 'weightlifting',
+      },
+    ]).single;
+    expect(a.start, DateTime(2026, 10, 2, 9, 14));
+  });
+
   group('isZone2Run', () {
     final run = whoopActivitiesFromRecords(
         [_row('running', '2026-09-27', avgHr: 122, dur: 43)]).single;

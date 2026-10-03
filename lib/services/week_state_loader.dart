@@ -12,7 +12,9 @@
 /// logged) — only a failed program-doc load yields null.
 library;
 
+import 'day_achievement.dart' show AchievedSet, DayClip;
 import 'day_prescription.dart' show DayPrescription;
+import 'day_status.dart';
 import 'intent_docs.dart';
 import 'missed_work.dart';
 import 'program_moves.dart';
@@ -71,6 +73,13 @@ class WeekState {
   /// strength source exists; null otherwise).
   final MissedWork? missed;
 
+  /// Kaya ascent dates (read only when loaded `withMissed`; empty
+  /// otherwise) — credits a day's climb item ([buildDayStatus]).
+  final List<DateTime> kayaDays;
+
+  /// Days with a logged 4x4 cardio session (empty when no cardio source).
+  final Set<DateTime> cardio4x4Days;
+
   const WeekState({
     required this.docs,
     required this.date,
@@ -84,10 +93,42 @@ class WeekState {
     this.weekSets = const [],
     required this.whoop,
     required this.missed,
+    this.kayaDays = const [],
+    this.cardio4x4Days = const {},
   });
 
   /// [date]'s effective items (ghosts included).
   List<EffectiveItem> get day => week[date] ?? const <EffectiveItem>[];
+
+  /// [date]'s per-item status — the ONE resolution the program card, the
+  /// day synthesis and the coach chat share ([buildDayStatus]).
+  /// [trackSets] false (no strength source) leaves lift items pending;
+  /// [clips] / [isTop] are the card's display refinements.
+  DayStatus dayStatus({
+    bool trackSets = true,
+    List<DayClip> clips = const [],
+    bool Function(EffectiveItem e)? isTop,
+  }) =>
+      buildDayStatus(
+        date: date,
+        entries: day,
+        logged: !trackSets
+            ? null
+            : [
+                for (var j = 0; j < loggedOnDate.length; j++)
+                  AchievedSet.fromRecord(
+                      loggedOnDate[j],
+                      j < loggedRecordsOnDate.length
+                          ? loggedRecordsOnDate[j]
+                          : null),
+              ],
+        clips: clips,
+        isTop: isTop,
+        whoop: whoop,
+        kayaDays: kayaDays,
+        cardio4x4Days: cardio4x4Days,
+        skips: skips,
+      );
 }
 
 class WeekStateLoader {
@@ -184,7 +225,8 @@ class WeekStateLoader {
     return null;
   }
 
-  /// Loads [date]'s week. [withMissed] also reads climbing + cardio and
+  /// Loads [date]'s week. Cardio (a local read) is always read when
+  /// configured. [withMissed] also reads the Kaya climbing tab and
   /// runs [detectMissedWork] with [date] as "today" (requires a strength
   /// source). Null when the docs can't load or there is no program.
   Future<WeekState?> load(
@@ -224,7 +266,8 @@ class WeekStateLoader {
       _try(!missedOn || cv == null || cr == null
           ? null
           : () => _kayaDays(cv, cr, now())),
-      _try(!missedOn || kv == null || kr == null ? null : () => kr.list(kv)),
+      // Cardio is a local read: always (credits the day's 4x4 item).
+      _try(kv == null || kr == null ? null : () => kr.list(kv)),
       _try(xv == null || xr == null ? null : () => xr.list(xv)),
     ]);
     final moveRows = reads[0] as List<Record>?;
@@ -287,17 +330,17 @@ class WeekStateLoader {
       } catch (_) {/* honest: logged-only */}
     }
 
+    final cardioDays = <DateTime>{};
+    for (final r in cardioRows ?? const <Record>[]) {
+      final type = r['type']?.toString().trim().toLowerCase() ?? '';
+      if (type.isNotEmpty && !fourByFourCardioTypes.contains(type)) {
+        continue;
+      }
+      final d = _date(r['date']);
+      if (d != null) cardioDays.add(dayOnly(d));
+    }
     MissedWork? missed;
     if (missedOn) {
-      final cardioDays = <DateTime>{};
-      for (final r in cardioRows ?? const <Record>[]) {
-        final type = r['type']?.toString().trim().toLowerCase() ?? '';
-        if (type.isNotEmpty && !fourByFourCardioTypes.contains(type)) {
-          continue;
-        }
-        final d = _date(r['date']);
-        if (d != null) cardioDays.add(dayOnly(d));
-      }
       missed = detectMissedWork(
         week: week,
         strengthRows: strengthWeek,
@@ -321,6 +364,8 @@ class WeekStateLoader {
       weekSets: strengthWeek,
       whoop: whoop,
       missed: missed,
+      kayaDays: kaya,
+      cardio4x4Days: cardioDays,
     );
   }
 }

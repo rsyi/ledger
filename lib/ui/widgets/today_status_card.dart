@@ -12,6 +12,7 @@ import '../../services/log_event_bus.dart';
 import '../../services/plan_store.dart';
 import '../../services/program_current.dart';
 import '../../services/program_provider.dart';
+import '../../services/sync_scheduler.dart';
 import '../../services/today_program_call.dart' show shouldPromptKayaSync;
 import '../../services/today_status.dart';
 import '../../services/warehouse_connector.dart';
@@ -90,8 +91,16 @@ class TodayStatusCardState extends State<TodayStatusCard> {
   // --- AI synthesis (Feature 1) ---
   DaySynthesisResult? _synthesis;
   bool _synthesizing = false;
+
+  /// A quiet fingerprint check is in flight ([regenerateSynthesis]).
+  bool _checking = false;
   StreamSubscription<LogEvent>? _logSub;
   Timer? _synthDebounce;
+
+  /// The sync scheduler whose `lastSync` we listen to — integration pulls
+  /// (Whoop / Macrofactor / Withings) ingest without a LogEvent, so a
+  /// finished sync is the signal that their rows may have changed.
+  SyncScheduler? _sched;
 
   // --- gated sync (Feature: refresh → sync-first) ---
   // Non-null while a refresh-triggered integration sync runs; shown on
@@ -105,14 +114,19 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     super.initState();
     refresh();
     _loadCachedSynthesis();
-    // Auto-refresh the synthesis when new data is logged (debounced so a
-    // batch of set logs = one regeneration). Never blocks the tab.
+    // Re-check the synthesis when new data lands — a log event (set,
+    // calisthenics, meal, move, skip) or a finished sync (Whoop /
+    // Macrofactor pulls). Debounced, and FINGERPRINT-gated: the LLM runs
+    // only when the context actually changed. Never blocks the tab.
     _logSub = LogEventBus.instance.stream.listen((_) => _scheduleSynthesis());
+    _sched = SyncScheduler.instance;
+    _sched?.lastSync.addListener(_scheduleSynthesis);
   }
 
   @override
   void dispose() {
     _logSub?.cancel();
+    _sched?.lastSync.removeListener(_scheduleSynthesis);
     _synthDebounce?.cancel();
     super.dispose();
   }
@@ -122,12 +136,11 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     if (svc == null || !svc.enabled) return;
     final cached = await svc.cached();
     if (!mounted) return;
-    if (cached != null) {
-      setState(() => _synthesis = cached);
-    } else {
-      // No synthesis yet today — generate one in the background.
-      unawaited(regenerateSynthesis());
-    }
+    if (cached != null) setState(() => _synthesis = cached);
+    // Show the stored read immediately, then re-check it against the live
+    // context: anything that changed since it was written (a Whoop sync,
+    // a set, a move…) regenerates it. No read yet today → generates.
+    unawaited(regenerateSynthesis(onlyIfStale: true));
   }
 
   void _scheduleSynthesis() {
@@ -135,19 +148,35 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     _synthDebounce?.cancel();
     _synthDebounce = Timer(
       const Duration(seconds: 4),
-      () => unawaited(regenerateSynthesis()),
+      () => unawaited(regenerateSynthesis(onlyIfStale: true)),
     );
   }
 
   /// (Re)runs the LLM synthesis. Shows a refreshing state; on failure keeps
-  /// the last synthesis. Also refreshes the static lines.
-  Future<void> regenerateSynthesis() async {
+  /// the last synthesis. Also refreshes the static lines. [onlyIfStale]
+  /// skips the LLM when the stored read's context fingerprint still
+  /// matches (the manual refresh always regenerates).
+  Future<void> regenerateSynthesis({bool onlyIfStale = false}) async {
     final svc = widget.synthesis;
-    if (svc == null || !svc.enabled || _synthesizing) return;
+    if (svc == null || !svc.enabled || _synthesizing || _checking) return;
+    DaySynthesisContext? ctx;
+    if (onlyIfStale) {
+      // Quiet freshness check first — no refreshing state unless the
+      // read actually needs regenerating.
+      _checking = true;
+      try {
+        ctx = await svc.buildContext();
+        if (await svc.isFresh(ctx)) return;
+      } catch (_) {
+        return;
+      } finally {
+        _checking = false;
+      }
+    }
     if (mounted) setState(() => _synthesizing = true);
     DaySynthesisResult? result;
     try {
-      result = await svc.generate();
+      result = await svc.generate(context: ctx);
     } catch (_) {
       result = null;
     }
@@ -247,7 +276,7 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     if (sctx == null) return; // can't tell if a climb is expected
     final prompt = shouldPromptKayaSync(
       programCall: {
-        if (sctx.program.climbCall != null) 'climbing': sctx.program.climbCall!,
+        if (sctx.climbPrescribed) 'climbing': 'climb',
       },
       loggedClimbCount: sctx.logged.climbCount,
     );

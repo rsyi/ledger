@@ -63,8 +63,8 @@ class PostLogNotifier {
     var climbToCome = false;
     try {
       final ctx = await synthesis.buildContext();
-      liftsHit = ctx.liftsDone.length;
-      liftsPlanned = ctx.liftsPlanned.length;
+      liftsHit = ctx.liftsHit;
+      liftsPlanned = ctx.liftsPlanned;
       climbToCome = ctx.climbToCome;
     } catch (_) {/* plain summary */}
 

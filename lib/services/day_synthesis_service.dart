@@ -5,19 +5,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/model_config.dart';
 import '../models/view_schema.dart';
 import 'analytics_engine.dart';
+import 'day_status.dart';
 import 'day_synthesis.dart';
 import 'llm_client.dart';
-import 'plan_store.dart';
 import 'program_current.dart';
 import 'program_observed.dart' show observedWeightStats;
 import 'program_provider.dart';
-import 'today_program_call.dart';
 import 'warehouse_connector.dart';
 import 'week_state_loader.dart';
 import 'weight_series.dart' show loadDailyWeighIns;
 import 'whoop_activity.dart';
+import 'program_week.dart' show dayOnly;
 import 'wilks.dart' show contemporaneousBodyweightLbs;
-import 'working_sets.dart';
 
 /// The synthesis plus the small tally the post-log notification reads. The
 /// synthesis text is what the card shows; the tally lets a notification
@@ -30,12 +29,18 @@ class DaySynthesisResult {
   final int liftsPlanned;
   final bool climbToCome;
 
+  /// [DaySynthesisContext.fingerprint] of the context this read was
+  /// generated from — a stored read is stale once the live context's
+  /// fingerprint differs. '' = unknown (always stale).
+  final String fingerprint;
+
   const DaySynthesisResult({
     required this.text,
     required this.generatedAt,
     required this.liftsHit,
     required this.liftsPlanned,
     required this.climbToCome,
+    this.fingerprint = '',
   });
 
   Map<String, Object?> toJson() => {
@@ -44,6 +49,7 @@ class DaySynthesisResult {
         'lifts_hit': liftsHit,
         'lifts_planned': liftsPlanned,
         'climb_to_come': climbToCome,
+        'fingerprint': fingerprint,
       };
 
   static DaySynthesisResult? tryFromJson(String raw) {
@@ -55,6 +61,7 @@ class DaySynthesisResult {
         liftsHit: (m['lifts_hit'] as num?)?.toInt() ?? 0,
         liftsPlanned: (m['lifts_planned'] as num?)?.toInt() ?? 0,
         climbToCome: m['climb_to_come'] as bool? ?? false,
+        fingerprint: m['fingerprint'] as String? ?? '',
       );
     } catch (_) {
       return null;
@@ -104,9 +111,15 @@ class DaySynthesisService {
   final WarehouseConnector? workoutsRepo;
 
   /// `program_moves` — today's program includes items moved IN from
-  /// another day and drops items moved OUT. Null → the plain routine.
+  /// another day and drops items moved OUT; skip rows mark items
+  /// SKIPPED. Null → the plain routine.
   final ViewSchema? programMovesView;
   final WarehouseConnector? programMovesRepo;
+
+  /// Calisthenics log — credits skill items (handstand, muscle-ups)
+  /// exactly as the Today card does. Null → strength sets only.
+  final ViewSchema? calisthenicsView;
+  final WarehouseConnector? calisthenicsRepo;
 
   final ProgramProvider? provider;
   final DateTime Function() now;
@@ -131,6 +144,8 @@ class DaySynthesisService {
     this.workoutsRepo,
     this.programMovesView,
     this.programMovesRepo,
+    this.calisthenicsView,
+    this.calisthenicsRepo,
     required this.provider,
     this.now = DateTime.now,
   });
@@ -149,8 +164,11 @@ class DaySynthesisService {
   /// caches written without it are regenerated to factor readiness. v4
   /// (2026-10-01): Whoop activity line + climb credit. v5 (2026-10-02):
   /// program_moves — moved-in items join today's program, moved-out
-  /// ones leave it.
-  static const _cacheVersion = 5;
+  /// ones leave it. v6 (2026-10-02): the PROGRAM STATUS block (the Today
+  /// card's own per-item state) replaces the routine-prose program lines
+  /// — a read written from the old prompt could nudge a DONE climb — and
+  /// stored reads carry a context fingerprint.
+  static const _cacheVersion = 6;
 
   static String _dayKey(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
@@ -213,64 +231,6 @@ class DaySynthesisService {
       } catch (_) {/* honest empty */}
     }
 
-    final sets = <SynthSet>[];
-    // Today's WORKING-set names (warm-ups excluded) — what credits the
-    // program's moved-in items.
-    var workingToday = const <String>[];
-    if (strengthView != null && strengthRepo != null) {
-      try {
-        final todayRows = <Map<String, Object?>>[];
-        for (final r in await strengthRepo!.list(strengthView!)) {
-          if (!_sameDay(_date(r['date']), dayStart)) continue;
-          final ex = r['exercise']?.toString().trim();
-          if (ex == null || ex.isEmpty) continue;
-          todayRows.add(r);
-          sets.add(SynthSet(
-            exercise: ex,
-            weight: _num(r['weight']),
-            reps: _num(r['reps'])?.round(),
-          ));
-        }
-        workingToday = [
-          for (final r in workingSetRecords(todayRows))
-            r['exercise'].toString().trim(),
-        ];
-      } catch (_) {/* honest empty */}
-    }
-
-    var did4x4 = false;
-    if (cardioView != null && cardioRepo != null) {
-      try {
-        for (final r in await cardioRepo!.list(cardioView!)) {
-          if (!_sameDay(_date(r['date']), dayStart)) continue;
-          final type = r['type']?.toString().toLowerCase() ?? '';
-          if (type.contains('4x4') || type.contains('4 x 4')) did4x4 = true;
-        }
-      } catch (_) {/* honest empty */}
-    }
-
-    var climbCount = 0;
-    if (climbingView != null && climbingRepo != null) {
-      try {
-        for (final r in await climbingRepo!.list(climbingView!)) {
-          if (_sameDay(_date(r['date']), dayStart)) climbCount++;
-        }
-      } catch (_) {/* honest empty */}
-    }
-
-    // Whoop-detected activity (climbs/runs/lifts/etc) for today — a
-    // session Whoop saw counts as done even if nothing else logged it.
-    var activities = const <WhoopActivity>[];
-    if (workoutsView != null && workoutsRepo != null) {
-      try {
-        activities = [
-          for (final a in whoopActivitiesFromRecords(
-              await workoutsRepo!.list(workoutsView!)))
-            if (_sameDay(a.date, dayStart)) a,
-        ];
-      } catch (_) {/* honest empty */}
-    }
-
     // Objective recovery (Whoop): last night's row (the most recent
     // recovery date at/ before today) + a 7-day-average recovery score
     // trend anchor. Read like the dashboard reads it.
@@ -303,8 +263,13 @@ class DaySynthesisService {
       } catch (_) {/* honest null — falls back to per-lb text */}
     }
 
-    // Program call + routine prose + targets from the slice.
-    var program = const SynthProgramDay();
+    // Targets from the slice + TODAY'S PROGRAM STATUS from the shared
+    // WeekStateLoader → DayStatus — the exact per-item state the Today
+    // card shows (sets, calisthenics, Whoop/Kaya climb credit, 4x4,
+    // moves, skips). One resolution, so the read can't disagree with it.
+    DayStatus? status;
+    var activities = const <WhoopActivity>[];
+    var climbCount = 0;
     var targets = SynthTargets(bodyweightLb: bodyweightLb);
     var phase = '';
     final p = provider;
@@ -324,51 +289,33 @@ class DaySynthesisService {
               fatGDayMin: _num(slice.targetsInForce['fat_g_day_min']),
             );
             phase = slice.block['emphasis']?.toString() ?? '';
-            final call = todayProgramCallByView(
-              docs.program!,
-              docs.phase,
-              clock,
+          }
+          final state = await WeekStateLoader(
+            loadDocs: () async => docs,
+            programMovesView: programMovesView,
+            programMovesRepo: programMovesRepo,
+            strengthView: strengthView,
+            strengthRepo: strengthRepo,
+            workoutsView: workoutsView,
+            workoutsRepo: workoutsRepo,
+            cardioView: cardioView,
+            cardioRepo: cardioRepo,
+            climbingView: climbingView,
+            climbingRepo: climbingRepo,
+            calisthenicsView: calisthenicsView,
+            calisthenicsRepo: calisthenicsRepo,
+            now: now,
+          ).load(dayStart, withMissed: true);
+          if (state != null) {
+            status = state.dayStatus(
+              trackSets: strengthView != null && strengthRepo != null,
             );
-            final planned = <String>[];
-            if (strengthView != null) {
-              try {
-                for (final e in await PlanStore.loadForDate(
-                  strengthView!,
-                  clock,
-                )) {
-                  final ex = e.values['exercise']?.toString().trim();
-                  if (ex != null && ex.isNotEmpty) planned.add(ex);
-                }
-              } catch (_) {/* honest empty */}
-            }
-            program = SynthProgramDay(
-              morning: slice.todayTemplate['morning']?.toString() ?? '',
-              afternoon: slice.todayTemplate['afternoon']?.toString() ?? '',
-              plannedLifts: planned,
-              wants4x4: call.containsKey('cardio'),
-              climbCall: call['climbing'],
-            );
-            // Moves: today's effective items (shared loader — moves read
-            // only; the logged work is already in hand above).
-            if (programMovesView != null && programMovesRepo != null) {
-              try {
-                final state = await WeekStateLoader(
-                  loadDocs: () async => docs,
-                  programMovesView: programMovesView,
-                  programMovesRepo: programMovesRepo,
-                ).load(clock);
-                if (state != null) {
-                  program = synthProgramWithMoves(
-                    program,
-                    state.day,
-                    loggedToday: workingToday,
-                    climbed: climbCount > 0 ||
-                        activities.any((a) => a.kind == ActivityKind.climb),
-                    did4x4: did4x4,
-                  );
-                }
-              } catch (_) {/* honest: the unmoved routine */}
-            }
+            activities = [
+              for (final a in state.whoop)
+                if (dayOnly(a.date) == dayStart) a,
+            ];
+            climbCount =
+                state.kayaDays.where((d) => dayOnly(d) == dayStart).length;
           }
         }
       } catch (_) {/* no program → still synthesize what's logged */}
@@ -377,13 +324,8 @@ class DaySynthesisService {
     return DaySynthesisContext(
       hour: clock.hour,
       phase: phase,
-      program: program,
-      logged: SynthLogged(
-        meals: meals,
-        sets: sets,
-        did4x4: did4x4,
-        climbCount: climbCount,
-      ),
+      status: status,
+      logged: SynthLogged(meals: meals, climbCount: climbCount),
       targets: targets,
       recovery: recovery,
       activities: activities,
@@ -408,12 +350,34 @@ class DaySynthesisService {
     final result = DaySynthesisResult(
       text: text.trim(),
       generatedAt: now(),
-      liftsHit: c.liftsDone.length,
-      liftsPlanned: c.liftsPlanned.length,
+      liftsHit: c.liftsHit,
+      liftsPlanned: c.liftsPlanned,
       climbToCome: c.climbToCome,
+      fingerprint: c.fingerprint,
     );
     await _store(result);
     return result;
+  }
+
+  /// Regenerates ONLY when the live context's fingerprint differs from
+  /// the stored read's (or nothing is stored) — any set logged, Whoop /
+  /// integration sync, calisthenics set, move, skip, macro bucket or
+  /// recovery change makes the stored read stale. Returns the new read,
+  /// or null when it is still fresh / disabled / the LLM failed.
+  Future<DaySynthesisResult?> refreshIfStale() async {
+    if (!enabled) return null;
+    final c = await buildContext();
+    if (await isFresh(c)) return null;
+    return generate(context: c);
+  }
+
+  /// True when today's stored read was generated from a context with the
+  /// same fingerprint as [c] (nothing it depends on has changed).
+  Future<bool> isFresh(DaySynthesisContext c) async {
+    final stored = await cached();
+    return stored != null &&
+        stored.fingerprint.isNotEmpty &&
+        stored.fingerprint == c.fingerprint;
   }
 
   static DateTime? _date(Object? v) {
@@ -421,9 +385,6 @@ class DaySynthesisService {
     if (v is String && v.isNotEmpty) return DateTime.tryParse(v);
     return null;
   }
-
-  static bool _sameDay(DateTime? d, DateTime day) =>
-      d != null && d.year == day.year && d.month == day.month && d.day == day.day;
 
   static double? _num(Object? v) {
     if (v is num) return v.toDouble();

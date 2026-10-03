@@ -4,6 +4,7 @@ import '../models/model_config.dart';
 import '../models/view_schema.dart';
 import 'chat_runner.dart';
 import 'coach_tools.dart';
+import 'day_status.dart' show DayStatus;
 import 'github_client.dart';
 import 'missed_work.dart';
 import 'program_current.dart';
@@ -249,7 +250,7 @@ in a desktop Claude session — you cannot edit files from here.''';
     final docs = await _docsSection();
     final dump = await _ledgerDump(today);
     final activity = await _activitySection(today);
-    final movesSection = await _movesSection(today);
+    final (todaySection, movesSection) = await _weekSections(today);
     final videoRpe = await _videoRpeSection();
     final sections = [
       systemPrompt,
@@ -258,6 +259,7 @@ in a desktop Claude session — you cannot edit files from here.''';
       '## Coach docs\n\n$docs',
       '## Ledger data (last ${dumpWindow.inDays} days + planned)\n\n$dump',
       ?activity,
+      ?todaySection,
       ?movesSection,
       ?videoRpe,
     ];
@@ -554,21 +556,41 @@ in a desktop Claude session — you cannot edit files from here.''';
   /// Loads the effective week + missed work through the shared
   /// [WeekStateLoader] and renders [renderMovesSection]. Null (section
   /// omitted) on any failure or when there's no program.
-  Future<String?> _movesSection(DateTime today) async {
+  ///
+  /// The same load also renders "## Today's program status" — the shared
+  /// [DayStatus] block the Today card + coach's read use, so the chat
+  /// never nudges an item the card already ticked (e.g. a PM climb done
+  /// in the morning per Whoop).
+  Future<(String?, String?)> _weekSections(DateTime today) async {
     try {
       final state = await weekStateLoader().load(today, withMissed: true);
-      if (state == null) return null;
-      return renderMovesSection(
-        moves: state.moves,
-        skips: state.skips,
-        missed: state.missed,
-        week: state.week,
-        today: today,
+      if (state == null) return (null, null);
+      final status = state.dayStatus(trackSets: views['strength'] != null);
+      return (
+        renderTodayStatusSection(status),
+        renderMovesSection(
+          moves: state.moves,
+          skips: state.skips,
+          missed: state.missed,
+          week: state.week,
+          today: today,
+        ),
       );
     } catch (_) {
-      return null;
+      return (null, null);
     }
   }
+
+  /// "## Today's program status": the shared per-item [DayStatus] block +
+  /// the rules for using it. Pure.
+  static String renderTodayStatusSection(DayStatus status) =>
+      "## Today's program status\n\n"
+      '${status.promptBlock()}\n\n'
+      'This is exactly what the user sees ticked on the Today card. Only '
+      'nudge PENDING items; never suggest repeating or "making sure" of a '
+      'DONE item (a Whoop-detected session is done whatever time it was '
+      'planned for); MOVED / SKIPPED items are not today\'s work. When '
+      "nothing is pending, today's training is complete.";
 
   /// A [WeekStateLoader] over this brain's views + repos (read-only views
   /// such as climbing ride [readOnlyRepo]). Missing views are skipped.

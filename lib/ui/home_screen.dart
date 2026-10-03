@@ -12,6 +12,7 @@ import '../models/quickbooks_config.dart';
 import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
 import '../services/app_config.dart';
+import '../services/app_settings.dart';
 import '../services/connector_registry.dart';
 import '../services/engine.dart';
 import '../services/engine_ledger_connector.dart';
@@ -23,7 +24,7 @@ import 'widgets/log_list_row.dart';
 import 'design/components.dart' show RowGroupCard, SectionHeader;
 import 'design/tokens.dart' show AppSpace;
 import '../services/display_names.dart';
-import 'integrations_screen.dart';
+import 'settings_screen.dart';
 import '../services/heart_rate_service.dart';
 import '../services/integrations/gmail_gateway.dart';
 import '../services/integrations/kaya_gmail.dart';
@@ -279,12 +280,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    AppSettings.weekStartSetting.addListener(_onWeekStartChanged);
     _bootstrap = _initialize();
+  }
+
+  /// The week start changed (Settings screen, or a refresh picked up a
+  /// change made elsewhere): re-plan the week window and refresh every
+  /// week-shaped surface (Week tab goals, Today cards, Progress).
+  void _onWeekStartChanged() {
+    final replan = _replan;
+    if (replan != null) unawaited(replan().catchError((Object _) {}));
+    if (!mounted) return;
+    setState(() {});
+    unawaited(_goalsKey.currentState?.reload());
+    unawaited(_dashboardKey.currentState?.reload());
+    _todayStatusKey.currentState?.refresh();
+    _todayProgramKey.currentState?.reload();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    AppSettings.weekStartSetting.removeListener(_onWeekStartChanged);
     _syncTimer?.cancel();
     _movesSub?.cancel();
     super.dispose();
@@ -336,6 +353,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _appliedSig = await SchemaSync.cachedSignature();
     final views = await SchemaLoader.loadAll();
     final keyJson = await rootBundle.loadString('assets/service-account.json');
+    // Synced settings (app_settings tab): the cached week start loads
+    // BEFORE anything plans a week; the tab re-read runs in the
+    // background and notifies (→ _onWeekStartChanged) on a change.
+    await AppSettings.init(
+      spreadsheetId: assetConfig.spreadsheetId,
+      serviceAccountKeyJson: keyJson,
+    );
+    unawaited(AppSettings.refresh());
     // Working-max controller tabs (WM-2). Cheap to construct — auth is
     // lazy (first snapshot()/append). Feeds the planner's v3 weights, the
     // Week Plan prescription blocks, and the Program screen's
@@ -723,18 +748,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   onPressed: () => setState(() => _bootstrap = _initialize()),
                   tooltip: 'Reload',
                 ),
-                // Integrations (Withings, Whoop, Kaya…) as a settings
-                // gear — moved out of the LOG tab's list 2026-09-25
-                // (user: "'Integrations' doesn't seem like it should
-                // live under 'log'"): it is app setup, not logging.
+                // Settings gear (2026-10-03): app setup — "Week starts
+                // on" + the Integrations (Withings, Whoop, Kaya…; moved
+                // out of the LOG tab's list 2026-09-25 — it is app
+                // setup, not logging).
                 IconButton(
                   icon: const Icon(Icons.settings_outlined),
                   onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute(
-                      builder: (_) => const IntegrationsScreen(),
+                      builder: (_) => SettingsScreen(
+                        programProvider: github == null
+                            ? null
+                            : ProgramProvider(CoachBrain.githubFetcher(github)),
+                      ),
                     ),
                   ),
-                  tooltip: 'Integrations',
+                  tooltip: 'Settings',
                 ),
               ];
               if (snap.connectionState != ConnectionState.done) {

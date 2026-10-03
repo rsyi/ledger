@@ -32,7 +32,7 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
         padding: const EdgeInsets.only(top: 4),
         children: [
           for (final it in integrations)
-            _IntegrationCard(
+            IntegrationCard(
                 integration: it,
                 onChanged: () {
                   if (mounted) setState(() {});
@@ -43,17 +43,20 @@ class _IntegrationsScreenState extends State<IntegrationsScreen> {
   }
 }
 
-class _IntegrationCard extends StatefulWidget {
-  const _IntegrationCard({required this.integration, required this.onChanged});
+/// One integration's row (status · Connect / Sync now · ⋮) — shared by
+/// this screen and the Settings screen's Integrations section.
+class IntegrationCard extends StatefulWidget {
+  const IntegrationCard(
+      {super.key, required this.integration, required this.onChanged});
 
   final Integration integration;
   final VoidCallback onChanged;
 
   @override
-  State<_IntegrationCard> createState() => _IntegrationCardState();
+  State<IntegrationCard> createState() => _IntegrationCardState();
 }
 
-class _IntegrationCardState extends State<_IntegrationCard> {
+class _IntegrationCardState extends State<IntegrationCard> {
   bool _busy = false;
 
   Integration get it => widget.integration;

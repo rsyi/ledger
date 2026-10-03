@@ -10,7 +10,11 @@ import 'package:airledger/services/moves_block.dart';
 import 'package:airledger/services/moves_validation.dart';
 import 'package:airledger/services/input_parser.dart';
 import 'package:airledger/services/program_moves.dart';
-import 'package:airledger/services/program_week.dart';
+import 'package:airledger/services/app_settings_tab.dart' show readWeekStart;
+import 'package:airledger/services/program_current.dart'
+    show currentVersion, weekStartDayOf;
+import 'package:airledger/services/resolved_week.dart';
+import 'package:airledger/services/week_start.dart';
 import 'package:airledger/services/schema_parser.dart';
 import 'package:googleapis/sheets/v4.dart' as gsheets;
 import 'package:googleapis_auth/auth_io.dart';
@@ -38,7 +42,7 @@ import 'missed_work.dart' show loadCoachDocs, readRecords;
 /// briefing text (block stripped) is posted FIRST, then the proposal as
 /// a `kind=proposal` row on the same thread (postSplitBriefing) — so a
 /// failed briefing post leaves no orphan proposal for the next run to
-/// duplicate. Moves are validated against the planning TARGET's Mon–Sun
+/// duplicate. Moves are validated against the planning TARGET's configured
 /// week (--target, default = coach_dump's planningTarget) with the same
 /// rules as the in-app propose_moves tool (moves_validation.dart: dates
 /// in the week, to >= target, to != from, item exists on from_date per
@@ -126,9 +130,11 @@ Future<void> post(List<String> args) async {
     final day = target ?? planningTarget(DateTime.now());
     // The program week is only needed (network reads) when there's a
     // proposal to validate.
-    final week = extractMovesBlock(text).proposal == null
+    final tw = extractMovesBlock(text).proposal == null
         ? null
         : await _targetWeek(day);
+    final week = tw?.week;
+    final wsDay = tw?.weekStartDay ?? DateTime.monday;
     try {
       await postSplitBriefing(
         text,
@@ -140,7 +146,8 @@ Future<void> post(List<String> args) async {
           await appendRow(role!, 'proposal', thread, p.encode());
           print('posted proposal (${p.moves.length} move(s))');
         },
-        validate: (p) => filterValidMoves(p, today: day, week: week),
+        validate: (p) =>
+            filterValidMoves(p, today: day, week: week, weekStartDay: wsDay),
         warn: (m) => stderr.writeln('warn: $m'),
       );
     } on StateError catch (e) {
@@ -154,29 +161,43 @@ Future<void> post(List<String> args) async {
   exit(0);
 }
 
-/// [day]'s effective Mon–Sun week (program.yaml + the program_moves
-/// tab), loaded like tool/missed_work.dart. Null (→ dates-only
-/// validation, warned) when program.yaml is missing; a failed moves read
-/// is an unmoved week.
-Future<Map<DateTime, List<EffectiveItem>>?> _targetWeek(DateTime day) async {
+/// [day]'s effective week — the CONFIGURED week (synced `app_settings`
+/// row > program.yaml `week_start` > Monday) — PLUS next week's days (a
+/// pulled-forward item's from day), from program.yaml + the
+/// program_moves tab, loaded like tool/missed_work.dart. Null week (→
+/// dates-only validation, warned) when program.yaml is missing; a failed
+/// moves read is an unmoved week.
+Future<({Map<DateTime, List<EffectiveItem>>? week, int weekStartDay})>
+    _targetWeek(DateTime day) async {
   final docs = loadCoachDocs();
+  var wsDay = weekStartDayOf(currentVersion(docs.program));
   if (docs.program == null) {
     stderr.writeln('warn: program.yaml not found — moves validated by '
         'date only');
-    return null;
+    return (week: null, weekStartDay: wsDay);
   }
-  var moves = const <String, ProgramMove>{};
+  var all = const <ProgramMove>[];
   try {
     final config = readConfig();
     final api = await sheetsApi(config.keyPath);
+    wsDay = (await readWeekStart(api, config.spreadsheetId,
+            programVersion: currentVersion(docs.program)))
+        .day;
     final rows = await readRecords(api, config.spreadsheetId, 'program_moves');
-    moves = activeMoves(
-        [for (final r in rows) ?ProgramMove.fromRecord(r)], mondayOf(day));
+    all = [for (final r in rows) ?ProgramMove.fromRecord(r)];
   } catch (e) {
     stderr.writeln('warn: program_moves read failed ($e) — validating '
         'against the unmoved week');
   }
-  return effectiveWeek(prescribedWeek(docs, day), moves);
+  final start = weekStartOf(day, wsDay);
+  final next = DateTime(start.year, start.month, start.day + 7);
+  return (
+    week: {
+      ...resolveProgramWeek(docs, start, all, weekStartDay: wsDay).week,
+      ...resolveProgramWeek(docs, next, all, weekStartDay: wsDay).week,
+    },
+    weekStartDay: wsDay,
+  );
 }
 
 /// Appends one coach_chat row (creating the tab + headers if missing).

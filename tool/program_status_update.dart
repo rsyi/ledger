@@ -3,6 +3,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:airledger/services/app_settings_tab.dart' show readWeekStart;
 import 'package:airledger/services/forecast_calibration.dart';
 import 'package:airledger/services/forecast_tab.dart';
 import 'package:airledger/services/nutrition_model.dart';
@@ -22,6 +23,7 @@ import 'package:airledger/services/sim2_harness.dart';
 import 'package:airledger/services/sim2_model.dart' show Sim2Params;
 import 'package:airledger/services/wm_tabs.dart';
 import 'package:airledger/services/working_max.dart';
+import 'package:airledger/services/week_start.dart' show weekEndDay;
 import 'package:googleapis/sheets/v4.dart' as gsheets;
 import 'package:googleapis_auth/auth_io.dart';
 import 'package:yaml/yaml.dart';
@@ -49,11 +51,16 @@ import 'package:yaml/yaml.dart';
 ///   dart run tool/program_status_update.dart --brief   # print top-3 rows + open
 ///                                                        flags as markdown, no write
 ///   dart run tool/program_status_update.dart --dry-run # compute but no write
-///   dart run tool/program_status_update.dart --weekly-brief
-///     # print THIS Mon-Sun week's recomp weekly review markdown
+///   dart run tool/program_status_update.dart --weekly-brief [--if-last-day]
+///     # print THIS week's recomp weekly review markdown
 ///     # (recomp_review.dart), no writes — coach_nightly.sh injects it
-///     # into the Sunday briefing prompt.
-///   --weekly  # force the weekly_review tab write on a non-Sunday
+///     # into the briefing on the week's LAST day (--if-last-day prints
+///     # nothing on any other day).
+///   --weekly  # force the weekly_review tab write on another day
+///
+/// WEEKS (2026-10-03): every week here is the CONFIGURED week
+/// (week_start.dart): the synced `app_settings` row, else program.yaml's
+/// `week_start`, else Monday — Sat–Fri for the user.
 ///
 /// Projection snapshots (phase-projections spec 2026-10-02): the
 /// `projection_snapshots` tab is APPEND-ONLY. At a block's first
@@ -71,9 +78,10 @@ import 'package:yaml/yaml.dart';
 ///     # set's made_at — selection then prefers it; old sets stay as
 ///     # history. Pair with --only-projection-snapshots (+ --dry-run).
 ///
-/// Weekly review (recomp tracking spec 2026-09-27): full runs on
-/// SUNDAYS (or --weekly) also rewrite the `weekly_review` tab — one row
-/// per Mon-Sun week (last 8, newest first) with the generated markdown.
+/// Weekly review (recomp tracking spec 2026-09-27): full runs on the
+/// week's LAST day (or --weekly) also rewrite the `weekly_review` tab —
+/// one row per configured week (last 8, newest first) with the
+/// generated markdown.
 /// The MCP get_weekly_review tool and the coach read that tab.
 ///
 /// Wire into coach_nightly.sh BEFORE the briefing prompt is assembled.
@@ -89,6 +97,7 @@ final coachDir = '$home/repos/airledger-fitness/coach';
 Future<void> main(List<String> args) async {
   final brief = args.contains('--brief');
   final weeklyBrief = args.contains('--weekly-brief');
+  final ifLastDay = args.contains('--if-last-day');
   final forceWeekly = args.contains('--weekly');
   final dryRun = args.contains('--dry-run') || args.contains('--dry');
   final onlySnapshots = args.contains('--only-projection-snapshots');
@@ -282,12 +291,15 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  // Accounting-week start (program.yaml v7 `week_start` — saturday since
-  // the 2026-09-22 amendment). Keys the rollup + flag weeks; program
-  // STRUCTURE (week_type, targets) stays Monday-anchored and accounting
-  // weeks resolve onto it via anchorMondayOf (the contained Monday).
-  final wsDay = weekStartDayOf(
-      programYaml == null ? null : currentVersion(programYaml));
+  // THE week start (week_start.dart: synced `app_settings` row >
+  // program.yaml `week_start` > Monday). Keys the rollup + flag weeks +
+  // weekly review; program STRUCTURE (week_type, targets) stays
+  // Monday-anchored and weeks resolve onto it via anchorMondayOf (the
+  // contained Monday).
+  final ws = await readWeekStart(api, config.spreadsheetId,
+      programVersion:
+          programYaml == null ? null : currentVersion(programYaml));
+  final wsDay = ws.day;
 
   String? Function(DateTime) weekTypeResolver = (m) => null;
   Map<String, Object?>? Function(DateTime) targetsResolver = (m) => null;
@@ -321,8 +333,8 @@ Future<void> main(List<String> args) async {
 
   // -------------------------------------------------------------------------
   // Recomp weekly review inputs (tracking spec 2026-09-27). Assembled
-  // once from the tabs above; Mon-Sun weeks — recomp_review.dart's
-  // header documents why this is NOT the Saturday accounting week.
+  // once from the tabs above; reviewed over the CONFIGURED week (the
+  // same week as every other surface since 2026-10-03).
   // -------------------------------------------------------------------------
   DateTime? parseSheetDateTime(String s) =>
       s.isEmpty ? null : (DateTime.tryParse(s) ?? parseSheetDate(s));
@@ -492,16 +504,18 @@ Future<void> main(List<String> args) async {
     );
   }
 
-  // --weekly-brief: print THIS Mon-Sun week's review markdown, no writes
-  // (coach_nightly.sh injects it into the Sunday briefing prompt).
+  // --weekly-brief: print THIS week's review markdown, no writes
+  // (coach_nightly.sh injects it on the week's last day; with
+  // --if-last-day it prints nothing on other days).
   // --week=YYYY-MM-DD reviews the week containing that date instead
   // (sampling / backfills).
   if (weeklyBrief) {
-    var monday = mondayOf(DateTime.now());
+    if (ifLastDay && DateTime.now().weekday != weekEndDay(wsDay)) return;
+    var monday = weekStartOf(DateTime.now(), wsDay);
     for (final a in args) {
       if (a.startsWith('--week=')) {
         final d = DateTime.tryParse(a.substring('--week='.length));
-        if (d != null) monday = mondayOf(d);
+        if (d != null) monday = weekStartOf(d, wsDay);
       }
     }
     final readingValues = await tab(readingsTabName);
@@ -1019,14 +1033,14 @@ Future<void> main(List<String> args) async {
   }
 
   // -------------------------------------------------------------------------
-  // Weekly review rows (Sundays or --weekly): last 8 Mon-Sun weeks,
-  // newest first, generated against the full history + ALL readings
-  // (tab + this run's new ones).
+  // Weekly review rows (the week's last day or --weekly): last 8
+  // configured weeks, newest first, generated against the full history
+  // + ALL readings (tab + this run's new ones).
   // -------------------------------------------------------------------------
-  final isSunday = DateTime.now().weekday == DateTime.sunday;
+  final isLastDay = DateTime.now().weekday == weekEndDay(wsDay);
   List<List<Object?>>? weeklyReviewRows;
-  if (isSunday || forceWeekly) {
-    final thisMonday = mondayOf(DateTime.now());
+  if (isLastDay || forceWeekly) {
+    final thisMonday = weekStartOf(DateTime.now(), wsDay);
     weeklyReviewRows = [
       for (var w = 0; w < 8; w++)
         () {
@@ -1142,7 +1156,7 @@ Future<void> main(List<String> args) async {
   print('wrote coach_flags: ${cfRows.length} flag rows');
 
   // -------------------------------------------------------------------------
-  // REPLACE-ALL write weekly_review (Sundays / --weekly only)
+  // REPLACE-ALL write weekly_review (week's last day / --weekly only)
   // -------------------------------------------------------------------------
   if (weeklyReviewRows != null) {
     await _replaceTab(

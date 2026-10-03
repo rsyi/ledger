@@ -7,7 +7,10 @@ import 'package:airledger/services/intent_docs.dart';
 import 'package:airledger/services/missed_work.dart';
 import 'package:airledger/services/prescribed_exercises.dart';
 import 'package:airledger/services/program_moves.dart';
-import 'package:airledger/services/program_week.dart';
+import 'package:airledger/services/app_settings_tab.dart' show readWeekStart;
+import 'package:airledger/services/program_current.dart' show currentVersion;
+import 'package:airledger/services/resolved_week.dart';
+import 'package:airledger/services/week_start.dart';
 import 'package:airledger/services/whoop_activity.dart';
 import 'package:airledger/services/working_sets.dart';
 import 'package:googleapis/sheets/v4.dart' as gsheets;
@@ -31,11 +34,15 @@ import 'coach_dump.dart' as dump;
 ///   MOVES THIS WEEK:    active moves (item: Wed 9/30 → Fri 10/2 (source))
 ///   SKIPPED THIS WEEK:  items the user skipped on purpose + the reason
 ///                       (program_moves source=skip — never missed)
-///   REMAINING DAYS:     each day --date..Sun with its effective items
-///   EXPIRING END OF WEEK: (--date a Sunday) what expires at the end of
-///                       that Sunday — "(tonight)" only when run ON it
-///   EXPIRED LAST WEEK:  (--date a Monday) last week's unplaced misses —
-///                       judged through Saturday (Sunday = rest day)
+///   REMAINING DAYS:     each day --date..week end with its effective items
+///   EXPIRING END OF WEEK: (--date the week's last day) what expires at
+///                       the end of it — "(tonight)" only when run ON it
+///   EXPIRED LAST WEEK:  (--date the week's first day) last week's
+///                       unplaced misses — judged through its last day
+///
+/// Weeks are the CONFIGURED week (week_start.dart): the synced
+/// `app_settings` row, else program.yaml's `week_start`, else Monday —
+/// Sat–Fri for the user since 2026-10-03.
 final coachDir = '${dump.home}/repos/airledger-fitness/coach';
 
 const _wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -79,6 +86,9 @@ Future<void> main(List<String> args) async {
   final whoop = await rows('whoop_workouts');
   final kaya = await rows('climbing'); // kaya_ascents tab
   final moveRows = await rows('program_moves');
+  final ws = await readWeekStart(api, config.spreadsheetId,
+      programVersion: currentVersion(docs.program));
+  final wsDay = ws.day;
 
   final allMoves = [for (final r in moveRows) ?ProgramMove.fromRecord(r)];
   // Working sets only — warm-ups never credit prescribed items.
@@ -104,10 +114,12 @@ Future<void> main(List<String> args) async {
 
   ({MissedWork missed, Map<String, ProgramMove> moves,
       Map<String, ProgramMove> skips,
-      Map<DateTime, List<EffectiveItem>> week}) evaluate(DateTime today) {
-    final moves = activeMoves(allMoves, mondayOf(today));
-    final skips = activeSkips(allMoves, mondayOf(today));
-    final week = effectiveWeek(prescribedWeek(docs, today), moves);
+      Map<DateTime, List<EffectiveItem>> week}) evaluate(DateTime today,
+      {bool judgeToday = false}) {
+    final rw = resolveProgramWeek(docs, today, allMoves, weekStartDay: wsDay);
+    final moves = rw.moves;
+    final skips = rw.skips;
+    final week = rw.week;
     final missed = detectMissedWork(
       week: week,
       strengthRows: strengthSets,
@@ -115,13 +127,16 @@ Future<void> main(List<String> args) async {
       cardio4x4Days: cardioDays,
       today: today,
       skipped: skips.keys.toSet(),
+      weekStartDay: wsDay,
+      judgeToday: judgeToday,
     );
     return (missed: missed, moves: moves, skips: skips, week: week);
   }
 
   final r = evaluate(date);
   print('DATE: ${_ymd(date)} (${_label(date)}) — week of '
-      '${_label(mondayOf(date))}');
+      '${_label(weekStartOf(date, wsDay))}–${_label(weekEndOf(date, wsDay))} '
+      '(starts ${weekdayName(wsDay)}; ${ws.source.name})');
 
   print('\nMISSED THIS WEEK:');
   _printMissed(r.missed);
@@ -163,19 +178,20 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  // Keyed off the RUN day vs --date: a Saturday-night run planning
-  // Sunday must not say "tonight".
-  final expiry = expiryLabel(date, DateTime.now());
+  // Keyed off the RUN day vs --date: a run the night before planning the
+  // week's last day must not say "tonight".
+  final expiry = expiryLabel(date, DateTime.now(), weekStartDay: wsDay);
   if (expiry != null) {
     print('\nEXPIRING END OF WEEK:');
     print('(unplaced work $expiry; next week starts clean)');
     _printMissed(r.missed, withKeys: false, suffix: ' — $expiry');
   }
-  if (date.weekday == DateTime.monday) {
-    final lastSunday = DateTime(date.year, date.month, date.day - 1);
+  if (date.weekday == wsDay) {
+    final lastDay = DateTime(date.year, date.month, date.day - 1);
     print('\nEXPIRED LAST WEEK:');
-    print('(week of ${_label(mondayOf(lastSunday))}, judged through Sat)');
-    _printMissed(evaluate(lastSunday).missed, withKeys: false);
+    print('(week of ${_label(weekStartOf(lastDay, wsDay))}, judged through '
+        '${_label(lastDay)})');
+    _printMissed(evaluate(lastDay, judgeToday: true).missed, withKeys: false);
   }
   exit(0);
 }

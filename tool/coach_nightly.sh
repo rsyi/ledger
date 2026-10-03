@@ -39,15 +39,14 @@ PROGRAM_SLICE="$(cd "$APP" && dart run tool/program_slice.dart --date "$TARGET" 
 
 PROGRAM_STATUS_BRIEF="$(cd "$APP" && dart run tool/program_status_update.dart --brief 2>/dev/null)" || true
 
-# Sunday: the recomp weekly review (recomp_review.dart) for the Mon-Sun
-# week just finishing — the full update above also rewrote the
-# weekly_review tab.
-WEEKLY_REVIEW=""
-if [ "$(date +%u)" = "7" ]; then
-  WEEKLY_REVIEW="$(cd "$APP" && dart run tool/program_status_update.dart --weekly-brief 2>/dev/null)" || true
-fi
+# The week's LAST day (configured week start — app Settings / the synced
+# app_settings tab, else program.yaml week_start; Fri for a Sat start):
+# the recomp weekly review (recomp_review.dart) for the week just
+# finishing — the full update above also rewrote the weekly_review tab.
+# --if-last-day makes the tool print nothing on other days.
+WEEKLY_REVIEW="$(cd "$APP" && dart run tool/program_status_update.dart --weekly-brief --if-last-day 2>/dev/null)" || true
 
-# Missed work this Mon-Sun week (+ moves, remaining days, expiry) for
+# Missed work this week (+ moves, remaining days, expiry) for
 # the coach's carryover proposal. Read-only; a failure must never stop
 # the briefing.
 MISSED="$(cd "$APP" && dart run tool/missed_work.dart --date "$TARGET" 2>/dev/null)" || true

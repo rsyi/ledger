@@ -66,7 +66,8 @@ List<ProgramMove> travelWeekMoves() {
 /// Sat → Mon rows. Under a SATURDAY week start (2026-10-03) Sat 10/10 is
 /// NEXT week, so these (and Seated cable row / Face pulls) are
 /// pulled-forward moves; Norwegian Tue 10/6 → Sun 10/11 becomes a LATER
-/// move across the boundary (ignored).
+/// move across the boundary (ignored) — and on 2026-10-03 the user moved
+/// the Norwegian to MON 10/5 as a PM session (newest row, latest-wins).
 List<ProgramMove> liveTravelMoves() => [
       ...travelWeekMoves(),
       for (final (i, item) in ['OHP heavy', 'OHP back-offs'].indexed)
@@ -80,4 +81,14 @@ List<ProgramMove> liveTravelMoves() => [
           createdAt: DateTime(2026, 10, 2, 19, 22, i),
           note: 'travel Wed–Sat — OHP on Tue to shorten the gap to next Sat',
         ),
+      ProgramMove(
+        id: 'norwegian-mon',
+        to: _d(5),
+        from: _d(6),
+        item: 'Norwegian',
+        period: 'PM',
+        source: 'manual',
+        createdAt: DateTime(2026, 10, 3, 8),
+        note: 'travel — 4x4 Monday PM',
+      ),
     ];

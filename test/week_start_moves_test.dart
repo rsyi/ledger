@@ -155,9 +155,15 @@ void main() {
       // In-week moves unchanged.
       expect(a[keyOf('Bench heavy', 7)]?.to, d(5));
       expect(a[keyOf('Deadlift heavy', 9)]?.to, d(6));
-      // Norwegian Tue → Sun 10/11 is a LATER move across the boundary:
-      // ignored, so the 4x4 stays home on Tue.
-      expect(a.containsKey(keyOf('Norwegian', 6)), isFalse);
+      // Norwegian: the newest row (Tue → Mon 10/5, PM) wins; the older
+      // Tue → Sun 10/11 row is a LATER move across the boundary and was
+      // dropped before latest-wins either way.
+      expect(a[keyOf('Norwegian', 6)]?.to, d(5));
+      expect(a[keyOf('Norwegian', 6)]?.period, 'PM');
+      final withoutMon =
+          activeMoves(travelWeekMoves(), d(5), weekStartDay: sat);
+      expect(withoutMon.containsKey(keyOf('Norwegian', 6)), isFalse,
+          reason: 'Tue → Sun 10/11 alone: ignored, 4x4 stays home');
       // Skips: this week's by date; the Sat 10/10 ones are next week's.
       final skips = activeSkips(all, d(5), weekStartDay: sat);
       expect(skips.keys.any((k) => k.startsWith('2026-10-10')), isFalse);
@@ -169,6 +175,22 @@ void main() {
         'external rotations',
       });
     });
+  });
+
+  test('a move\'s period relabels the item on its target day (AM 4x4 '
+      'moved as a PM session); identity kept via origin', () {
+    final norwegian = PrescribedItem(
+        name: 'Norwegian', scheme: '4x4', period: 'AM', targetSets: 1);
+    final m = ProgramMove(
+        id: 'n', to: d(5), from: d(6), item: 'Norwegian', period: 'PM');
+    final w = effectiveWeek({
+      d(5): <PrescribedItem>[],
+      d(6): [norwegian],
+    }, {m.key: m});
+    final moved = w[d(5)]!.single;
+    expect(moved.item.period, 'PM');
+    expect(identical(moved.origin, norwegian), isTrue);
+    expect(w[d(6)]!.single.item.period, 'AM'); // the ghost keeps home's
   });
 
   group('checkProposedMove (Saturday weeks, today Tue 10/6)', () {

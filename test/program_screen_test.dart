@@ -456,14 +456,17 @@ void main() {
     expect(inDay('2026-10-06',
             find.textContaining('Cable Face Pull', findRichText: true)),
         findsOneWidget);
-    // Norwegian stays home (Tue→Sun 10/11 crosses into next week: not
-    // allowed for a LATER move).
+    // The old Tue→Sun 10/11 row crosses into next week (a LATER move):
+    // dropped.
     expect(inDay('2026-10-06', find.text('Norwegian → Sun')), findsNothing);
 
-    expect(
-        inDay('2026-10-06',
-            find.text('Deadlift heavy · press heavy · 4x4 · hard climb')),
+    expect(inDay('2026-10-06', find.text('Deadlift heavy · press heavy · hard climb')),
         findsOneWidget);
+    // The Norwegian moved Tue → Mon PM (newest row, latest-wins over the
+    // dropped Tue → Sun 10/11 one).
+    expect(inDay('2026-10-05', find.text('Squat heavy · bench heavy · 4x4')),
+        findsOneWidget);
+    expect(inDay('2026-10-06', find.text('Norwegian → Mon')), findsOneWidget);
     // Wed–Fri: travel.
     for (final d in ['07', '08', '09']) {
       expect(inDay('2026-10-$d', find.text('Skipped — travel Wed–Sat')),

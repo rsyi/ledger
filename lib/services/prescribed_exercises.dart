@@ -53,6 +53,17 @@ class PrescribedItem {
         creditNote: creditNote,
       );
 
+  /// The same item planned in another half of the day (a move's
+  /// `period` — e.g. a 4x4 moved onto a lifting morning as a PM session).
+  PrescribedItem withPeriod(String p) => PrescribedItem(
+        name: name,
+        scheme: scheme,
+        period: p,
+        targetSets: targetSets,
+        loggedSets: loggedSets,
+        creditNote: creditNote,
+      );
+
   /// Marks the item complete on an external source's say-so.
   PrescribedItem withCredit(String note) => PrescribedItem(
         name: name,

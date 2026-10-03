@@ -254,7 +254,7 @@ List<Map<String, Object?>> effectivePlannedEntries(
       if (from == null || skipped(local, e.item)) continue;
       final hk = _ymd(from);
       final hItems = itemsByKey[hk] ?? const <PrescribedItem>[];
-      final hi = hItems.indexWhere((it) => identical(it, e.item));
+      final hi = hItems.indexWhere((it) => identical(it, e.origin));
       if (hi < 0) continue;
       final hWorking = workingByKey[hk] ?? const <Map<String, Object?>>[];
       final hOwn = owner[hk] ?? const <int>[];

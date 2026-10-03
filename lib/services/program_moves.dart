@@ -265,13 +265,22 @@ class EffectiveItem {
 
   final ProgramMove? move;
 
+  /// On a moved-in entry whose move names a different AM/PM [period]:
+  /// the PRESCRIBED item (identity — what the home day's pricing keyed
+  /// on); [item] then carries the move's period for display.
+  final PrescribedItem? homeItem;
+
   const EffectiveItem({
     required this.item,
     required this.home,
     this.movedTo,
     this.movedFrom,
     this.move,
+    this.homeItem,
   });
+
+  /// The prescribed item this entry stems from (identity-stable).
+  PrescribedItem get origin => homeItem ?? item;
 
   bool get isGhost => movedTo != null;
 }
@@ -314,9 +323,19 @@ Map<DateTime, List<EffectiveItem>> effectiveWeek(
       used.add(key);
       out[day]!
           .add(EffectiveItem(item: it, home: day, movedTo: m.to, move: m));
+      // The move's period (AM/PM) wins on the target day — a 4x4 moved
+      // onto a lifting morning as a PM session reads PM there.
+      final p = m.period.trim().toUpperCase();
+      final relabel = (p == 'AM' || p == 'PM') && p != it.period;
       incoming.add((
         m.to,
-        EffectiveItem(item: it, home: day, movedFrom: day, move: m),
+        EffectiveItem(
+          item: relabel ? it.withPeriod(p) : it,
+          home: day,
+          movedFrom: day,
+          move: m,
+          homeItem: relabel ? it : null,
+        ),
       ));
     }
   }

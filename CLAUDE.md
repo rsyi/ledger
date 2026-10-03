@@ -877,6 +877,51 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     readiness (`editable: false`; Whoop owns them; data intact).
   - USER ONE-TIME: Integrations → Whoop (sleep + recovery) ⋮ → Full
     reconcile to re-date existing rows.
+- **Week-start setting + pull-forward moves (2026-10-03, user-directed,
+  LIVE — APK installed, MCP deployed, setting written)**: ONE week
+  start everywhere. Resolver = `lib/services/week_start.dart`
+  (`resolveWeekStart`): the SYNCED `app_settings` tab row `week_start`
+  (key/value/updated_at; direct Sheets, NOT an engine view — single
+  mutable config row, no schema/APK rollout gate; `app_settings_tab.dart`
+  writes only at explicit ranges, header written/INSERTED first — the
+  program_moves header-loss guard) > program.yaml `week_start` (now only
+  the DEFAULT) > Monday. Live value: `saturday` (weeks Sat–Fri; written
+  via `dart run tool/app_setting.dart week_start saturday`). App:
+  `AppSettings` (app_settings.dart — SharedPreferences cache loaded at
+  bootstrap before planning, background refresh, ValueNotifier →
+  home re-plans + reloads); `effectiveWeekStartDay(program)` everywhere
+  (null program → last-seen default). Settings screen (home gear, now
+  "Settings": Week starts on picker with "set here / from program
+  default" + the Integrations cards). Readers: WeekStateLoader
+  (`weekStartSetting`), goals (program sets + muscle stimulus count the
+  SAME week as climbing/cardio — the "Counted Sat–Fri" note is gone;
+  header "Sat Oct 3 – Fri Oct 9"), Program screen paging/header,
+  program day card ("Missed this week · expires end of Fri"), week
+  planner (plan_v10), coach moves section + propose_moves, proposal
+  staleness, recomp weekly review (Mon–Sun retired), domain
+  sessions/week + Wilks, tool/missed_work + coach_msg +
+  program_status_update (`readWeekStart`; weekly review + briefing
+  injection on the week's LAST day via `--if-last-day`), MCP
+  (`src/week_start.ts` twin: moves_this_week gains `week {start, end,
+  starts_on}`, flags_open window). NOT driven by it (training calendar):
+  block/week_type anchors (`anchorMondayOf`), the cut wave's
+  `anchor_monday`, volume ramp, forecast/sim ISO buckets, wm two-signals.
+  `program_week.mondayOf` is GONE — callers pick the week start.
+  MOVES (`isAllowedMove`, Dart + TS twins): same week either way, or
+  PULLED FORWARD ≤7 days across the boundary; a later move never crosses
+  the week end (dropped before latest-wins). `resolved_week.dart`
+  (`resolveProgramWeek`, pure — tools use it) = moves touching the week +
+  next-week home days (`pulledInHomeDays`/`prescribedWeek extraDays`);
+  `effectivePricedWeek` (effective_plan.dart, app-only — pricing pulls
+  in Flutter via plan_store; keep tools off it). Move-to sheet: item's
+  week + (for next-week items) this week's remaining days as "earlier —
+  pull forward". A move's AM/PM `period` labels the item on its target
+  day (`EffectiveItem.origin` keeps pricing identity). Live travel week
+  under Sat start: Sat 10/3 own OHP day (Face pulls pulled to Fri 10/2),
+  Sun rest, Mon squat + Wed bench/pull-ups + Norwegian PM, Tue Fri
+  deadlift/RDL + NEXT Sat's OHP/row/face pulls + hard climb, Wed–Fri
+  travel skips; Sat 10/10 = moved-out + skipped; the old Tue→Sun 10/11
+  Norwegian row is now an invalid later move (superseded anyway).
 - **Template retire — FULL (2026-09-30, Phase C; user-approved)**: the
   workout-template concept is gone everywhere. WHY: program.yaml v12+
   `routine:` (base week + phase_overrides) is the single source of the

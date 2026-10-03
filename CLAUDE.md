@@ -831,6 +831,14 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   + Undo skip (deletes the rows), not counted in k / N; CoachBrain +
   tool/missed_work.dart print SKIPPED THIS WEEK; MCP moves_this_week
   returns `skipped: [{item,date,reason}]` (deployed).
+  PROGRAM SCREEN + PLANNER apply moves/skips too (2026-10-02 fix — both
+  priced the raw week): `effective_plan.dart` `effectivePlannedEntries`
+  relocates the priced week (items own their matchItemLines lines on the
+  HOME day; moved-in sets keep home pricing + get re-spliced warm-ups;
+  moved-out/skipped sets drop). Screen: "· from Wed" tags, muted
+  "… → Mon" / "Skipped: …" notes, all-skipped days "Skipped — <reason>".
+  Planner plan_v9: same transform, per-day signature folds in
+  `dayMoveKeys`; re-runs on program_moves create/delete + app resume.
 - **Whoop activity layer (2026-10-01, Part 1; spec/plan in
   docs/superpowers/{specs,plans}/2026-10-01-whoop-activity-layer*)**:
   Whoop is the source of truth that a session HAPPENED (+ strain); Kaya

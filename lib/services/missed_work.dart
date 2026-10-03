@@ -1,4 +1,6 @@
-/// Missed-work detector over the effective (post-moves) Mon–Sun week —
+/// Missed-work detector over the effective (post-moves) week — the
+/// CONFIGURED week ([weekStartDay], week_start.dart; Saturday for the
+/// user since 2026-10-03) —
 /// spec 2026-10-02-missed-work-carryover-design §3.
 ///
 /// An item is MISSED when it was due on a day strictly before today and
@@ -9,7 +11,7 @@
 ///     item. Pass 1: each day's items claim that day's sets via
 ///     [allocateDay] (the same allocation the program day card shows),
 ///     so today's work is today's, not a makeup. Pass 2: past-due
-///     shortfalls draw on the week's unclaimed (Mon..today) sets in day
+///     shortfalls draw on the week's unclaimed (week start..today) sets in day
 ///     order — STRONG matches only (`loggedCoversPrescribed`), so one
 ///     shared token ("triceps") can't credit a different movement.
 ///   * climb items (`isClimbItem`) — sessions: one climb day covers one
@@ -25,7 +27,8 @@ library;
 
 import 'prescribed_exercises.dart';
 import 'program_moves.dart' show EffectiveItem, skipKey;
-import 'program_week.dart' show dayOnly, mondayOf;
+import 'program_week.dart' show dayOnly;
+import 'week_start.dart';
 import 'whoop_activity.dart' show isClimbItem;
 
 /// One prescribed item that was due before today and isn't covered.
@@ -60,7 +63,7 @@ class MissedWork {
   /// Due before today, not done — day order, then program order.
   final List<MissedItem> missed;
 
-  /// today..Sunday (local midnights) — where missed work can still go.
+  /// today..week end (local midnights) — where missed work can still go.
   final List<DateTime> remainingDays;
 
   const MissedWork({required this.missed, required this.remainingDays});
@@ -83,11 +86,13 @@ const _wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 String _dayLabel(DateTime d) => '${_wd[d.weekday - 1]} ${d.month}/${d.day}';
 
 /// The nightly's expiry wording for a planning [target] planned on
-/// [runDay] (spec §3: unplaced work expires at the end of Sunday). Null
-/// unless [target] is a Sunday — a Saturday-night run planning Sunday
-/// says "expires end of Sun 10/4"; a Sunday run adds "(tonight)".
-String? expiryLabel(DateTime target, DateTime runDay) {
-  if (target.weekday != DateTime.sunday) return null;
+/// [runDay] (spec §3: unplaced work expires at the end of the week's
+/// LAST day — Friday for a Saturday-start week). Null unless [target] is
+/// that last day — a Thursday-night run planning Friday says "expires
+/// end of Fri 10/9"; a Friday run adds "(tonight)".
+String? expiryLabel(DateTime target, DateTime runDay,
+    {int weekStartDay = DateTime.monday}) {
+  if (target.weekday != weekEndDay(weekStartDay)) return null;
   final tonight = dayOnly(runDay) == dayOnly(target);
   return 'expires end of ${_dayLabel(target)}${tonight ? ' (tonight)' : ''}';
 }
@@ -220,7 +225,10 @@ class _Slot {
   bool get short => got < need;
 }
 
-/// Detects missed work for [today]'s Mon–Sun week. [strengthRows] is one
+/// Detects missed work for [today]'s [weekStartDay] week. [judgeToday]
+/// also counts [today]'s own items as due (the week's closing verdict —
+/// tool/missed_work.dart's EXPIRED LAST WEEK, judged through the last
+/// day). [strengthRows] is one
 /// entry per logged set; [climbDays] is Part 1's `climbDaysUnion`.
 /// [skipped] holds [skipKey]s (day|item) of intentionally skipped items —
 /// they take no slot (not missed, claim no sets).
@@ -231,14 +239,17 @@ MissedWork detectMissedWork({
   required Set<DateTime> cardio4x4Days,
   required DateTime today,
   Set<String> skipped = const {},
+  int weekStartDay = DateTime.monday,
+  bool judgeToday = false,
 }) {
   final t = dayOnly(today);
-  final mon = mondayOf(t);
+  bool due(DateTime d) => judgeToday ? !d.isAfter(t) : d.isBefore(t);
   final remaining = [
-    for (var i = t.weekday - 1; i < 7; i++)
-      DateTime(mon.year, mon.month, mon.day + i),
+    for (final d in weekDaysOf(t, weekStartDay))
+      if (!d.isBefore(t)) d,
   ];
   final slots = _allocateWeek(
+    weekStartDay: weekStartDay,
     week: week,
     strengthRows: strengthRows,
     climbDays: climbDays,
@@ -246,11 +257,12 @@ MissedWork detectMissedWork({
     today: t,
     skipped: skipped,
     wholeWeek: false,
+    judgeToday: judgeToday,
   );
   return MissedWork(
     missed: [
       for (final s in slots)
-        if (s.day.isBefore(t) && s.short)
+        if (due(s.day) && s.short)
           MissedItem(
             item: s.e.item.withLogged(s.kind == 'lift' ? s.got : 0),
             day: s.day,
@@ -281,8 +293,8 @@ class ItemCredit {
   bool get short => credited < target;
 }
 
-/// Every live (non-ghost, non-skipped) LIFT item of [today]'s Mon–Sun
-/// week, Mon..Sun, with the working sets credited to it — the Week tab's
+/// Every live (non-ghost, non-skipped) LIFT item of [today]'s
+/// [weekStartDay] week, in day order, with the working sets credited to it — the Week tab's
 /// "program sets per lift" source. The SAME allocation as
 /// [detectMissedWork] (per-day exclusive [allocateDay], then past-due
 /// shortfalls draw on the week's spare strong matches), so an item this
@@ -296,8 +308,10 @@ List<ItemCredit> weekLiftCredits({
   required List<({DateTime date, String exercise})> strengthRows,
   required DateTime today,
   Set<String> skipped = const {},
+  int weekStartDay = DateTime.monday,
 }) {
   final slots = _allocateWeek(
+    weekStartDay: weekStartDay,
     week: week,
     strengthRows: strengthRows,
     climbDays: const {},
@@ -317,7 +331,7 @@ List<ItemCredit> weekLiftCredits({
   ];
 }
 
-/// The shared week allocation. [wholeWeek] false = slots for Mon..today
+/// The shared week allocation. [wholeWeek] false = slots for week start..today
 /// only (the detector); true = every day of the week plus the early-work
 /// pass (program progress). Slots come back in day then program order.
 List<_Slot> _allocateWeek({
@@ -328,14 +342,16 @@ List<_Slot> _allocateWeek({
   required DateTime today,
   required Set<String> skipped,
   required bool wholeWeek,
+  required int weekStartDay,
+  bool judgeToday = false,
 }) {
   final t = today;
-  final mon = mondayOf(t);
-  final sun = DateTime(mon.year, mon.month, mon.day + 6);
+  final mon = weekStartOf(t, weekStartDay); // the week's first day
+  final sun = weekEndOf(t, weekStartDay); // ...and its last
   bool inWeekToDate(DateTime d) => !d.isBefore(mon) && !d.isAfter(t);
   bool slotDay(DateTime d) =>
       !d.isBefore(mon) && !d.isAfter(wholeWeek ? sun : t);
-  // Slots for Mon..today (or the whole week), day order then program
+  // Slots for week start..today (or the whole week), day order then program
   // order. Ghosts never count.
   final days = week.keys.map(dayOnly).where(slotDay).toSet().toList()
     ..sort();
@@ -428,7 +444,7 @@ List<_Slot> _allocateWeek({
   // Pass 2: past-due shortfalls draw on the week's spare work, in day
   // order. Today's slots aren't due, so they don't compete here.
   for (final s in slots) {
-    if (!s.day.isBefore(t)) continue;
+    if (judgeToday ? s.day.isAfter(t) : !s.day.isBefore(t)) continue;
     if (s.kind == 'lift') {
       claimSpareLift(s);
     } else {

@@ -3,8 +3,12 @@
 /// (tool/coach_msg.dart --split-moves) run the SAME rules, so a proposal
 /// card can never say "Scheduled" for a move the resolver then ignores:
 ///
-/// * from and to inside [today]'s Mon–Sun week, to not before today,
-///   to != from;
+/// * to inside [today]'s week (the CONFIGURED week — [weekStartDay],
+///   week_start.dart), not before today, to != from;
+/// * from inside the same week — or, PULLING FORWARD (2026-10-03), in a
+///   later week with to at most `pullForwardMaxDays` (7) days earlier
+///   ([isAllowedMove]). Pushing work later never crosses the week end,
+///   so missed work still expires then;
 /// * the item exists on from_date in the program: prescribed there
 ///   (case-insensitive exact name), or currently LIVING there after an
 ///   earlier move — then the move is re-keyed to the item's home day,
@@ -15,8 +19,9 @@
 library;
 
 import '../models/coach_proposal.dart';
-import 'program_moves.dart' show EffectiveItem;
-import 'program_week.dart' show dayOnly, mondayOf;
+import 'program_moves.dart' show EffectiveItem, isAllowedMove, pullForwardMaxDays;
+import 'program_week.dart' show dayOnly;
+import 'week_start.dart';
 
 String _ymd(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
     '${d.month.toString().padLeft(2, '0')}-'
@@ -27,7 +32,8 @@ const _wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 String _norm(String s) => s.toLowerCase().trim();
 
 /// Validates [m] against [today]'s week and, when [week] (the effective
-/// Mon–Sun week of [today]) is non-null, against the program's items.
+/// week of [today] — plus NEXT week's days, so a pulled-forward item's
+/// from day can be checked) is non-null, against the program's items.
 /// Returns the normalized move (canonical item name, home-day from).
 /// Throws a [StateError] prefixed with [label] — model-visible, so it can
 /// retry. A null [week] (program unavailable) skips the item check.
@@ -36,22 +42,28 @@ ProposedMove checkProposedMove(
   required DateTime today,
   Map<DateTime, List<EffectiveItem>>? week,
   String label = 'move',
+  int weekStartDay = DateTime.monday,
 }) {
   final t = dayOnly(today);
-  final mon = mondayOf(t);
-  final sun = DateTime(mon.year, mon.month, mon.day + 6);
+  final mon = weekStartOf(t, weekStartDay); // the week's first day
+  final sun = weekEndOf(t, weekStartDay); // ...and its last
   bool inWeek(DateTime d) => !d.isBefore(mon) && !d.isAfter(sun);
   final range = '${_ymd(mon)}..${_ymd(sun)}';
   final from = dayOnly(m.from);
   final to = dayOnly(m.to);
   if (m.item.trim().isEmpty) throw StateError('$label.item is required');
-  if (!inWeek(from)) {
-    throw StateError('$label.from_date ${_ymd(from)} is outside this '
-        'week ($range)');
-  }
   if (!inWeek(to)) {
     throw StateError('$label.to_date ${_ymd(to)} is outside this '
-        'week ($range) — moves stay within the week');
+        'week ($range) — moves land within the week');
+  }
+  final pulled = from.isAfter(sun);
+  if (!inWeek(from) &&
+      !(pulled && isAllowedMove(from, to, weekStartDay: weekStartDay))) {
+    throw StateError(pulled
+        ? '$label.from_date ${_ymd(from)} is too far ahead — work can be '
+            'pulled forward from next week at most $pullForwardMaxDays '
+            'days earlier'
+        : '$label.from_date ${_ymd(from)} is outside this week ($range)');
   }
   if (to.isBefore(t)) {
     throw StateError('$label.to_date ${_ymd(to)} is in the past — '
@@ -88,6 +100,11 @@ ProposedMove checkProposedMove(
           'moving it back home is not a proposal — leave it out or pick '
           'another day');
     }
+    if (!isAllowedMove(home, to, weekStartDay: weekStartDay)) {
+      throw StateError('$label: "${e.item.name}" (program day '
+          '${_ymd(home)}) can\'t go to ${_ymd(to)} — later moves stay '
+          'within its week; earlier ones at most $pullForwardMaxDays days');
+    }
     return ProposedMove(
       item: e.item.name,
       from: home,
@@ -115,13 +132,17 @@ ProposedMove checkProposedMove(
   MovesProposal p, {
   required DateTime today,
   Map<DateTime, List<EffectiveItem>>? week,
+  int weekStartDay = DateTime.monday,
 }) {
   final kept = <ProposedMove>[];
   final warnings = <String>[];
   for (var i = 0; i < p.moves.length; i++) {
     try {
       kept.add(checkProposedMove(p.moves[i],
-          today: today, week: week, label: 'moves[$i]'));
+          today: today,
+          week: week,
+          label: 'moves[$i]',
+          weekStartDay: weekStartDay));
     } on StateError catch (e) {
       warnings.add(e.message);
     }

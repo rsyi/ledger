@@ -59,3 +59,25 @@ List<ProgramMove> travelWeekMoves() {
     skip('External rotations', 10),
   ];
 }
+
+/// [travelWeekMoves] + the two LATER rows the user added on 2026-10-02
+/// 19:22 (live sheet): OHP heavy + back-offs Sat 10/10 → Tue 10/6 ("OHP
+/// on Tue to shorten the gap to next Sat") — superseding the earlier
+/// Sat → Mon rows. Under a SATURDAY week start (2026-10-03) Sat 10/10 is
+/// NEXT week, so these (and Seated cable row / Face pulls) are
+/// pulled-forward moves; Norwegian Tue 10/6 → Sun 10/11 becomes a LATER
+/// move across the boundary (ignored).
+List<ProgramMove> liveTravelMoves() => [
+      ...travelWeekMoves(),
+      for (final (i, item) in ['OHP heavy', 'OHP back-offs'].indexed)
+        ProgramMove(
+          id: 'late$i',
+          to: _d(6),
+          from: _d(10),
+          item: item,
+          period: 'AM',
+          source: 'manual',
+          createdAt: DateTime(2026, 10, 2, 19, 22, i),
+          note: 'travel Wed–Sat — OHP on Tue to shorten the gap to next Sat',
+        ),
+    ];

@@ -6,6 +6,9 @@
 /// map sheet rows into the input types and render the outputs.
 library;
 
+import 'week_start.dart' show weekStartOf;
+export 'week_start.dart' show weekStartOf;
+
 // ---------------------------------------------------------------------------
 // Input types
 // ---------------------------------------------------------------------------
@@ -418,19 +421,10 @@ class WeeklyMetrics {
 double? _maxOf(List<double> xs) =>
     xs.isEmpty ? null : xs.reduce((a, b) => a > b ? a : b);
 
-/// Start of the ACCOUNTING week containing [d] for weeks that begin on
-/// [weekStartDay] (a `DateTime.monday..sunday` constant): the most
-/// recent such weekday at or before [d].
-///
-/// program.yaml v7 (`week_start: saturday`, user amendment 2026-09-22)
-/// made the accounting week start configurable — a Saturday session
-/// counts toward the NEW week ("getting ahead"), a Friday one closes
-/// the old week. Only ACCOUNTING call sites use this (weekly rollups,
-/// flag weeks, the live this-week strip, the planner window, the weekly
-/// Wilks stat); program STRUCTURE (block boundaries, week_in_block,
-/// week_type) stays Monday-anchored — see [anchorMondayOf].
-DateTime weekStartOf(DateTime d, [int weekStartDay = DateTime.monday]) =>
-    _addDays(_day(d), -((d.weekday - weekStartDay) % 7));
+// weekStartOf (the ACCOUNTING week start for a `DateTime.monday..sunday`
+// start day) moved to week_start.dart (2026-10-03 week-start setting) and
+// is re-exported below. Program STRUCTURE (block boundaries,
+// week_in_block, week_type) stays Monday-anchored — see [anchorMondayOf].
 
 /// Monday of the ISO week containing [d].
 DateTime mondayOf(DateTime d) => weekStartOf(d);

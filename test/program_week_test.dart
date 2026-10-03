@@ -24,19 +24,32 @@ Map<Object?, Object?>? _yaml(String name) {
 }
 
 void main() {
-  group('mondayOf', () {
+  group('weekStartOf (Monday weeks)', () {
     test('maps every day of a Mon–Sun week to its local-midnight Monday',
         () {
       final mon = DateTime(2026, 9, 28);
       for (var i = 0; i < 7; i++) {
-        expect(mondayOf(DateTime(2026, 9, 28 + i, 17, 45)), mon);
+        expect(weekStartOf(DateTime(2026, 9, 28 + i, 17, 45)), mon);
       }
-      expect(mondayOf(DateTime(2026, 10, 5)), DateTime(2026, 10, 5));
-      expect(mondayOf(DateTime(2026, 10, 4, 23, 59)), mon);
+      expect(weekStartOf(DateTime(2026, 10, 5)), DateTime(2026, 10, 5));
+      expect(weekStartOf(DateTime(2026, 10, 4, 23, 59)), mon);
     });
 
     test('UTC input keeps its calendar date', () {
-      expect(mondayOf(DateTime.utc(2026, 10, 2)), DateTime(2026, 9, 28));
+      expect(weekStartOf(DateTime.utc(2026, 10, 2)), DateTime(2026, 9, 28));
+    });
+  });
+
+  group('prescribedWeek — configured week', () {
+    const IntentDocs empty = (program: null, phase: null, strategy: null);
+    test('Saturday start → Sat..Fri keys, extra days appended', () {
+      final w = prescribedWeek(empty, DateTime(2026, 10, 6),
+          weekStartDay: DateTime.saturday,
+          extraDays: [DateTime(2026, 10, 10), DateTime(2026, 10, 5)]);
+      expect(w.keys.toList(), [
+        for (var i = 0; i < 7; i++) DateTime(2026, 10, 3 + i),
+        DateTime(2026, 10, 10),
+      ]);
     });
   });
 

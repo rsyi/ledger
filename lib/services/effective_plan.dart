@@ -5,7 +5,7 @@
 /// on its home day, skipped work stayed planned, and moved-in work never
 /// appeared on its target day).
 ///
-/// [effectivePlannedEntries] takes one Mon–Sun week of
+/// [effectivePlannedEntries] takes one week of
 /// [buildWeekPlannedEntries] output (`snapToWeekStart: false`) and
 /// relocates it per [effectiveWeek]: each prose item owns the priced
 /// lines [matchItemLines] gives it ON ITS HOME DAY (the Today card's
@@ -30,6 +30,7 @@ import 'program_item_pricing.dart' show matchItemLines;
 import 'program_metrics.dart' show mainLiftByExercise;
 import 'program_moves.dart';
 import 'program_week.dart' show dayOnly;
+import 'resolved_week.dart';
 import 'routine_display.dart' show SessionLine, daySummary;
 import 'working_max.dart' show warmupRamp;
 
@@ -124,21 +125,38 @@ List<Map<String, Object?>> _withWarmups(
   return out;
 }
 
-/// Relocates one Mon–Sun week of planner [entries] per [moves] / [skips]
+/// Relocates one week of planner [entries] per [moves] / [skips]
 /// (see the library doc). [prescribed] = `prescribedWeek` for the same
 /// week (local-midnight keys); [warmupProtocol] = the program version's
 /// `warmup_protocol`. Entries' `date` stays UTC midnight (the planner's
 /// convention). Moved entries carry `moved_from` (home day, local
 /// midnight) and `moved_item` (the prose item name) — display markers,
 /// never persisted ([plannedValuesOf] ignores them).
+///
+/// [weekStart] (2026-10-03 pull-forward): when given, only that week's
+/// seven days are emitted — [entries]/[prescribed] may also carry the
+/// next-week home days of pulled-forward items (`effectivePricedWeek`).
 List<Map<String, Object?>> effectivePlannedEntries(
   List<Map<String, Object?>> entries,
   Map<DateTime, List<PrescribedItem>> prescribed, {
   Map<String, ProgramMove> moves = const {},
   Map<String, ProgramMove> skips = const {},
   Object? warmupProtocol,
+  DateTime? weekStart,
 }) {
   if (moves.isEmpty && skips.isEmpty) return entries;
+  if (weekStart != null) {
+    final s = dayOnly(weekStart);
+    final lo = _ymd(s);
+    final hi = _ymd(DateTime(s.year, s.month, s.day + 6));
+    return [
+      for (final e in effectivePlannedEntries(entries, prescribed,
+          moves: moves, skips: skips, warmupProtocol: warmupProtocol))
+        if (_ymd(e['date'] as DateTime).compareTo(lo) >= 0 &&
+            _ymd(e['date'] as DateTime).compareTo(hi) <= 0)
+          e,
+    ];
+  }
   final week = effectiveWeek(prescribed, moves);
   final itemsByKey = <String, List<PrescribedItem>>{
     for (final e in prescribed.entries) _ymd(e.key): e.value,
@@ -361,3 +379,32 @@ const _wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /// `Mon`..`Sun` for [d].
 String weekdayShort(DateTime d) => _wd[d.weekday - 1];
+
+/// The week's PRICED planner entries after moves/skips: [price] builds a
+/// 7-day window from a start date (`buildWeekPlannedEntries(program,
+/// start, snapToWeekStart: false, …)`); it prices the week itself plus
+/// each pulled-in home day (a moved item keeps its home-day pricing),
+/// then [effectivePlannedEntries] relocates — output restricted to the
+/// week's 7 days.
+List<Map<String, Object?>> effectivePricedWeek(
+  ResolvedWeek rw,
+  List<Map<String, Object?>> Function(DateTime start) price, {
+  Object? warmupProtocol,
+}) {
+  final built = price(DateTime.utc(rw.start.year, rw.start.month, rw.start.day));
+  if (rw.moves.isEmpty && rw.skips.isEmpty) return built;
+  final all = [...built];
+  for (final d in rw.extraDays) {
+    final k = _ymd(d);
+    all.addAll(price(DateTime.utc(d.year, d.month, d.day))
+        .where((e) => _ymd(e['date'] as DateTime) == k));
+  }
+  return effectivePlannedEntries(
+    all,
+    rw.prescribed,
+    moves: rw.moves,
+    skips: rw.skips,
+    warmupProtocol: warmupProtocol,
+    weekStart: rw.start,
+  );
+}

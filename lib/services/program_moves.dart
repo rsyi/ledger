@@ -1,4 +1,4 @@
-/// Program item relocations within a Mon–Sun week — the pure resolver
+/// Program item relocations within a week — the pure resolver
 /// over the synced `program_moves` view (one row per move; manual from
 /// the program day card or an accepted coach proposal).
 ///
@@ -10,14 +10,24 @@
 ///
 /// A move relocates ONE prescribed item instance, keyed by
 /// `from_date + item` (case-insensitive), to `date`. The latest row per
-/// key wins; deleting the row (Undo) puts the item back. Moves whose
-/// from or to day falls outside the week are ignored.
+/// key wins; deleting the row (Undo) puts the item back.
+///
+/// WEEKS (2026-10-03): every week here is the CONFIGURED week
+/// ([weekStartDay], week_start.dart's resolver — Saturday for the user),
+/// never a hard-coded Mon–Sun. A move is VALID ([isAllowedMove]) when
+///   * from and to fall in the same week (later or earlier), or
+///   * it PULLS work forward: to is earlier than from by at most
+///     [pullForwardMaxDays] days, even across the week boundary (an item
+///     of next week done in this one).
+/// A later move must stay in from's week, so missed work still expires
+/// at week end. Invalid rows are ignored (never an error).
 ///
 /// Pure: no Flutter/IO imports.
 library;
 
 import 'prescribed_exercises.dart';
-import 'program_week.dart' show dayOnly, mondayOf;
+import 'program_week.dart' show dayOnly;
+import 'week_start.dart';
 
 String _ymd(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
     '${d.month.toString().padLeft(2, '0')}-'
@@ -118,15 +128,18 @@ const skipSource = 'skip';
 /// item was skipped on (its effective day, after moves).
 String skipKey(DateTime day, String item) => '${_ymd(dayOnly(day))}|${_norm(item)}';
 
-/// Skips in [monday]'s Mon–Sun week, keyed by [skipKey] (latest row per
-/// key wins — by createdAt, then list order).
+/// Skips in [anyDay]'s week ([weekStartDay]), keyed by [skipKey] (latest
+/// row per key wins — by createdAt, then list order).
 Map<String, ProgramMove> activeSkips(
-    Iterable<ProgramMove> all, DateTime monday) {
-  final mon = mondayOf(monday);
+  Iterable<ProgramMove> all,
+  DateTime anyDay, {
+  int weekStartDay = DateTime.monday,
+}) {
+  final start = weekStartOf(anyDay, weekStartDay);
   final out = <String, ProgramMove>{};
   for (final m in _byCreated([
     for (final m in all)
-      if (m.isSkip && mondayOf(m.to) == mon) m,
+      if (m.isSkip && weekStartOf(m.to, weekStartDay) == start) m,
   ])) {
     out[skipKey(m.to, m.item)] = m;
   }
@@ -174,24 +187,67 @@ List<ProgramMove> _byCreated(List<ProgramMove> ms) {
   return [for (final (_, m) in indexed) m];
 }
 
-/// Latest move per key (by createdAt, then list order — a row without a
-/// createdAt sorts as oldest), restricted to moves whose from AND to fall
-/// in [monday]'s week. A latest row with to == from is "back home": it
-/// yields no active move for that key. Skip rows ([ProgramMove.isSkip])
-/// are not moves and are ignored here.
+/// How far a move may pull work EARLIER across the week boundary.
+const pullForwardMaxDays = 7;
+
+/// Whether a move [from] → [to] is allowed under [weekStartDay] weeks (see
+/// the library doc): same week, or pulled forward by ≤
+/// [pullForwardMaxDays] days. to == from ("back home") is allowed.
+bool isAllowedMove(DateTime from, DateTime to,
+    {int weekStartDay = DateTime.monday}) {
+  final f = dayOnly(from), t = dayOnly(to);
+  if (sameWeek(f, t, weekStartDay)) return true;
+  if (!t.isBefore(f)) return false; // later across the boundary
+  return DateTime.utc(f.year, f.month, f.day)
+          .difference(DateTime.utc(t.year, t.month, t.day))
+          .inDays <=
+      pullForwardMaxDays;
+}
+
+/// Latest VALID move per key (by createdAt, then list order — a row
+/// without a createdAt sorts as oldest; rows failing [isAllowedMove] are
+/// dropped first, so they never supersede a valid one), restricted to
+/// moves touching [anyDay]'s week: from OR to inside it. That includes
+/// next week's items pulled INTO this week (to inside, from after) and
+/// this week's items pulled into the previous one (from inside, to
+/// before) — [effectiveWeek] renders the former on its target day and
+/// the latter as a ghost on its home day. A latest row with to == from is
+/// "back home": it yields no active move for that key. Skip rows
+/// ([ProgramMove.isSkip]) are not moves and are ignored here.
 Map<String, ProgramMove> activeMoves(
-    Iterable<ProgramMove> all, DateTime monday) {
-  final mon = mondayOf(monday);
-  final inWeek = [
-    for (final m in all)
-      if (!m.isSkip && mondayOf(m.from) == mon && mondayOf(m.to) == mon) m,
-  ];
+  Iterable<ProgramMove> all,
+  DateTime anyDay, {
+  int weekStartDay = DateTime.monday,
+}) {
+  final start = weekStartOf(anyDay, weekStartDay);
   final latest = <String, ProgramMove>{};
-  for (final m in _byCreated(inWeek)) {
+  for (final m in _byCreated([
+    for (final m in all)
+      if (!m.isSkip && isAllowedMove(m.from, m.to, weekStartDay: weekStartDay))
+        m,
+  ])) {
     latest[m.key] = m;
   }
-  latest.removeWhere((_, m) => m.to == m.from);
+  latest.removeWhere((_, m) =>
+      m.to == m.from ||
+      (weekStartOf(m.from, weekStartDay) != start &&
+          weekStartOf(m.to, weekStartDay) != start));
   return latest;
+}
+
+/// Home days OUTSIDE [anyDay]'s week that [moves] pull work from — the
+/// extra days a caller must prescribe (and price) so pulled-forward
+/// items can be placed ([prescribedWeek]'s `extraDays`).
+Set<DateTime> pulledInHomeDays(
+  Map<String, ProgramMove> moves,
+  DateTime anyDay, {
+  int weekStartDay = DateTime.monday,
+}) {
+  final start = weekStartOf(anyDay, weekStartDay);
+  return {
+    for (final m in moves.values)
+      if (weekStartOf(m.from, weekStartDay) != start) dayOnly(m.from),
+  };
 }
 
 /// A prescribed item placed in the effective (post-moves) week.
@@ -225,10 +281,16 @@ class EffectiveItem {
 /// origin-day then item order. A move matches the FIRST same-named item
 /// on its from day (case-insensitive, trimmed); a move naming no item on
 /// that day is ignored. A target day absent from [prescribed] is added.
+///
+/// [weekStart] (the week's first day): when given, the result keeps ONLY
+/// that week's seven days, in order — [prescribed] may also carry
+/// next-week home days of pulled-forward items ([pulledInHomeDays]);
+/// their ghosts and any previous-week targets fall outside and drop.
 Map<DateTime, List<EffectiveItem>> effectiveWeek(
   Map<DateTime, List<PrescribedItem>> prescribed,
-  Map<String, ProgramMove> moves,
-) {
+  Map<String, ProgramMove> moves, {
+  DateTime? weekStart,
+}) {
   final byKey = <String, ProgramMove>{
     for (final m in moves.values) m.key: m,
   };
@@ -260,6 +322,18 @@ Map<DateTime, List<EffectiveItem>> effectiveWeek(
   }
   for (final (to, e) in incoming) {
     out.putIfAbsent(to, () => <EffectiveItem>[]).add(e);
+  }
+  if (weekStart != null) {
+    final s = dayOnly(weekStart);
+    final end = DateTime(s.year, s.month, s.day + 6);
+    out.removeWhere((d, _) => d.isBefore(s) || d.isAfter(end));
+    // Every week day present (an empty pulled-in-only week stays 7 days).
+    for (var i = 0; i < 7; i++) {
+      out.putIfAbsent(
+          DateTime(s.year, s.month, s.day + i), () => <EffectiveItem>[]);
+    }
+    return Map.fromEntries(
+        out.entries.toList()..sort((a, b) => a.key.compareTo(b.key)));
   }
   return out;
 }

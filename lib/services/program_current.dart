@@ -8,6 +8,8 @@
 /// at `airledger-fitness/coach/fixtures/program_current_cases.yaml`.
 library;
 
+import 'week_start.dart' show parseWeekday;
+
 const List<String> _weekdayKeys = [
   'mon',
   'tue',
@@ -82,16 +84,6 @@ DateTime _parseDay(Object? s) {
   return DateTime.utc(d.year, d.month, d.day);
 }
 
-const Map<String, int> _weekdayByName = {
-  'monday': DateTime.monday,
-  'tuesday': DateTime.tuesday,
-  'wednesday': DateTime.wednesday,
-  'thursday': DateTime.thursday,
-  'friday': DateTime.friday,
-  'saturday': DateTime.saturday,
-  'sunday': DateTime.sunday,
-};
-
 /// The ACCOUNTING week's start day for a program [version] — its
 /// `week_start:` key (program.yaml v7, user amendment 2026-09-22:
 /// `saturday`, so weekend sessions read as getting ahead of the coming
@@ -104,9 +96,12 @@ const Map<String, int> _weekdayByName = {
 /// boundaries, week_in_block, week_type — remains Monday-anchored and
 /// is deliberately not affected by this key (accounting weeks map onto
 /// it through anchorMondayOf in program_metrics.dart).
+///
+/// NOTE (2026-10-03): this is only the PROGRAM DEFAULT. The week start
+/// every surface uses is [resolveWeekStartDay] (week_start.dart) — the
+/// synced `app_settings` row wins over this key.
 int weekStartDayOf(Map<Object?, Object?>? version) =>
-    _weekdayByName[version?['week_start']?.toString().trim().toLowerCase()] ??
-    DateTime.monday;
+    parseWeekday(version?['week_start']) ?? DateTime.monday;
 
 /// The strength-wave week (1..4) for a block week under the version's
 /// `strength_wave` key (program.yaml v10, final post-cut spec): the

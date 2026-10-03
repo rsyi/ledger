@@ -480,8 +480,8 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   header (readers repair-read a headerless tab); `--only-projection-
   snapshots` writes just that append. Pure code: projection_snapshot.dart
   (builder from a sim2Run anchored at the block-start Monday; codec;
-  selection = newest actuals_version, then earliest made_at;
-  snapshotForDay), projection_replay.dart (anchors + nutrition from data
+  selection = highest `baseline_version` (USER re-baseline, absent=1),
+  then newest actuals_version, then earliest made_at; snapshotForDay), projection_replay.dart (anchors + nutrition from data
   dated ≤ block start ONLY; a replay >1 day late ignores tonight's
   recal scales/offset), projection_tracking.dart (actuals: 7-day per-day-
   mean bw; scale BF withings→omron→caliper week mean else latest ≤27 d;
@@ -497,10 +497,24 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   BAND (judgment call): envelope of MC p10–p90 (200 paths — only strength
   /climbing are noisy), r ± 0.25 lb/wk deterministic bracket runs, and a
   measurement floor (bw ±1.25, BF ±1 pt, e1RM ±3%, VO2 ±1, grade ±0.5).
-  Block 0 backfilled 2026-10-02 (two sets: an initial v1 set + the v2
-  re-freeze that selection uses): nutrition-at-Sep-21 r −1.24 lb/wk (6
-  logged days, maintenance 2120 ± 673) → bw 162.2 → 147.4 [144.4–150.4]
-  by Dec 14, strength total 905.5 → 871.7. APP: ProjectionSnapshotStore
+  RATE-SOURCE RULE (user decision 2026-10-02, projection_replay.dart
+  projectionRateSource): a snapshot uses the logged-intake rate ONLY
+  when ≥14 logged days (≥800 kcal) fall in the trailing 14-day INTAKE
+  window at the anchor (+ the model can project), else the program's
+  DECLARED block rate; protein dial gated the same way. inputs_json
+  records rate_source declared|logged_intake + rate_logged_days +
+  rate_logged_intake_lb_wk. USER RE-BASELINE: nightly
+  `--only-projection-snapshots --rebaseline-block=N
+  [--rebaseline-reason=...]` appends a new set with baseline_version =
+  max+1 + `supersedes` = the replaced made_at; a system re-freeze
+  (actuals bump) CARRIES the block's max baseline_version. Block 0
+  history: v1 set + v2 thin-data re-freeze (r −1.24 off 6 logged days
+  → bw 147.4 by Dec 14) are KEPT; the selected set is the 2026-10-03
+  01:40Z baseline_version 2 re-baseline on the declared −0.75 lb/wk:
+  bw 162.2 → 153.2 [150.2–156.2], BF 12.4 → 9.3, strength total 905.5
+  → 887.0 [860–914], VO2 52.3 → 55.3, grade 5.0 → 5.8 by Dec 14. MCP
+  phase_tracking mirrors the selection and exposes baseline_version /
+  rate_source / rate_lb_wk / supersedes. APP: ProjectionSnapshotStore
   (30-min cache, `.memory()` for tests) → PlanSources.projectionStore →
   PlanData.projections / ForecastInputs.projections (PhaseProjections =
   first snapshots + actual sources). Weight page = frozen bodyweight +

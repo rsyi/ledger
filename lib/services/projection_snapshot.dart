@@ -8,7 +8,9 @@
 /// from block start to block end, plus the inputs it ran on. Snapshots
 /// live in the APPEND-ONLY `projection_snapshots` tab (one row per
 /// block × metric × week) and are never rewritten; the UI and the MCP
-/// coach context use each block's FIRST snapshot.
+/// coach context use each block's SELECTED snapshot (see
+/// [firstSnapshotForBlock]: newest baseline_version, then newest
+/// actuals_version, then the earliest made_at).
 ///
 /// ANCHORING — every metric's projection starts AT THE OBSERVED VALUE on
 /// the block's start day (data available then only) and follows the
@@ -81,6 +83,23 @@ const List<String> projectionSnapshotHeaders = [
 /// whose snapshots all predate the current version. Older snapshots
 /// stay in the tab (append-only history).
 const int projectionActualsVersion = 2;
+
+/// USER RE-BASELINE marker (inputs_json `baseline_version`, absent = 1).
+/// A user-directed re-baseline of a block (e.g. 2026-10-02: block 0
+/// re-frozen on the program's declared rate after a thin-data
+/// nutrition rate) appends a new set with baseline_version = the
+/// block's max + 1 and `supersedes` = the made_at of the set it
+/// replaces; selection prefers the highest baseline_version, so the
+/// superseded set stays in the tab as readable history. A system
+/// re-freeze (actuals-definition bump) CARRIES the block's current max
+/// baseline_version, never outranking the user's choice.
+int maxBaselineVersionForBlock(List<ProjectionSnapshot> existing, int block) {
+  var v = 0;
+  for (final s in existing) {
+    if (s.block == block && s.baselineVersion > v) v = s.baselineVersion;
+  }
+  return v == 0 ? 1 : v;
+}
 
 /// Model identity recorded in every snapshot's inputs.
 const String projectionModelVersion = 'sim2 v2.1 (fitted 2026-09-26)';
@@ -191,6 +210,26 @@ class ProjectionSnapshot {
       (inputs['actuals_version'] as num?)?.toInt() ??
       int.tryParse('${inputs['actuals_version']}') ??
       1;
+
+  /// The user re-baseline generation (1 when absent — every snapshot
+  /// before the 2026-10-02 block-0 re-baseline).
+  int get baselineVersion =>
+      (inputs['baseline_version'] as num?)?.toInt() ??
+      int.tryParse('${inputs['baseline_version']}') ??
+      1;
+
+  /// Where the weight rate came from: 'declared' (the program's block
+  /// rate) or 'logged_intake' (the nutrition estimate). Older sets
+  /// recorded only `r_source` ('declared_block_rate' / 'nutrition').
+  String? get rateSource {
+    final v = inputs['rate_source']?.toString();
+    if (v != null) return v;
+    return switch (inputs['r_source']?.toString()) {
+      'nutrition' => 'logged_intake',
+      'declared_block_rate' => 'declared',
+      _ => null,
+    };
+  }
 
   /// Block emphasis (cut / reverse / climbing / lifting) from inputs.
   String? get emphasis => inputs['block_emphasis']?.toString();
@@ -440,6 +479,8 @@ ProjectionSnapshot? buildProjectionSnapshot({
     'actuals_version': projectionActualsVersion,
     'r_lb_wk': _r2(baseR),
     'r_source': rLbWk == null ? 'declared_block_rate' : 'nutrition',
+    'rate_source': rLbWk == null ? 'declared' : 'logged_intake',
+    'baseline_version': 1,
     'protein_g_per_lb': _r2(proteinGPerLb),
     'anchors': anchors.toJson(),
     'params': {for (final d in sim2ParamDefs) d.id: d.get(params)},
@@ -582,17 +623,21 @@ class _Group {
   _Group(this.block, this.madeAt, this.programVersion);
 }
 
-/// Selection order: the newest actuals_version wins, then the earliest
-/// made_at (re-snapshots with the same definitions never displace the
-/// first — user re-baselining is out of scope v1).
+/// Selection order: the highest baseline_version (a USER re-baseline)
+/// wins, then the newest actuals_version (a system re-baseline), then
+/// the earliest made_at (re-snapshots with the same baseline +
+/// definitions never displace the first). Mirrored by ledger-mcp
+/// src/phase_tracking.ts.
 bool _preferred(ProjectionSnapshot a, ProjectionSnapshot b) =>
-    a.actualsVersion != b.actualsVersion
+    a.baselineVersion != b.baselineVersion
+        ? a.baselineVersion > b.baselineVersion
+        : a.actualsVersion != b.actualsVersion
         ? a.actualsVersion > b.actualsVersion
         : a.madeAt.isBefore(b.madeAt);
 
-/// The block's FIRST snapshot (earliest made_at among those on the
-/// newest actuals definition) — what the UI and the coach track
-/// against. Null when the block has none.
+/// The block's SELECTED snapshot (newest baseline_version, then newest
+/// actuals definition, then earliest made_at) — what the UI and the
+/// coach track against. Null when the block has none.
 ProjectionSnapshot? firstSnapshotForBlock(
   List<ProjectionSnapshot> snapshots,
   int block,

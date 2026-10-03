@@ -23,7 +23,11 @@
 /// Pure Dart (no Flutter, no IO).
 library;
 
-import 'nutrition_model.dart' show buildNutritionForecast;
+import 'nutrition_model.dart'
+    show
+        buildNutritionForecast,
+        nutritionDays,
+        nutritionWindowAvg;
 import 'program_metrics.dart' show StrengthRow, WeightRow;
 import 'projection_snapshot.dart';
 import 'projection_tracking.dart';
@@ -41,8 +45,47 @@ DateTime _d(DateTime d) => DateTime.utc(d.year, d.month, d.day);
 
 bool _onOrBefore(DateTime x, DateTime day) => !_d(x).isAfter(_d(day));
 
+/// Minimum logged nutrition days before a snapshot trusts the
+/// logged-intake rate over the declared block rate.
+const int projectionMinLoggedDays = 14;
+
+/// The trailing window those logged days are counted in — the 14-day
+/// INTAKE window the logged-intake rate's numerator is averaged over
+/// (r = (14d avg intake − maintenance)/3500×7). So the rule reads
+/// "every day of the intake window logged": block 0's thin-data r came
+/// from 6 of 14 (18 of the 28-day maintenance window — counting there
+/// would have kept the thin rate). Strict by design; a missed export
+/// day falls back to the declared rate for that freeze.
+const int projectionLoggedDaysWindowDays = 14;
+
+/// Rate-source wire values (inputs_json `rate_source`).
+const String projectionRateDeclared = 'declared';
+const String projectionRateLoggedIntake = 'logged_intake';
+
+/// THE RULE: 'logged_intake' only when the nutrition model can project
+/// AND [loggedDays] ≥ [projectionMinLoggedDays]; else 'declared'.
+String projectionRateSource({
+  required int loggedDays,
+  required bool canProject,
+}) => canProject && loggedDays >= projectionMinLoggedDays
+    ? projectionRateLoggedIntake
+    : projectionRateDeclared;
+
+/// Logged days (≥ 800 kcal) in the trailing
+/// [projectionLoggedDaysWindowDays] ending on [anchor] (inclusive).
+int projectionLoggedDaysAt(List<MealRow> meals, DateTime anchor) =>
+    nutritionWindowAvg(
+      nutritionDays(meals),
+      today: anchor,
+      windowDays: projectionLoggedDaysWindowDays,
+    )?.loggedDays ??
+    0;
+
 /// Builds block [blockN]'s snapshot anchored at its start day. Null
-/// when the block isn't in [blocks].
+/// when the block isn't in [blocks]. [baselineVersion] / [supersedes] /
+/// [rebaselineReason] mark a USER re-baseline (projection_snapshot.dart
+/// [maxBaselineVersionForBlock]); a system freeze passes the block's
+/// current max baseline_version.
 ProjectionSnapshot? snapshotAtBlockStart({
   required List<Sim2Block> blocks,
   required int blockN,
@@ -58,6 +101,9 @@ ProjectionSnapshot? snapshotAtBlockStart({
   double bScale = 1,
   double maintenanceOffsetKcal = 0,
   int mcPaths = 200,
+  int baselineVersion = 1,
+  DateTime? supersedes,
+  String? rebaselineReason,
 }) {
   final i = blocks.indexWhere((b) => b.n == blockN);
   if (i < 0) return null;
@@ -108,8 +154,16 @@ ProjectionSnapshot? snapshotAtBlockStart({
     today: anchor,
   ).withMaintenanceOffset(useOffset);
   final bwForP = anchors.bodyweight ?? sim2SeedBw;
-  final r = nutrition.canProject ? nutrition.rProjectedLbWk : null;
-  final p = nutrition.canProject ? nutrition.proteinGPerLb(bwForP) : null;
+  final loggedDays = projectionLoggedDaysAt(m, anchor);
+  final rateSource = projectionRateSource(
+    loggedDays: loggedDays,
+    canProject: nutrition.canProject,
+  );
+  final useLogged = rateSource == projectionRateLoggedIntake;
+  // Protein follows the same gate: thin logging drives neither dial
+  // (null → the block's baseline protein).
+  final r = useLogged ? nutrition.rProjectedLbWk : null;
+  final p = useLogged ? nutrition.proteinGPerLb(bwForP) : null;
 
   double? r0(double? v) => v?.roundToDouble();
   final tms = <String, double>{
@@ -147,6 +201,16 @@ ProjectionSnapshot? snapshotAtBlockStart({
       },
       'a_scale': useA,
       'b_scale': useB,
+      'rate_source': rateSource,
+      'rate_logged_days': loggedDays,
+      'rate_logged_days_window': projectionLoggedDaysWindowDays,
+      'rate_min_logged_days': projectionMinLoggedDays,
+      'rate_logged_intake_lb_wk': nutrition.canProject
+          ? double.parse(nutrition.rProjectedLbWk!.toStringAsFixed(2))
+          : null,
+      'baseline_version': baselineVersion,
+      'supersedes': ?supersedes?.toIso8601String(),
+      'rebaseline_reason': ?rebaselineReason,
     },
   );
 }

@@ -73,8 +73,8 @@ List<StrengthRow> _strength() => [
   ),
 ];
 
-List<MealRow> _meals() => [
-  for (var i = 0; i < 40; i++)
+List<MealRow> _meals({int days = 40}) => [
+  for (var i = 40 - days; i < 40; i++)
     MealRow(
       eatenAt: DateTime(2026, 8, 13, 12).add(Duration(days: i)),
       calories: 2000,
@@ -84,7 +84,14 @@ List<MealRow> _meals() => [
     ),
 ];
 
-ProjectionSnapshot _snap({DateTime? madeAt, double aScale = 1}) =>
+ProjectionSnapshot _snap({
+  DateTime? madeAt,
+  double aScale = 1,
+  List<MealRow>? meals,
+  int baselineVersion = 1,
+  DateTime? supersedes,
+  String? reason,
+}) =>
     snapshotAtBlockStart(
       blocks: _blocks,
       blockN: 0,
@@ -93,7 +100,10 @@ ProjectionSnapshot _snap({DateTime? madeAt, double aScale = 1}) =>
       weighIns: _weighIns(),
       bodyFat: [BodyFatReading(DateTime(2026, 9, 20), 12.2)],
       strength: _strength(),
-      meals: _meals(),
+      meals: meals ?? _meals(),
+      baselineVersion: baselineVersion,
+      supersedes: supersedes,
+      rebaselineReason: reason,
       workingMax: [
         WorkingMaxRow(
           lift: 'squat',
@@ -138,7 +148,69 @@ void main() {
     expect(n['intake_14d_kcal'], 2000);
     // Flat trend → maintenance ≈ intake → r ≈ 0, not the declared −0.75.
     expect(s.inputs['r_source'], 'nutrition');
+    expect(s.inputs['rate_source'], 'logged_intake');
+    expect(s.rateSource, 'logged_intake');
+    expect(s.inputs['rate_logged_days'], 14);
     expect((s.inputs['r_lb_wk'] as num).abs(), lessThan(0.05));
+  });
+
+  group('rate source rule (≥14 logged days else declared)', () {
+    test('pure rule', () {
+      expect(projectionRateSource(loggedDays: 14, canProject: true),
+          'logged_intake');
+      expect(projectionRateSource(loggedDays: 13, canProject: true),
+          'declared');
+      expect(projectionRateSource(loggedDays: 30, canProject: false),
+          'declared');
+      expect(projectionRateSource(loggedDays: 0, canProject: false),
+          'declared');
+    });
+
+    test('logged days count the trailing 14-day window at the anchor, '
+        'partial (<800 kcal) days excluded', () {
+      final anchor = DateTime.utc(2026, 9, 21);
+      MealRow meal(int daysBack, double kcal) => MealRow(
+        eatenAt: anchor.subtract(Duration(days: daysBack)).add(
+          const Duration(hours: 12),
+        ),
+        calories: kcal,
+      );
+      expect(projectionLoggedDaysAt([
+        for (var i = 0; i < 14; i++) meal(i, 2000),
+        meal(14, 2000), // outside the window
+      ], anchor), 14);
+      expect(projectionLoggedDaysAt([
+        for (var i = 0; i < 13; i++) meal(i, 2000),
+        meal(13, 500), // partial export
+      ], anchor), 13);
+      expect(projectionLoggedDaysAt(const [], anchor), 0);
+    });
+
+    test('thin logging (6 days) → the declared block rate, logged estimate '
+        'recorded for history', () {
+      // 6 logged days ending at the anchor — enough pairs for a
+      // maintenance estimate, NOT enough for the rule.
+      final s = _snap(meals: _meals(days: 6));
+      expect(s.inputs['rate_source'], 'declared');
+      expect(s.rateSource, 'declared');
+      expect(s.inputs['rate_logged_days'], 6);
+      expect(s.inputs['r_lb_wk'], -0.75);
+      expect(s.inputs['protein_g_per_lb'], isNull);
+      // bw follows the declared −0.75/wk from the 162 anchor.
+      final bw = s.metrics[ProjectionMetric.bodyweight]!;
+      expect(bw.last.projected, closeTo(162 - 0.75 * (bw.length - 1), 0.6));
+    });
+  });
+
+  test('user re-baseline markers land in inputs_json', () {
+    final prev = DateTime.utc(2026, 10, 2, 23);
+    final s = _snap(baselineVersion: 2, supersedes: prev, reason: 'declared');
+    expect(s.baselineVersion, 2);
+    expect(s.inputs['supersedes'], prev.toIso8601String());
+    expect(s.inputs['rebaseline_reason'], 'declared');
+    final plain = _snap();
+    expect(plain.baselineVersion, 1);
+    expect(plain.inputs.containsKey('supersedes'), isFalse);
   });
 
   test('replay (made days later) ignores tonight\'s recalibration scales', () {

@@ -11,7 +11,7 @@ import 'package:airledger/services/program_metrics.dart';
 import 'package:airledger/services/projection_replay.dart';
 import 'package:airledger/services/projection_snapshot.dart';
 import 'package:airledger/services/projection_tracking.dart'
-    show BodyFatReading;
+    show BodyFatReading, projectionActualsAt, trackSnapshot, trackingLine;
 import 'package:airledger/services/recomp_review.dart';
 import 'package:airledger/services/week_drivers.dart'
     show TopSetReading, parseExerciseMuscleMap;
@@ -64,6 +64,12 @@ import 'package:yaml/yaml.dart';
 /// idempotent (the block already has a snapshot → skip).
 ///   --only-projection-snapshots  # compute everything, write ONLY the
 ///                                # snapshot append (backfill / repair)
+///   --rebaseline-block=N [--rebaseline-reason="..."]
+///     # USER RE-BASELINE: append a NEW frozen set for block N (anchored
+///     # at its start, today's rate-source rule) with baseline_version =
+///     # the block's max + 1 and supersedes = the currently selected
+///     # set's made_at — selection then prefers it; old sets stay as
+///     # history. Pair with --only-projection-snapshots (+ --dry-run).
 ///
 /// Weekly review (recomp tracking spec 2026-09-27): full runs on
 /// SUNDAYS (or --weekly) also rewrite the `weekly_review` tab — one row
@@ -86,6 +92,15 @@ Future<void> main(List<String> args) async {
   final forceWeekly = args.contains('--weekly');
   final dryRun = args.contains('--dry-run') || args.contains('--dry');
   final onlySnapshots = args.contains('--only-projection-snapshots');
+  String? argValue(String name) {
+    for (final a in args) {
+      if (a.startsWith('--$name=')) return a.substring(name.length + 3);
+    }
+    return null;
+  }
+
+  final rebaselineBlock = int.tryParse(argValue('rebaseline-block') ?? '');
+  final rebaselineReason = argValue('rebaseline-reason');
 
   final config = readConfig();
   final api = await sheetsApi(config.keyPath);
@@ -937,17 +952,35 @@ Future<void> main(List<String> args) async {
       print('projection_snapshots: REFUSED — row 1 is not the expected '
           'header ${projectionSnapshotHeaders.join(',')}; repair the tab '
           'before appending');
-    } else if (calendar == null || currentN == null) {
+    } else if (calendar == null || (currentN == null && rebaselineBlock == null)) {
       print('projection_snapshots: skipped (no block calendar / before '
           'the first block)');
-    } else if (!snapshotNeededForBlock(existing, currentN)) {
+    } else if (rebaselineBlock == null &&
+        !snapshotNeededForBlock(existing, currentN!)) {
       print('projection_snapshots: block $currentN already frozen '
           '(${firstSnapshotForBlock(existing, currentN)!.madeAt.toIso8601String()})'
           ' — nothing to append');
     } else {
+      final targetN = rebaselineBlock ?? currentN!;
+      final selected = firstSnapshotForBlock(existing, targetN);
+      final maxBaseline = maxBaselineVersionForBlock(existing, targetN);
+      final isRebaseline = rebaselineBlock != null;
+      if (isRebaseline) {
+        print('projection_snapshots: USER RE-BASELINE block $targetN — '
+            'baseline_version ${selected == null ? 1 : maxBaseline + 1}'
+            '${selected == null ? '' : ', supersedes '
+                '${selected.madeAt.toIso8601String()} (r '
+                '${selected.inputs['r_lb_wk']} lb/wk, '
+                '${selected.rateSource})'}');
+      }
       final snap = snapshotAtBlockStart(
         blocks: calendar,
-        blockN: currentN,
+        blockN: targetN,
+        baselineVersion: isRebaseline && selected != null
+            ? maxBaseline + 1
+            : maxBaseline,
+        supersedes: isRebaseline ? selected?.madeAt : null,
+        rebaselineReason: isRebaseline ? rebaselineReason : null,
         madeAt: now.toUtc(),
         programVersion:
             '${currentVersion(programYaml)?['version'] ?? 'unknown'}',
@@ -965,6 +998,20 @@ Future<void> main(List<String> args) async {
       if (snap != null) {
         snapshotRows = snap.toRows();
         _printSnapshot(snap);
+        // Tracking today against the NEW set (what selection will show).
+        final actuals = projectionActualsAt(
+          day: now,
+          weighIns: weightRows,
+          bodyFat: bodyFatRows,
+          strength: strengthRows,
+          climbs: climbsFromTab(climbTab),
+        );
+        for (final t in trackSnapshot(snap, actuals, now).values) {
+          String f(double? v) => v == null ? '—' : v.toStringAsFixed(1);
+          print('  tracking ${t.metric.padRight(15)} actual ${f(t.actual)} '
+              'vs ${f(t.projected)} [${f(t.lo)}–${f(t.hi)}] '
+              '${t.status.name}: ${trackingLine(t)}');
+        }
       }
     }
   } catch (e) {
@@ -1151,7 +1198,11 @@ void _printSnapshot(ProjectionSnapshot s) {
   final i = s.inputs;
   print('projection_snapshots: block ${s.block} (${s.emphasis}) '
       '${i['block_start']} → ${i['block_end']}, program v${s.programVersion}, '
-      'replay ${i['replay']}, r ${i['r_lb_wk']} lb/wk (${i['r_source']})');
+      'replay ${i['replay']}, r ${i['r_lb_wk']} lb/wk (${i['rate_source']}; '
+      '${i['rate_logged_days']} logged days in ${i['rate_logged_days_window']}d, '
+      'logged-intake r ${i['rate_logged_intake_lb_wk']}), '
+      'baseline_version ${i['baseline_version']}'
+      '${i['supersedes'] == null ? '' : ', supersedes ${i['supersedes']}'}');
   print('  anchors ${jsonEncode(i['anchors'])}');
   print('  nutrition ${jsonEncode(i['nutrition'])}');
   print('  training_maxes ${jsonEncode(i['training_maxes'])}');

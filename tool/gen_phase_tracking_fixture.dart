@@ -354,13 +354,19 @@ void main(List<String> args) {
     String made, {
     String inputs = '',
   }) => [block, metric, week, v, v - 1, v + 1, made, '16', inputs];
-  String inp(String start, String end, String emphasis, {int? version = 2}) =>
-      jsonEncode({
-        'block_start': start,
-        'block_end': end,
-        'block_emphasis': emphasis,
-        'actuals_version': ?version,
-      });
+  String inp(
+    String start,
+    String end,
+    String emphasis, {
+    int? version = 2,
+    int? baseline,
+  }) => jsonEncode({
+    'block_start': start,
+    'block_end': end,
+    'block_emphasis': emphasis,
+    'actuals_version': ?version,
+    'baseline_version': ?baseline,
+  });
   final selRows = <List<Object?>>[
     projectionSnapshotHeaders,
     // An older snapshot on the superseded v1 actual definitions —
@@ -390,6 +396,27 @@ void main(List<String> args) {
       inputs: inp('2026-09-21', '2026-12-13', 'cut'),
     ),
     row(0, 'bodyweight', '2026-09-28', 160.3, '2026-10-02T23:05:35.951398Z'),
+    // USER RE-BASELINE (baseline_version 2): made LATER than the v2 set
+    // above, but the higher baseline wins selection; a later
+    // same-baseline set (below it) never displaces it.
+    row(
+      0,
+      'bodyweight',
+      '2026-09-21',
+      162.2,
+      '2026-10-03T01:00:00.000Z',
+      inputs: inp('2026-09-21', '2026-12-13', 'cut', baseline: 2),
+    ),
+    row(0, 'bodyweight', '2026-09-28', 161.4, '2026-10-03T01:00:00.000Z'),
+    row(0, 'bodyweight', '2026-10-05', 160.7, '2026-10-03T01:00:00.000Z'),
+    row(
+      0,
+      'bodyweight',
+      '2026-09-21',
+      158,
+      '2026-10-04T01:00:00.000Z',
+      inputs: inp('2026-09-21', '2026-12-13', 'cut', baseline: 2),
+    ),
     row(
       2,
       'bodyweight',

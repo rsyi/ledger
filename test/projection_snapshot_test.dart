@@ -252,6 +252,7 @@ void main() {
       DateTime made,
       double v, {
       int? version = projectionActualsVersion,
+      int? baseline,
     }) => [
       [
         block,
@@ -262,9 +263,53 @@ void main() {
         v + 1,
         made.toIso8601String(),
         '16',
-        version == null ? '' : jsonEncode({'actuals_version': version}),
+        version == null && baseline == null
+            ? ''
+            : jsonEncode({
+                'actuals_version': ?version,
+                'baseline_version': ?baseline,
+              }),
       ],
     ];
+
+    test('user re-baseline: the highest baseline_version wins even when '
+        'made later; older sets stay readable', () {
+      final all = parseProjectionSnapshots([
+        projectionSnapshotHeaders,
+        ...rowsAt(0, DateTime.utc(2026, 10, 2), 161, version: null), // v1
+        ...rowsAt(0, DateTime.utc(2026, 10, 3), 147), // thin-data v2
+        ...rowsAt(0, DateTime.utc(2026, 10, 4), 154, baseline: 2),
+        ...rowsAt(0, DateTime.utc(2026, 10, 9), 150), // later re-freeze, b1
+      ]);
+      expect(all, hasLength(4));
+      expect(firstSnapshotForBlock(all, 0)!.madeAt, DateTime.utc(2026, 10, 4));
+      expect(firstSnapshotsByBlock(all)[0]!.baselineVersion, 2);
+      expect(maxBaselineVersionForBlock(all, 0), 2);
+      expect(maxBaselineVersionForBlock(all, 1), 1);
+      expect(snapshotNeededForBlock(all, 0), isFalse);
+      // A second set on the same baseline never displaces the first.
+      final again = parseProjectionSnapshots([
+        projectionSnapshotHeaders,
+        ...rowsAt(0, DateTime.utc(2026, 10, 4), 154, baseline: 2),
+        ...rowsAt(0, DateTime.utc(2026, 10, 6), 155, baseline: 2),
+      ]);
+      expect(firstSnapshotForBlock(again, 0)!.madeAt, DateTime.utc(2026, 10, 4));
+    });
+
+    test('rateSource reads the new field, else maps legacy r_source', () {
+      ProjectionSnapshot s(Map<String, Object?> inputs) => ProjectionSnapshot(
+        block: 0,
+        madeAt: DateTime.utc(2026, 10, 2),
+        programVersion: '16',
+        metrics: const {},
+        inputs: inputs,
+      );
+      expect(s({'rate_source': 'declared'}).rateSource, 'declared');
+      expect(s({'r_source': 'nutrition'}).rateSource, 'logged_intake');
+      expect(s({'r_source': 'declared_block_rate'}).rateSource, 'declared');
+      expect(s({}).rateSource, isNull);
+      expect(s({}).baselineVersion, 1);
+    });
 
     test('first snapshot per block wins; re-snapshots are kept', () {
       final tab = [

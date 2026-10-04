@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:uuid/uuid.dart';
 
@@ -24,6 +23,7 @@ import 'widgets/log_list_row.dart';
 import 'design/components.dart' show RowGroupCard, SectionHeader;
 import 'design/tokens.dart' show AppSpace;
 import '../services/display_names.dart';
+import 'config_gate.dart' show loadBakedServiceAccountKey;
 import 'settings_screen.dart';
 import '../services/heart_rate_service.dart';
 import '../services/integrations/gmail_gateway.dart';
@@ -61,6 +61,8 @@ import '../services/today_program_call.dart';
 import '../services/today_thread.dart';
 import '../services/week_planner.dart';
 import '../services/forecast_meta_store.dart';
+import '../services/google_auth/data_account.dart';
+import '../services/google_auth/google_identity.dart';
 import '../services/projection_snapshot_store.dart';
 import '../services/projection_tracking.dart' show PhaseProjections;
 import '../services/wm_store.dart';
@@ -367,13 +369,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     _appliedSig = await SchemaSync.cachedSignature();
     final views = await SchemaLoader.loadAll();
-    final keyJson = await rootBundle.loadString('assets/service-account.json');
+    // DATA account (multi-user sub-project 2): the baked service account +
+    // baked spreadsheet on the owner build (unchanged), else the user's
+    // Google sign-in + their spreadsheet. Resolved by the ConfigGate; the
+    // fallback covers a gate that skipped (unreadable assets config).
+    final data = DataAccountRegistry.current.value ??
+        await DataAccountRegistry.init(
+          bakedKeyJson: await loadBakedServiceAccountKey(),
+          bakedSpreadsheetId: assetConfig.spreadsheetId,
+          google: GoogleSignInIdentity(
+              serverClientId: assetConfig.googleServerClientId ?? ''),
+        );
+    final dataAuth = data.auth;
+    final spreadsheetId = data.spreadsheetId;
     // Synced settings (app_settings tab): the cached week start loads
     // BEFORE anything plans a week; the tab re-read runs in the
     // background and notifies (→ _onWeekStartChanged) on a change.
     await AppSettings.init(
-      spreadsheetId: assetConfig.spreadsheetId,
-      serviceAccountKeyJson: keyJson,
+      spreadsheetId: spreadsheetId,
+      auth: dataAuth,
     );
     unawaited(AppSettings.refresh());
     // Working-max controller tabs (WM-2). Cheap to construct — auth is
@@ -381,25 +395,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Week Plan prescription blocks, and the Program screen's
     // CONFIGURATION card.
     final wmStore = WmStore(
-      spreadsheetId: assetConfig.spreadsheetId,
-      serviceAccountKeyJson: keyJson,
+      spreadsheetId: spreadsheetId,
+      auth: dataAuth,
     );
     // Nightly forecast recalibration state (forecast_meta tab) — read
     // by the Plan tab's "model tracking" line; auth is lazy.
     final forecastMetaStore = ForecastMetaStore(
-      spreadsheetId: assetConfig.spreadsheetId,
-      serviceAccountKeyJson: keyJson,
+      spreadsheetId: spreadsheetId,
+      auth: dataAuth,
     );
     // Frozen phase projections (append-only projection_snapshots tab) —
     // the Weight / Strength / Lift pages + the Progress phase timeline.
     final projectionStore = ProjectionSnapshotStore(
-      spreadsheetId: assetConfig.spreadsheetId,
-      serviceAccountKeyJson: keyJson,
+      spreadsheetId: spreadsheetId,
+      auth: dataAuth,
     );
     final repo = await retryTransient(
-      () => connectSheetsConnector(
-        defaultSpreadsheetId: assetConfig.spreadsheetId,
-        serviceAccountKeyJson: keyJson,
+      () => connectSheetsConnectorFor(
+        defaultSpreadsheetId: spreadsheetId,
+        auth: dataAuth,
       ),
     );
     final registry = await ConnectorRegistry.build(
@@ -465,9 +479,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             gateway: GoogleSignInGmailGateway(
               serverClientId: assetConfig.kayaGmail?.serverClientId ?? '',
             ),
-            store: ServiceAccountKayaTabStore(
-              spreadsheetId: assetConfig.spreadsheetId,
-              serviceAccountKeyJson: keyJson,
+            store: SheetsKayaTabStore(
+              spreadsheetId: spreadsheetId,
+              auth: dataAuth,
             ),
           ),
           WhoopIntegration(hr: hrService),
@@ -556,9 +570,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final hasReadOnlyViews = views.any((v) => v.hasInputOverlay && v.readOnly);
     if (hasReadOnlyViews) {
       readOnlyRepo = await retryTransient(
-        () => SheetsRepository.connectFromKey(
-          defaultSpreadsheetId: assetConfig.spreadsheetId,
-          serviceAccountKeyJson: keyJson,
+        () => SheetsRepository.connectWithAuth(
+          defaultSpreadsheetId: spreadsheetId,
+          auth: dataAuth,
         ),
       );
     }

@@ -7,12 +7,15 @@ import '../services/integrations/registry.dart';
 import '../services/program_provider.dart';
 import '../services/week_start.dart';
 import 'connect_program_screen.dart';
+import 'data_account_card.dart';
 import 'design/design.dart';
 import 'integrations_screen.dart' show IntegrationCard;
 
 /// Settings (the home app bar's gear, 2026-10-03): PROGRAM CONFIG (the
 /// active config source — repo@branch/path + account, Change / Sign out;
-/// multi-user sub-project 1), then WEEK — "Week starts
+/// multi-user sub-project 1), then ACCOUNT & SPREADSHEET (the data
+/// identity — Google sign-in + the user's spreadsheet; read-only on the
+/// owner build; sub-project 2), then WEEK — "Week starts
 /// on" (the synced `app_settings` row every surface, the nightly coach
 /// and the MCP read; program.yaml's `week_start` is only the default) —
 /// then the INTEGRATIONS cards.
@@ -174,6 +177,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         children: [
           const SectionHeader(label: 'Program config'),
           _programConfig(context),
+          const SectionHeader(label: 'Account & spreadsheet'),
+          const DataAccountCard(),
           const SectionHeader(label: 'Week'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppSpace.gutter),

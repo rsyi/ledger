@@ -39,9 +39,16 @@ rm -rf assets/templates
 # 2026-09-21, superseded by domain dashboards) — clear stale copies.
 rm -rf assets/apps
 
-# Service account key
-cp "$SA_KEY_SRC" assets/service-account.json
-echo "synced service-account.json"
+# Service account key. Optional since multi-user (2026-10-03): a build
+# without one ships `{}` and users sign in with Google for their own sheet
+# (lib/services/google_auth/). The owner build keeps the baked key.
+if [ -f "$SA_KEY_SRC" ]; then
+  cp "$SA_KEY_SRC" assets/service-account.json
+  echo "synced service-account.json"
+else
+  echo '{}' > assets/service-account.json
+  echo "no service account at $SA_KEY_SRC — wrote {} (per-user Google sign-in build)"
+fi
 
 # Config: extract just the bits the app needs at runtime (spreadsheet_id).
 # The other config keys (paths) are now baked into asset paths.

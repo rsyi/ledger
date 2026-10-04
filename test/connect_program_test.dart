@@ -174,6 +174,8 @@ void main() {
           home: ConfigGate(
             loadConfig: () async => c,
             store: store,
+            // Owner-shaped key: these cases exercise the CONFIG step only.
+            loadServiceAccountKey: () async => _ownerKey,
             home: (key) => Text('HOME', key: key),
           ),
         );
@@ -263,3 +265,6 @@ void main() {
     });
   });
 }
+
+const _ownerKey = '{"client_email":"a@b.iam.gserviceaccount.com",'
+    '"private_key":"-----BEGIN PRIVATE KEY-----\\nx\\n-----END PRIVATE KEY-----\\n"}';

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'services/engine.dart';
 import 'services/notification_service.dart';
+import 'ui/config_gate.dart';
 import 'ui/design/tokens.dart' show StatusColors;
 import 'ui/home_screen.dart';
 import 'ui/widgets/keyboard_inset_guard.dart';
@@ -66,7 +67,10 @@ class LedgerApp extends StatelessWidget {
       themeMode: ThemeMode.dark,
       theme: _theme(Brightness.light),
       darkTheme: _theme(Brightness.dark),
-      home: const HomeScreen(),
+      // The gate resolves the active config source (baked / user-
+      // connected / none → "Connect your program") before HomeScreen
+      // bootstraps, and re-creates it when the source changes.
+      home: ConfigGate(home: (key) => HomeScreen(key: key)),
       // Zeroes a stale keyboard inset left over from another app / a
       // popped form (see KeyboardInsetGuard) — the "cut off" screen.
       builder: (context, child) =>

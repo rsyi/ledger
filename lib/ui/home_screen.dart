@@ -40,6 +40,9 @@ import '../services/carryover_check.dart';
 import '../services/coach_brain.dart';
 import '../services/day_synthesis_service.dart';
 import '../services/domain_config.dart';
+import '../services/config_source/config_source.dart';
+import '../services/config_source/config_source_registry.dart';
+import '../services/config_source/github_config_source.dart';
 import '../services/github_client.dart';
 import '../services/log_event_bus.dart';
 import '../services/llm_client.dart';
@@ -334,12 +337,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     // Start the background poller once (guarded — _initialize re-runs on
     // every sync/reload).
-    final github = assetConfig.github;
-    if (_syncTimer == null && github != null && github.pollSeconds > 0) {
+    // The ACTIVE config source (multi-user sub-project 1): the baked repo
+    // on the owner build, a user-connected repo otherwise (the app root
+    // re-creates this screen when it changes).
+    final source = ConfigSourceRegistry.active.value;
+    final poll = source?.pollInterval;
+    if (_syncTimer == null && source != null && poll != null) {
       _syncTimer = Timer.periodic(
-        Duration(seconds: github.pollSeconds),
+        poll,
         (_) {
-          _pollGithub(github);
+          _pollGithub(source);
           // Kiosk mode never resumes: the poller tick is the carryover
           // check's other trigger (same gates + 10-min throttle).
           _runCarryoverCheck();
@@ -350,6 +357,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Record the cache state this build reads from BEFORE loading: if a
     // refresh swaps the cache mid-load we'd rather re-render once too
     // often than record a signature newer than the views we show.
+    // A freshly connected (non-baked) source has no cache yet: pull it
+    // before loading, or the bundled (owner's) schemas would render until
+    // the first poll tick. Best-effort — a failure falls back as before.
+    if (source != null &&
+        source is! BakedGitHubSource &&
+        !await SchemaSync.hasCachedSchemas()) {
+      await SchemaSync(source).refresh();
+    }
     _appliedSig = await SchemaSync.cachedSignature();
     final views = await SchemaLoader.loadAll();
     final keyJson = await rootBundle.loadString('assets/service-account.json');
@@ -511,9 +526,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (v.name == 'strength') strengthView = v;
         if (v.name == 'program_moves') movesView = v;
       }
-      if (github != null && strengthView != null) {
+      if (source != null && strengthView != null) {
         final sv = strengthView;
-        final provider = ProgramProvider(CoachBrain.githubFetcher(github));
+        final provider = ProgramProvider(source.docFetcher);
         // program_moves applied (plan_v9): a move/skip/undo re-plans the
         // affected days right away (LogEventBus fires on program_moves
         // create AND delete).
@@ -586,7 +601,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       llm: llm,
       llmCache: llmCache,
       models: assetConfig.models,
-      github: assetConfig.github,
+      configSource: source,
       analytics: analytics,
       kioskView: assetConfig.kioskView,
       quickbooks: assetConfig.quickbooks,
@@ -608,11 +623,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// home screen — rebuilding then would tear down in-progress work, so we
   /// retry on the next tick until the user is back. Silent (no snackbars);
   /// this runs unattended in kiosk mode.
-  Future<void> _pollGithub(GithubConfig cfg) async {
+  Future<void> _pollGithub(ConfigSource cfg) async {
     if (_polling || !mounted) return;
     _polling = true;
     try {
-      final cached = await SchemaSync(GithubClient(cfg)).ensureFresh();
+      final cached = await SchemaSync(cfg).ensureFresh();
       if (cached == null || cached == _appliedSig) return; // UI is current
       if (!mounted) return;
       if (Navigator.of(context).canPop()) return; // mid-task; retry later
@@ -624,7 +639,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Pulls schemas/templates from GitHub, then rebuilds the view list
   /// from the refreshed cache. Surfaces success/error via a snackbar.
-  Future<void> _syncFromGithub(GithubConfig cfg) async {
+  Future<void> _syncFromGithub(ConfigSource cfg) async {
     final messenger = ScaffoldMessenger.of(context);
     messenger.showSnackBar(
       const SnackBar(
@@ -633,7 +648,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
     try {
-      final result = await SchemaSync(GithubClient(cfg)).refresh();
+      final result = await SchemaSync(cfg).refresh();
       if (!mounted) return;
       messenger.hideCurrentSnackBar();
       if (!result.ok) {
@@ -645,8 +660,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            'Synced ${result.fetched} file(s) from '
-            '${cfg.repoFullName}@${cfg.defaultBranch}',
+            'Synced ${result.fetched} file(s) from ${cfg.displayName}',
           ),
         ),
       );
@@ -675,6 +689,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final appName = snap.data?.appName ?? 'Ledger';
         final boot = snap.data;
         final github = boot?.github;
+        final configSource = boot?.configSource;
         final chatModel = boot == null ? null : _chatModel(boot.models);
         // Kiosk short-circuit: when config.yml declares `kiosk_view:` and a
         // view by that name exists, the home screen never renders — the app
@@ -737,10 +752,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               // (SyncScheduler.instance null).
               final homeActions = <Widget>[
                 SyncStatusButton(),
-                if (github != null)
+                if (configSource != null)
                   IconButton(
                     icon: const Icon(Icons.cloud_download_outlined),
-                    onPressed: () => _syncFromGithub(github),
+                    onPressed: () => _syncFromGithub(configSource),
                     tooltip: 'Sync schemas from GitHub',
                   ),
                 IconButton(
@@ -757,9 +772,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => SettingsScreen(
-                        programProvider: github == null
+                        programProvider: configSource == null
                             ? null
-                            : ProgramProvider(CoachBrain.githubFetcher(github)),
+                            : ProgramProvider(configSource.docFetcher),
                       ),
                     ),
                   ),
@@ -842,7 +857,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       model: chatModel,
                       repository: data.repository,
                       views: {for (final v in data.views) v.name: v},
-                      fetchDoc: CoachBrain.githubFetcher(github),
+                      fetchDoc: configDocFetcher(configSource),
                       // Direct-sheet path for read-only dump views
                       // (climbing/kaya_ascents) the local engine never
                       // owns.
@@ -890,14 +905,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 // Whoop-workload readout.
                 if (v.name == 'whoop_workouts') dashWorkoutsView = v;
               }
-              final programProvider = github == null
+              final programProvider = configSource == null
                   ? null
-                  : ProgramProvider(CoachBrain.githubFetcher(github));
+                  : ProgramProvider(configSource.docFetcher);
               // Shared dashboards.yaml provider (1 h doc cache): domain
               // sections + the home hero's `phases:` eigenvectors.
-              final domainProvider = github == null
+              final domainProvider = configSource == null
                   ? null
-                  : DomainConfigProvider(CoachBrain.githubFetcher(github));
+                  : DomainConfigProvider(configSource.docFetcher);
 
               // Feature 1: AI day-synthesis service — assembles today's
               // meals/sets/4x4/climbing vs the routine + macro targets and
@@ -1860,10 +1875,17 @@ class _Bootstrap {
   /// uses by-name lookup. Both share the same models: block in config.yml.
   final List<ModelConfig> models;
 
-  /// GitHub config — drives schema sync + chat's repo tools. Null when
-  /// the build has no github: in config.yml; UI hides the relevant
-  /// buttons.
-  final GithubConfig? github;
+  /// The active config source — drives schema sync + every config doc
+  /// read (program/phase/strategy, dashboards.yaml, coach docs). Null
+  /// when nothing is connected; UI hides the relevant buttons.
+  final ConfigSource? configSource;
+
+  /// GitHub repo behind [configSource] (when it is one) — the chat's
+  /// branch/PR tools are GitHub-specific.
+  GithubConfig? get github {
+    final s = configSource;
+    return s is GitHubConfigSource ? s.config : null;
+  }
 
   /// Airlayer + LocalDb wrapper. Drives the chat's run_query tool.
   /// Null when the native lib can't load on this platform.
@@ -1905,7 +1927,7 @@ class _Bootstrap {
     required this.llm,
     required this.llmCache,
     required this.models,
-    required this.github,
+    required this.configSource,
     required this.analytics,
     this.kioskView,
     this.quickbooks,

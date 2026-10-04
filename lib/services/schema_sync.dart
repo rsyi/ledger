@@ -6,9 +6,10 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'github_client.dart';
+import 'config_source/config_source.dart';
 
-/// Fetches view/template/app YAML files from the schemas repo and writes
+/// Fetches view/template/app YAML files from the active [ConfigSource]
+/// (the schemas repo — baked or user-connected) and writes
 /// them to a local cache dir. The schema/template/app loaders prefer
 /// this cache when present (else fall back to bundled assets), so a
 /// PR merged on GitHub takes effect on the next app launch — no rebuild.
@@ -17,7 +18,7 @@ import 'github_client.dart';
 /// `default_branch`. Subdirectories aren't recursed (we don't have any
 /// yet); flatten if/when needed.
 class SchemaSync {
-  final GithubClient github;
+  final ConfigSource source;
   static const _cacheDirName = 'synced_schemas';
 
   /// Resolves the platform's app docs dir. Swappable so unit tests (which
@@ -29,7 +30,7 @@ class SchemaSync {
   /// of the last successful sync. Not a `.yml`, so the loaders skip it.
   static const _sigFileName = '.sig';
 
-  SchemaSync(this.github);
+  SchemaSync(this.source);
 
   /// A cheap fingerprint of the repo's current schema state: the sorted
   /// list of `<name>:<blob-sha>` for every `.yml` under viewsPath, hashed
@@ -39,19 +40,7 @@ class SchemaSync {
   /// against [cachedSignature] and only does a full [refresh] on a diff.
   /// Returns null on any network/API error (caller treats as "unknown,
   /// try again next tick").
-  Future<String?> remoteSignature() async {
-    try {
-      final entries = await github.listDir(github.config.viewsPath);
-      final parts = [
-        for (final e in entries)
-          if (e.type == 'file' && e.path.endsWith('.yml'))
-            '${e.name}:${e.sha ?? ''}',
-      ]..sort();
-      return parts.join('|');
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<String?> remoteSignature() => source.signature(source.viewsPath);
 
   /// The signature recorded by the last successful [refresh], or null if
   /// the cache has never been written (or predates signature tracking).
@@ -124,13 +113,13 @@ class SchemaSync {
     final sigParts = <String>[];
 
     try {
-      final entries = await github.listDir(github.config.viewsPath);
+      final entries = await source.listDir(source.viewsPath);
       for (final e in entries) {
-        if (e.type != 'file' || !e.path.endsWith('.yml')) {
+        if (!e.isFile || !e.path.endsWith('.yml')) {
           skipped++;
           continue;
         }
-        final file = await github.readFile(e.path);
+        final file = await source.readFile(e.path);
         if (file == null) {
           // Listed but 404 on read — a push raced this refresh (file
           // renamed/deleted) or an API blip. Swapping in a cache missing
@@ -140,7 +129,7 @@ class SchemaSync {
         }
         final out = File(p.join(tmpDir.path, e.name));
         out.writeAsStringSync(file.content);
-        sigParts.add('${e.name}:${e.sha ?? ''}');
+        sigParts.add('${e.name}:${e.version ?? ''}');
         fetched++;
       }
     } catch (e) {

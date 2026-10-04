@@ -8,7 +8,7 @@ import 'package:http/testing.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:airledger/models/github_config.dart';
-import 'package:airledger/services/github_client.dart';
+import 'package:airledger/services/config_source/github_config_source.dart';
 import 'package:airledger/services/schema_sync.dart';
 
 /// Fake GitHub contents API over [files] (name → yaml body). Files in
@@ -56,7 +56,7 @@ MockClient _githubApi({
   });
 }
 
-SchemaSync _sync(MockClient client) => SchemaSync(GithubClient(
+SchemaSync _sync(MockClient client) => SchemaSync(BakedGitHubSource(
       GithubConfig(token: 't', owner: 'o', repo: 'r'),
       httpClient: client,
     ));

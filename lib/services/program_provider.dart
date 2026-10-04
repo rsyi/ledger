@@ -20,7 +20,8 @@ export 'intent_docs.dart';
 ///
 /// Construct one, call [load], await the result.
 class ProgramProvider {
-  /// The fetcher to use (e.g. [CoachBrain.githubFetcher]).
+  /// The fetcher to use — the active config source's
+  /// `ConfigSource.docFetcher` (config_source/config_source.dart).
   final CoachDocFetcher fetchDoc;
 
   /// Injectable clock — defaults to [DateTime.now]. Tests pass a fixed value.

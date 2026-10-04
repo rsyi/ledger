@@ -1,11 +1,9 @@
 import '../models/coach_proposal.dart';
-import '../models/github_config.dart';
 import '../models/model_config.dart';
 import '../models/view_schema.dart';
 import 'chat_runner.dart';
 import 'coach_tools.dart';
 import 'day_status.dart' show DayStatus;
-import 'github_client.dart';
 import 'missed_work.dart';
 import 'program_current.dart';
 import 'program_moves.dart';
@@ -133,15 +131,6 @@ class CoachBrain {
     this.metaGet,
     this.now = DateTime.now,
   });
-
-  /// Builds a [CoachDocFetcher] over the configured GitHub repo. Null
-  /// config (no `github:` block) → a fetcher that always misses, which
-  /// surfaces as the "coach docs unavailable" fallback note.
-  static CoachDocFetcher githubFetcher(GithubConfig? config) {
-    if (config == null) return (_) async => null;
-    final client = GithubClient(config);
-    return (path) async => (await client.readFile(path))?.content;
-  }
 
   /// One full reply turn on the ChatRunner tool loop: system prompt =
   /// docs + ledger dump; the thread history rides in a single user

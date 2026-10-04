@@ -12,10 +12,10 @@ library;
 
 import 'package:flutter/foundation.dart';
 import 'package:googleapis/sheets/v4.dart' as sheets;
-import 'package:googleapis_auth/auth_io.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_settings_tab.dart';
+import 'google_auth/sheets_auth.dart';
 import 'program_current.dart' show currentVersion;
 import 'week_start.dart';
 
@@ -30,16 +30,16 @@ class AppSettings {
   static const _prefsKey = 'app_settings.week_start';
 
   static String? _spreadsheetId;
-  static String? _keyJson;
+  static SheetsAuth? _auth;
 
   /// Wires the Sheets backing store (bootstrap) and loads the cached
   /// value. Never throws.
   static Future<void> init({
     required String spreadsheetId,
-    required String serviceAccountKeyJson,
+    required SheetsAuth auth,
   }) async {
     _spreadsheetId = spreadsheetId;
-    _keyJson = serviceAccountKeyJson;
+    _auth = auth;
     try {
       final prefs = await SharedPreferences.getInstance();
       final v = prefs.getString(_prefsKey);
@@ -49,19 +49,11 @@ class AppSettings {
 
   static Future<T> _withApi<T>(
       Future<T> Function(sheets.SheetsApi api, String id) fn) async {
-    final id = _spreadsheetId, key = _keyJson;
-    if (id == null || key == null) {
+    final id = _spreadsheetId, auth = _auth;
+    if (id == null || id.isEmpty || auth == null) {
       throw StateError('AppSettings not initialized');
     }
-    final client = await clientViaServiceAccount(
-      ServiceAccountCredentials.fromJson(key),
-      [sheets.SheetsApi.spreadsheetsScope],
-    );
-    try {
-      return await fn(sheets.SheetsApi(client), id);
-    } finally {
-      client.close();
-    }
+    return auth.withApi((api) => fn(api, id));
   }
 
   static Future<void> _cache(String? v) async {

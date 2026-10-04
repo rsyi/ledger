@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:airledger/services/google_auth/sheets_auth.dart';
 import 'package:airledger/models/database_config.dart';
 import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/domain_config.dart';
@@ -41,7 +42,7 @@ class _HangingRepo implements WarehouseConnector {
 class _FakeWmStore extends WmStore {
   final WmSnapshot snap;
   _FakeWmStore(this.snap)
-      : super(spreadsheetId: 'test', serviceAccountKeyJson: '{}');
+      : super(spreadsheetId: 'test', auth: ServiceAccountSheetsAuth('{}'));
 
   @override
   Future<WmSnapshot?> snapshot({bool force = false}) async => snap;

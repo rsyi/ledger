@@ -13,6 +13,7 @@ import 'package:airledger_engine/airledger_engine.dart';
 
 import 'engine_ledger_connector.dart';
 import 'engine_sheets_connector.dart';
+import 'google_auth/sheets_auth.dart';
 import 'sheets_repository.dart';
 import 'warehouse_connector.dart';
 
@@ -61,5 +62,31 @@ Future<WarehouseConnector> connectSheetsConnector({
   return SheetsRepository.connectFromKey(
     defaultSpreadsheetId: defaultSpreadsheetId,
     serviceAccountKeyJson: serviceAccountKeyJson,
+  );
+}
+
+/// [connectSheetsConnector] for any data credential (multi-user): the
+/// service account keeps the exact owner path; a Google token opens the
+/// engine ledger in bearer mode (local-first only — the direct-Sheets
+/// fallbacks go through [SheetsRepository.connectWithAuth]).
+Future<WarehouseConnector> connectSheetsConnectorFor({
+  required String defaultSpreadsheetId,
+  required SheetsAuth auth,
+}) async {
+  if (auth is ServiceAccountSheetsAuth) {
+    return connectSheetsConnector(
+      defaultSpreadsheetId: defaultSpreadsheetId,
+      serviceAccountKeyJson: auth.keyJson,
+    );
+  }
+  if (useEngine && useLocalFirst && auth is TokenSheetsAuth) {
+    return EngineLedgerConnector.connectBearer(
+      defaultSpreadsheetId: defaultSpreadsheetId,
+      tokens: auth.tokens,
+    );
+  }
+  return SheetsRepository.connectWithAuth(
+    defaultSpreadsheetId: defaultSpreadsheetId,
+    auth: auth,
   );
 }

@@ -17,7 +17,8 @@
 library;
 
 import 'package:googleapis/sheets/v4.dart' as sheets;
-import 'package:googleapis_auth/auth_io.dart';
+
+import 'google_auth/sheets_auth.dart';
 
 import 'wm_tabs.dart';
 import 'working_max.dart' show defaultVariantByLift;
@@ -25,11 +26,13 @@ import 'working_max.dart' show defaultVariantByLift;
 class WmStore {
   WmStore({
     required this.spreadsheetId,
-    required this.serviceAccountKeyJson,
+    required this.auth,
   });
 
   final String spreadsheetId;
-  final String serviceAccountKeyJson;
+
+  /// Service account (owner build) or the user's Google token.
+  final SheetsAuth auth;
 
   /// Short cache — prescriptions don't need to be fresher than this.
   static const cacheTtl = Duration(minutes: 3);
@@ -38,17 +41,8 @@ class WmStore {
   DateTime? _cachedAt;
 
   Future<T> _withApi<T>(
-      Future<T> Function(sheets.SheetsApi api) fn) async {
-    final client = await clientViaServiceAccount(
-      ServiceAccountCredentials.fromJson(serviceAccountKeyJson),
-      [sheets.SheetsApi.spreadsheetsScope],
-    );
-    try {
-      return await fn(sheets.SheetsApi(client));
-    } finally {
-      client.close();
-    }
-  }
+      Future<T> Function(sheets.SheetsApi api) fn) =>
+      auth.withApi(fn);
 
   /// Both tabs, parsed. Null only when the fetch fails AND nothing is
   /// cached; tabs that don't exist yet read as empty lists (the nightly

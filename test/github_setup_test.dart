@@ -36,4 +36,25 @@ void main() {
     expect(() => parseGithubSetup({'owner': 'o', 'repo': 'r'}),
         throwsFormatException);
   });
+
+  group('googleServerClientIdOf', () {
+    const kaya = KayaGmailConfig(serverClientId: 'kaya-web.apps');
+    test('google block wins', () {
+      expect(googleServerClientIdOf({'server_client_id': 'g.apps'}, kaya),
+          'g.apps');
+    });
+    test('falls back to the Kaya web client id', () {
+      expect(googleServerClientIdOf(null, kaya), 'kaya-web.apps');
+      expect(
+          googleServerClientIdOf({'server_client_id': 'SET_ME'}, kaya),
+          'kaya-web.apps');
+    });
+    test('nothing configured → null', () {
+      expect(googleServerClientIdOf(null, null), isNull);
+      expect(
+          googleServerClientIdOf(
+              null, const KayaGmailConfig(serverClientId: 'SET_ME')),
+          isNull);
+    });
+  });
 }

@@ -139,7 +139,7 @@ class SyncScheduler with WidgetsBindingObserver {
       // failing after the retries) surface exactly as before.
       final results = await retryTransient(
         () async {
-          final res = await _ledger.repo.sync(_viewsJson);
+          final res = await _ledger.sync(_viewsJson);
           final errors = res
               .map((r) => r['error'])
               .whereType<String>()

@@ -9,7 +9,15 @@ import '../models/quickbooks_config.dart';
 /// Baked at build time by `tool/brand.dart` from the schemas repo's
 /// `config.yml` + `.env`.
 class AppConfig {
+  /// The BAKED spreadsheet (owner build). '' on builds without one — the
+  /// user then picks/creates theirs (DataAccountRegistry, multi-user).
   final String spreadsheetId;
+
+  /// WEB OAuth client id for the per-user Google identity (data sign-in):
+  /// top-level `google.server_client_id`, else the Kaya Gmail one (same
+  /// GCP project + client — they share the google_sign_in singleton).
+  /// Null → Google sign-in unavailable on this build.
+  final String? googleServerClientId;
   final List<ModelConfig> models;
 
   /// Top-level kill-switch for post-log LLM hooks. When true, the timeline
@@ -66,6 +74,7 @@ class AppConfig {
   AppConfig({
     required this.spreadsheetId,
     required this.models,
+    this.googleServerClientId,
     this.disablePostLog = false,
     this.github,
     this.githubOAuthClientId,
@@ -85,12 +94,9 @@ class AppConfig {
         'assets/config.yaml: top-level must be a map',
       );
     }
-    final spreadsheetId = node['spreadsheet_id'] as String?;
-    if (spreadsheetId == null) {
-      throw const ConfigException(
-        'assets/config.yaml: missing spreadsheet_id',
-      );
-    }
+    // Optional since multi-user: builds without a baked spreadsheet let
+    // the user sign in with Google and pick/create their own.
+    final spreadsheetId = (node['spreadsheet_id'] as String?) ?? '';
     final modelsNode = node['models'];
     final models = <ModelConfig>[];
     if (modelsNode is YamlList) {
@@ -102,8 +108,19 @@ class AppConfig {
     final gh = parseGithubSetup(node['github'] is YamlMap
         ? _yamlMapToJson(node['github'] as YamlMap)
         : null);
+    final kaya = node['integrations'] is YamlMap &&
+            (node['integrations'] as YamlMap)['kaya_gmail'] is YamlMap
+        ? KayaGmailConfig.fromYaml(_yamlMapToJson(
+            (node['integrations'] as YamlMap)['kaya_gmail'] as YamlMap))
+        : null;
     return AppConfig(
       spreadsheetId: spreadsheetId,
+      googleServerClientId: googleServerClientIdOf(
+        node['google'] is YamlMap
+            ? _yamlMapToJson(node['google'] as YamlMap)
+            : null,
+        kaya,
+      ),
       models: models,
       disablePostLog: (node['disable_post_log'] as bool?) ?? false,
       github: gh.baked,
@@ -118,11 +135,7 @@ class AppConfig {
           ? WithingsConfig.fromYaml(_yamlMapToJson(
               (node['integrations'] as YamlMap)['withings'] as YamlMap))
           : null,
-      kayaGmail: node['integrations'] is YamlMap &&
-              (node['integrations'] as YamlMap)['kaya_gmail'] is YamlMap
-          ? KayaGmailConfig.fromYaml(_yamlMapToJson(
-              (node['integrations'] as YamlMap)['kaya_gmail'] as YamlMap))
-          : null,
+      kayaGmail: kaya,
       whoopApi: node['integrations'] is YamlMap &&
               (node['integrations'] as YamlMap)['whoop_api'] is YamlMap
           ? WhoopApiConfig.fromYaml(_yamlMapToJson(
@@ -130,6 +143,16 @@ class AppConfig {
           : null,
     );
   }
+}
+
+/// `google.server_client_id`, else a configured Kaya Gmail client id.
+/// Empty / SET_ME → null.
+String? googleServerClientIdOf(
+    Map<String, dynamic>? google, KayaGmailConfig? kaya) {
+  final v = google?['server_client_id']?.toString().trim();
+  if (v != null && v.isNotEmpty && v != 'SET_ME') return v;
+  if (kaya != null && kaya.isConfigured) return kaya.serverClientId;
+  return null;
 }
 
 /// Default public config template (multi-user sub-project 3 creates it).

@@ -9,27 +9,31 @@
 library;
 
 import 'package:googleapis/sheets/v4.dart' as sheets;
-import 'package:googleapis_auth/auth_io.dart';
+
+import 'google_auth/sheets_auth.dart';
 
 import 'projection_snapshot.dart';
 
 class ProjectionSnapshotStore {
   ProjectionSnapshotStore({
     required this.spreadsheetId,
-    required this.serviceAccountKeyJson,
+    required SheetsAuth this.auth,
   }) : _fixed = null;
 
   /// In-memory store (tests / offline fixtures): [load] returns
   /// [snapshots] and never touches the network.
   ProjectionSnapshotStore.memory(List<ProjectionSnapshot> snapshots)
     : spreadsheetId = '',
-      serviceAccountKeyJson = '',
+      auth = null,
       _fixed = snapshots;
 
   final List<ProjectionSnapshot>? _fixed;
 
   final String spreadsheetId;
-  final String serviceAccountKeyJson;
+
+  /// Service account (owner build) or the user's Google token; null only
+  /// for the in-memory store.
+  final SheetsAuth? auth;
 
   /// Snapshots change at most once per block — a long cache is safe.
   static const cacheTtl = Duration(minutes: 30);
@@ -47,10 +51,7 @@ class ProjectionSnapshotStore {
       return _cached;
     }
     try {
-      final client = await clientViaServiceAccount(
-        ServiceAccountCredentials.fromJson(serviceAccountKeyJson),
-        [sheets.SheetsApi.spreadsheetsReadonlyScope],
-      );
+      final client = await auth!.client(readOnly: true);
       try {
         final api = sheets.SheetsApi(client);
         final resp = await api.spreadsheets.values.get(

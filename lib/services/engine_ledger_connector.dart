@@ -16,6 +16,7 @@ import '../models/database_config.dart';
 import '../models/view_schema.dart';
 import 'engine.dart';
 import 'engine_schema_adapter.dart';
+import 'google_auth/sheets_auth.dart';
 import 'log_event_bus.dart';
 import 'sheets_repository.dart' show Record;
 import 'sync_scheduler.dart';
@@ -27,7 +28,13 @@ class EngineLedgerConnector implements WarehouseConnector {
   final String defaultSpreadsheetId;
   final EngineLedgerRepository repo;
 
-  EngineLedgerConnector._(this.config, this.defaultSpreadsheetId, this.repo);
+  /// Bearer mode (multi-user, no baked key): the user's Google token
+  /// source, pushed into the engine before every sync. Null = service
+  /// account (owner build).
+  final AccessTokenSource? tokens;
+
+  EngineLedgerConnector._(this.config, this.defaultSpreadsheetId, this.repo,
+      [this.tokens]);
 
   /// Open (creating if needed) the on-device ledger DB and prepare
   /// the sync-side sheets credentials. Works fully offline — the
@@ -48,6 +55,47 @@ class EngineLedgerConnector implements WarehouseConnector {
           SheetsConfig(name: 'gsheets', spreadsheetId: defaultSpreadsheetId),
       defaultSpreadsheetId,
       repo,
+    );
+  }
+
+  /// Bearer-mode twin of [connectFromKey]: the engine authenticates with
+  /// the user's Google access token (pushed in by [sync]). The DB file is
+  /// PER SPREADSHEET — switching spreadsheets must never push one
+  /// sheet's local rows (and row bookkeeping) into another.
+  static Future<EngineLedgerConnector> connectBearer({
+    required String defaultSpreadsheetId,
+    required AccessTokenSource tokens,
+    SheetsConfig? config,
+  }) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final repo = getEngine().openLedgerBearer(
+      dbPath: p.join(dir.path, bearerDbFileName(defaultSpreadsheetId)),
+      defaultSpreadsheetId: defaultSpreadsheetId,
+      accessToken: '',
+    );
+    return EngineLedgerConnector._(
+      config ??
+          SheetsConfig(name: 'gsheets', spreadsheetId: defaultSpreadsheetId),
+      defaultSpreadsheetId,
+      repo,
+      tokens,
+    );
+  }
+
+  /// Local DB file for a bearer-mode ledger (the owner's stays
+  /// `engine_ledger.db`).
+  static String bearerDbFileName(String spreadsheetId) =>
+      'engine_ledger_${spreadsheetId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_')}.db';
+
+  /// Full sync. Bearer mode pushes a fresh token first and refreshes +
+  /// re-syncs once on an `unauthorized (401)` result.
+  Future<List<Map<String, dynamic>>> sync(List<Map<String, dynamic>> views) {
+    final t = tokens;
+    if (t == null) return repo.sync(views);
+    return syncWithTokenRefresh(
+      tokens: t,
+      setToken: repo.setAccessToken,
+      runSync: () => repo.sync(views),
     );
   }
 

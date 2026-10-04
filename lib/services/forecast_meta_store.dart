@@ -9,18 +9,21 @@
 library;
 
 import 'package:googleapis/sheets/v4.dart' as sheets;
-import 'package:googleapis_auth/auth_io.dart';
+
+import 'google_auth/sheets_auth.dart';
 
 import 'forecast_calibration.dart';
 
 class ForecastMetaStore {
   ForecastMetaStore({
     required this.spreadsheetId,
-    required this.serviceAccountKeyJson,
+    required this.auth,
   });
 
   final String spreadsheetId;
-  final String serviceAccountKeyJson;
+
+  /// Service account (owner build) or the user's Google token.
+  final SheetsAuth auth;
 
   static const cacheTtl = Duration(minutes: 15);
 
@@ -36,10 +39,7 @@ class ForecastMetaStore {
       return _cached;
     }
     try {
-      final client = await clientViaServiceAccount(
-        ServiceAccountCredentials.fromJson(serviceAccountKeyJson),
-        [sheets.SheetsApi.spreadsheetsReadonlyScope],
-      );
+      final client = await auth.client(readOnly: true);
       try {
         final api = sheets.SheetsApi(client);
         final resp = await api.spreadsheets.values.get(

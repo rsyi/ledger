@@ -29,9 +29,9 @@ import 'package:android_intent_plus/flag.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:googleapis/sheets/v4.dart' as sheets;
-import 'package:googleapis_auth/auth_io.dart';
 
 import '../app_config.dart' show KayaGmailConfig;
+import '../google_auth/sheets_auth.dart';
 import '../transient_retry.dart';
 import '../kaya_csv.dart';
 import '../week_state_loader.dart';
@@ -170,29 +170,22 @@ abstract class KayaTabStore {
   Future<void> replaceAll(List<List<String>> rows);
 }
 
-/// Real store over the Sheets API via the bundled service account (the
-/// same credential path every other sheet write in the app uses).
-class ServiceAccountKayaTabStore implements KayaTabStore {
-  ServiceAccountKayaTabStore({
+/// Real store over the Sheets API via the app's data credential (the
+/// baked service account on the owner build, the user's Google token
+/// otherwise — the same path every other direct sheet write uses).
+class SheetsKayaTabStore implements KayaTabStore {
+  SheetsKayaTabStore({
     required this.spreadsheetId,
-    required this.serviceAccountKeyJson,
+    required this.auth,
   });
 
   final String spreadsheetId;
-  final String serviceAccountKeyJson;
+  final SheetsAuth auth;
 
   Future<T> _withApi<T>(
-      String scope, Future<T> Function(sheets.SheetsApi) fn) async {
-    final client = await clientViaServiceAccount(
-      ServiceAccountCredentials.fromJson(serviceAccountKeyJson),
-      [scope],
-    );
-    try {
-      return await fn(sheets.SheetsApi(client));
-    } finally {
-      client.close();
-    }
-  }
+          String scope, Future<T> Function(sheets.SheetsApi) fn) =>
+      auth.withApi(fn,
+          readOnly: scope == sheets.SheetsApi.spreadsheetsReadonlyScope);
 
   @override
   Future<List<List<Object?>>?> read() async {

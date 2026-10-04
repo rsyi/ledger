@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../models/database_config.dart';
 import '../models/view_schema.dart';
 import 'cell_codec.dart';
+import 'google_auth/sheets_auth.dart';
 import 'warehouse_connector.dart';
 
 /// One row from a sheet, keyed by dimension name.
@@ -91,6 +92,22 @@ class SheetsRepository implements WarehouseConnector {
       config ?? SheetsConfig(name: 'gsheets', spreadsheetId: defaultSpreadsheetId),
       defaultSpreadsheetId,
       api,
+    );
+  }
+
+  /// Same as [connectFromKey] over any [SheetsAuth] (service account on
+  /// the owner build, the user's Google token otherwise — multi-user).
+  static Future<SheetsRepository> connectWithAuth({
+    required String defaultSpreadsheetId,
+    required SheetsAuth auth,
+    SheetsConfig? config,
+  }) async {
+    final client = _RetryingClient(await auth.client());
+    return SheetsRepository._(
+      config ??
+          SheetsConfig(name: 'gsheets', spreadsheetId: defaultSpreadsheetId),
+      defaultSpreadsheetId,
+      sheets.SheetsApi(client),
     );
   }
 

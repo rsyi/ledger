@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:airledger/services/google_auth/sheets_auth.dart';
 import 'package:airledger/ui/design/design.dart' show AppCard;
 
 import 'package:airledger/models/database_config.dart';
@@ -29,7 +30,7 @@ const _fitnessRepo = '../airledger-fitness/coach';
 
 class _FakeWmStore extends WmStore {
   _FakeWmStore(this.rows)
-      : super(spreadsheetId: 'test', serviceAccountKeyJson: '{}');
+      : super(spreadsheetId: 'test', auth: ServiceAccountSheetsAuth('{}'));
 
   final List<WorkingMaxRow> rows;
   int snapshots = 0;

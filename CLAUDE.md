@@ -121,6 +121,40 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   oauth_client_id/template_repo) no longer bakes a source. Settings gains
   a "Program config" card (name, account, Change, Sign out — disabled for
   baked).
+- **Per-user Google identity for DATA (2026-10-03, multi-user sub-project
+  2)**: every direct Sheets path takes a `SheetsAuth`
+  (lib/services/google_auth/sheets_auth.dart): `ServiceAccountSheetsAuth`
+  when `assets/service-account.json` is a usable key (OWNER build —
+  `hasServiceAccountKey`; behaviour byte-identical) else
+  `TokenSheetsAuth` over an `AccessTokenSource` = `GoogleSignInIdentity`
+  (google_identity.dart; google_sign_in 7.x singleton SHARED with Kaya
+  Gmail; scopes spreadsheets + drive.file; token via the authorization
+  client, cached 45 min; a 401 → `invalidate` = clearAuthorizationToken).
+  `BearerClient` buffers the body and replays once on 401. Converted:
+  WmStore, ForecastMetaStore, ProjectionSnapshotStore, AppSettings
+  (`init(auth:)`), `SheetsKayaTabStore` (was ServiceAccountKayaTabStore),
+  read-only `SheetsRepository.connectWithAuth`. ENGINE: Rust bearer mode
+  (airledger `SheetsRepository::new_bearer`, FFI `ledger_open_bearer` +
+  `ledger_set_access_token`; sdk-dart `openLedgerBearer`/
+  `setAccessToken`/`kUnauthorizedMarker`); `EngineLedgerConnector.
+  connectBearer` (DB file PER SPREADSHEET: `engine_ledger_<sid>.db`;
+  owner stays `engine_ledger.db`) and `connector.sync()` (SyncScheduler
+  calls it) = `syncWithTokenRefresh`: push token → sync → on
+  `unauthorized (401)` invalidate, push fresh, re-sync once.
+  `DataAccountRegistry` (data_account.dart) resolves owner (baked key +
+  baked spreadsheet_id — fixed) vs user (signed-in email + secure-storage
+  key `spreadsheet_id`, NOT the synced app_settings tab); Create new =
+  Sheets `spreadsheets.create` titled "Ledger" (tabs + headers come from
+  the engine's ensure_sheet on first sync); Use existing = paste id or
+  URL (`parseSpreadsheetId`). Bootstrap: ConfigGate → config source →
+  data account → home; non-owner and not ready → `DataSetupScreen`
+  (data_account_card.dart; Skip for now = offline). Home key gains
+  `|google:<sid>` in user mode only (owner key unchanged). Settings
+  gains "Account & spreadsheet" (`DataAccountCard`; read-only on the
+  owner build). Web client id: `google.server_client_id` in config.yml,
+  else `integrations.kaya_gmail.server_client_id`. assets
+  `spreadsheet_id` is now OPTIONAL; sync_assets.sh writes `{}` when no
+  SA key exists. Owner build installed 2026-10-03 (dylib strings-checked).
 - **IA restructure — Plan tab folded into Progress (2026-10-02, user
   directive; SUPERSEDES the tab lists below)**: the shell is now
   **4-tab: Today · Log · Week · Progress** (indices + labels in
@@ -1092,6 +1126,21 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
+- Per-user Google data (2026-10-03): NOT exercised on device with a
+  non-owner build (needs a build without the SA key). GCP (project
+  ryi-data-entry, OAuth consent screen in TESTING): add scopes
+  `.../auth/spreadsheets` + `.../auth/drive.file`; add each friend as a
+  TEST USER (≤100, no verification needed in testing mode); the Android
+  OAuth client (package com.robertyi.fitness + SHA-1 of the signing key —
+  a friend's sideloaded APK signed with a DIFFERENT key needs its SHA-1
+  registered too) and the WEB client id (config `google.server_client_id`
+  or the Kaya one); enable the Google Sheets API (Drive API not needed for
+  drive.file create via Sheets). Gaps: Kaya's Disconnect calls
+  GoogleSignIn.signOut() — it signs the DATA identity out too (shared
+  singleton); rows logged while "Skip for now" land in
+  `engine_ledger_.db` and are orphaned once a spreadsheet is chosen;
+  testing-mode refresh grants expire after 7 days (re-sign-in from
+  Settings when sync says unauthorized).
 - Config source (2026-10-03): device-flow sign-in needs the OWNER to
   register a GitHub OAuth App (github.com/settings/developers → New OAuth
   App; any homepage/callback URL; tick "Enable Device Flow") and put its

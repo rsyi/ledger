@@ -24,6 +24,16 @@ class AppConfig {
   /// stay inert.
   final GithubConfig? github;
 
+  /// `github.oauth_client_id` — the public client id of a GitHub OAuth
+  /// App (or GitHub App) with device flow enabled. Drives the in-app
+  /// "Sign in with GitHub" for users without baked config; null → the
+  /// fine-grained PAT paste fallback.
+  final String? githubOAuthClientId;
+
+  /// `github.template_repo` — `owner/name` of the public config template
+  /// the connect screen links to ("use the template").
+  final String githubTemplateRepo;
+
   /// When non-null, the app boots straight into the timeline for the view
   /// matching this name — skipping the home screen and most chrome (chat,
   /// sync, reload). For single-purpose client-facing builds (Poke House
@@ -58,6 +68,8 @@ class AppConfig {
     required this.models,
     this.disablePostLog = false,
     this.github,
+    this.githubOAuthClientId,
+    this.githubTemplateRepo = kDefaultTemplateRepo,
     this.kioskView,
     this.quickbooks,
     this.withings,
@@ -87,13 +99,16 @@ class AppConfig {
         models.add(ModelConfig.fromYaml(_yamlMapToJson(entry)));
       }
     }
+    final gh = parseGithubSetup(node['github'] is YamlMap
+        ? _yamlMapToJson(node['github'] as YamlMap)
+        : null);
     return AppConfig(
       spreadsheetId: spreadsheetId,
       models: models,
       disablePostLog: (node['disable_post_log'] as bool?) ?? false,
-      github: node['github'] is YamlMap
-          ? GithubConfig.fromYaml(_yamlMapToJson(node['github'] as YamlMap))
-          : null,
+      github: gh.baked,
+      githubOAuthClientId: gh.oauthClientId,
+      githubTemplateRepo: gh.templateRepo,
       kioskView: node['kiosk_view'] as String?,
       quickbooks: node['quickbooks'] is YamlMap
           ? QuickBooksConfig.fromYaml(node['quickbooks'] as YamlMap)
@@ -115,6 +130,32 @@ class AppConfig {
           : null,
     );
   }
+}
+
+/// Default public config template (multi-user sub-project 3 creates it).
+const kDefaultTemplateRepo = 'rsyi/ledger-template';
+
+/// Splits the `github:` block: a block WITH a token (+ owner/repo) is the
+/// owner's baked source (malformed → throws, as before); a block carrying
+/// only `oauth_client_id` / `template_repo` configures sign-in for
+/// everyone else without baking a repo.
+({GithubConfig? baked, String? oauthClientId, String templateRepo})
+    parseGithubSetup(Map<String, dynamic>? m) {
+  if (m == null) {
+    return (baked: null, oauthClientId: null, templateRepo: kDefaultTemplateRepo);
+  }
+  String? str(Object? v) {
+    final s = v?.toString().trim();
+    return s == null || s.isEmpty || s == 'SET_ME' ? null : s;
+  }
+  final hasRepo = str(m['token']) != null ||
+      str(m['owner']) != null ||
+      str(m['repo']) != null;
+  return (
+    baked: hasRepo ? GithubConfig.fromYaml(m) : null,
+    oauthClientId: str(m['oauth_client_id']),
+    templateRepo: str(m['template_repo']) ?? kDefaultTemplateRepo,
+  );
 }
 
 /// `integrations.whoop_api` — Whoop developer-app OAuth credentials

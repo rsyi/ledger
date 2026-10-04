@@ -86,6 +86,41 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Current feature state (all live on device as of 2026-09-28)
 
+- **Config source abstraction (2026-10-03, multi-user sub-project 1 of
+  docs/superpowers/specs/2026-10-03-multi-user-design.md)**: every config
+  read goes through the ACTIVE `ConfigSource`
+  (lib/services/config_source/: id, displayName, account, canSignOut,
+  viewsPath, pollInterval, listDir/readFile/writeFile, signature(dir) —
+  the old SchemaSync `.sig` format — and `docFetcher`). Impls:
+  `GitHubConfigSource` (repo/branch/ROOT folder over the unchanged
+  GithubClient; root-relative paths in/out) and `BakedGitHubSource` (the
+  owner build's assets `github:` block — wire requests byte-identical to
+  the pre-abstraction app, pinned in test/config_source_test.dart).
+  `ConfigSourceRegistry` (static `active` ValueNotifier) resolves
+  USER-CONNECTED (secure storage key `config_source.github.v1`) > BAKED >
+  none; sign-out of a user source falls back to baked. Changing location
+  drops DocCache + CoachBrain doc cache + synced_schemas. Readers moved:
+  SchemaSync (now takes a ConfigSource), ProgramProvider (program/phase/
+  strategy → also the week-start default), DomainConfigProvider
+  (dashboards.yaml), CoachBrain coach docs, the poller + manual sync
+  button. `CoachBrain.githubFetcher` is GONE (use `source.docFetcher` /
+  `configDocFetcher`). The chat's branch/PR tools still take a
+  GithubClient — derived from the active source when it is GitHub
+  (`_Bootstrap.github` getter). App root = `ConfigGate` (main.dart):
+  resolves the source, keys HomeScreen on source id (full re-bootstrap on
+  change); no source + non-kiosk → `ConnectProgramScreen` (minimal
+  onboarding; "Continue without a program" = old no-github behaviour). A
+  non-baked source with an empty cache syncs BEFORE the first schema load
+  (else the bundled owner schemas would show). Sign-in: OAuth DEVICE FLOW
+  when assets config has `github.oauth_client_id` (scope `repo`; no
+  secret on device), else/also a pasted fine-grained PAT (Contents
+  read/write on one repo); then repo list → branch → folder → validate
+  (views/*.yml + coach/program.yaml; missing program → "Connect anyway";
+  template link `github.template_repo`, default rsyi/ledger-template —
+  repo not created yet). A github block WITHOUT token/owner/repo (only
+  oauth_client_id/template_repo) no longer bakes a source. Settings gains
+  a "Program config" card (name, account, Change, Sign out — disabled for
+  baked).
 - **IA restructure — Plan tab folded into Progress (2026-10-02, user
   directive; SUPERSEDES the tab lists below)**: the shell is now
   **4-tab: Today · Log · Week · Progress** (indices + labels in
@@ -1057,6 +1092,14 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
 
 ## Open follow-ups
 
+- Config source (2026-10-03): device-flow sign-in needs the OWNER to
+  register a GitHub OAuth App (github.com/settings/developers → New OAuth
+  App; any homepage/callback URL; tick "Enable Device Flow") and put its
+  client id in airledger-fitness config.yml `github.oauth_client_id`
+  (public, no secret). Until then the connect screen offers the PAT path
+  only. A GitHub App (per-repo permissions) also works with the same field.
+  Rooted user sources: the chat's GitHub read/PR tools still use
+  repo-root paths. Not yet exercised on device with a non-baked source.
 - Part 2 carryover (2026-10-02): NOT yet verified on device — install the
   built APK, try Move to… / Undo, and watch the first nightly (23:30) for
   a moves card. Known gaps: same-day loose matching can over-credit

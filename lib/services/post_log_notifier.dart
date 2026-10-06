@@ -41,8 +41,12 @@ class PostLogNotifier {
     _timer?.cancel();
   }
 
+  /// Whether [e] is notification-worthy: a CREATE (a log) on a watched
+  /// view — an edit or a delete is not "Nice work".
+  static bool notifies(LogEvent e) => e.isCreate && _watched.contains(e.view);
+
   void _onEvent(LogEvent e) {
-    if (!_watched.contains(e.view)) return;
+    if (!notifies(e)) return;
     _pending.add(e);
     _timer?.cancel();
     _timer = Timer(_debounce, _flush);

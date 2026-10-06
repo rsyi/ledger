@@ -620,6 +620,34 @@ void main() {
   Finder rowOf(String text) => find.ancestor(
       of: find.textContaining(text), matching: find.byType(ExerciseRow));
 
+  testWidgets('an EDIT and a DELETE of a logged set refresh the card '
+      '(update/delete events — 2026-10-05 stale-card bug)', (tester) async {
+    if (!hasFitness) return;
+    final strength = _FakeRepo([set('t1', 'Barbell Deadlift', 275, 6)]);
+    await pump(tester,
+        date: fri, moves: _FakeRepo(), strength: strength, wm: tms());
+    expect(find.textContaining('Deadlift heavy  top 275×6'), findsOneWidget);
+    expect(find.text('1 / 5 done'), findsOneWidget);
+
+    // Edit: 275 → 285 (the connector publishes kind updated).
+    final edited = {...strength.rows.single, 'weight': 285};
+    strength.rows
+      ..clear()
+      ..add(edited);
+    LogEventBus.instance.publish(
+        LogEvent('strength', edited, kind: LogEventKind.updated));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Deadlift heavy  top 285×6'), findsOneWidget);
+
+    // Delete it (kind deleted): the count drops, the achievement goes.
+    strength.rows.clear();
+    LogEventBus.instance.publish(
+        LogEvent('strength', edited, kind: LogEventKind.deleted));
+    await tester.pumpAndSettle();
+    expect(find.text('0 / 5 done'), findsOneWidget);
+    expect(find.textContaining('top 285×6'), findsNothing);
+  });
+
   testWidgets('done items show what was achieved, clips inline, also logged',
       (tester) async {
     if (!hasFitness) return;

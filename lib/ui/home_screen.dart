@@ -557,8 +557,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _replan = replan;
         unawaited(replan());
         await _movesSub?.cancel();
+        // A strength edit/delete re-checks the window too (a day whose
+        // logged sets were all removed is no longer frozen mid-session).
         _movesSub = LogEventBus.instance.stream
-            .where((e) => e.view == 'program_moves')
+            .where((e) =>
+                e.view == 'program_moves' ||
+                (e.view == 'strength' && !e.isCreate))
             .listen((_) => unawaited(replan()));
       }
     }

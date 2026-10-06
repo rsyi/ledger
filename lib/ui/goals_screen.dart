@@ -14,6 +14,8 @@
 /// fetch (the same sources the driver checklist reads).
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' show DateFormat;
 
@@ -21,6 +23,7 @@ import '../models/view_schema.dart';
 import '../services/analytics_engine.dart';
 import '../services/domain_config.dart' show DomainConfigProvider;
 import '../services/goals_service.dart';
+import '../services/log_event_bus.dart';
 import '../services/heart_rate_service.dart';
 import '../services/home_synthesis.dart' show asNum, strengthRowFromRecord;
 import '../services/muscle_volume.dart'
@@ -130,17 +133,54 @@ class GoalsScreenState extends State<GoalsScreen> {
   late final DateTime _today;
   late Future<_GoalsData?> _future;
 
+  /// The last computed goals — kept on screen while a bus-driven
+  /// recompute is in flight (no spinner flash per logged set).
+  _GoalsData? _last;
+  StreamSubscription<LogEvent>? _logSub;
+  Timer? _logDebounce;
+
   @override
   void initState() {
     super.initState();
     _today = widget.today ?? DateTime.now();
-    _future = _compute();
+    _future = _computeKeep();
+    // Any ledger write — a log, an EDIT or a DELETE (2026-10-05: a
+    // cleaned-up session kept showing its stale sets) — recomputes the
+    // week's goals, debounced so a burst of writes recomputes once.
+    _logSub = LogEventBus.instance.stream.listen((_) {
+      _logDebounce?.cancel();
+      _logDebounce = Timer(logDebounce, () {
+        // Block body: an arrow would hand the Future to setState.
+        if (mounted) {
+          setState(() {
+            _future = _computeKeep();
+          });
+        }
+      });
+    });
   }
+
+  /// Debounce for bus-driven recomputes.
+  static const logDebounce = Duration(milliseconds: 600);
+
+  @override
+  void dispose() {
+    _logSub?.cancel();
+    _logDebounce?.cancel();
+    super.dispose();
+  }
+
+  Future<_GoalsData?> _computeKeep() => _compute().then((d) {
+        _last = d;
+        return d;
+      });
 
   /// Pull-to-refresh: bust the shared dashboards-config cache + refire.
   Future<void> reload() async {
     DomainConfigProvider.clearCache();
-    setState(() => _future = _compute());
+    setState(() {
+      _future = _computeKeep();
+    });
     await _future;
   }
 
@@ -351,10 +391,11 @@ class GoalsScreenState extends State<GoalsScreen> {
     return FutureBuilder<_GoalsData?>(
       future: _future,
       builder: (context, snap) {
-        if (snap.connectionState != ConnectionState.done) {
+        final done = snap.connectionState == ConnectionState.done;
+        if (!done && _last == null) {
           return const Center(child: CircularProgressIndicator());
         }
-        final data = snap.data;
+        final data = done ? snap.data : _last;
         if (data == null || data.goals.isEmpty) {
           return const _Placeholder();
         }

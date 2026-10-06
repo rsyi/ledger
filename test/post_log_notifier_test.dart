@@ -5,6 +5,21 @@ import 'package:airledger/services/post_log_notifier.dart';
 LogEvent ev(String view, Map<String, Object?> record) => LogEvent(view, record);
 
 void main() {
+  test('only creates notify — edits and deletes stay quiet', () {
+    const row = {'exercise': 'Squat', 'reps': 5, 'weight': 260.0};
+    expect(PostLogNotifier.notifies(const LogEvent('strength', row)), isTrue);
+    expect(
+        PostLogNotifier.notifies(const LogEvent('strength', row,
+            kind: LogEventKind.deleted)),
+        isFalse);
+    expect(
+        PostLogNotifier.notifies(const LogEvent('strength', row,
+            kind: LogEventKind.updated)),
+        isFalse);
+    expect(PostLogNotifier.notifies(const LogEvent('program_moves', row)),
+        isFalse);
+  });
+
   group('describeLogBatch', () {
     test('single strength set names exercise reps×weight', () {
       expect(

@@ -2,7 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:airledger/services/domain_config.dart';
 import 'package:airledger/services/goals_service.dart';
+import 'package:airledger/services/log_event_bus.dart';
 import 'package:airledger/ui/design/design.dart';
 import 'package:airledger/ui/goals_screen.dart';
 
@@ -108,7 +110,33 @@ const climbing = GoalEval(
   value: '3/2 sessions',
 );
 
+class _CountingDashboards extends DomainConfigProvider {
+  int loads = 0;
+  _CountingDashboards() : super((_) async => null);
+  @override
+  Future<String?> loadRaw() async {
+    loads++;
+    return null;
+  }
+}
+
 void main() {
+  testWidgets('Week goals recompute on a logged-set EDIT or DELETE '
+      '(debounced; 2026-10-05 stale-goals bug)', (tester) async {
+    final dash = _CountingDashboards();
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: GoalsScreen(dashboards: dash))));
+    await tester.pumpAndSettle();
+    expect(dash.loads, 1);
+    LogEventBus.instance.publish(const LogEvent('strength', {'id': 'r1'},
+        kind: LogEventKind.deleted));
+    LogEventBus.instance.publish(const LogEvent('strength', {'id': 'r2'},
+        kind: LogEventKind.updated));
+    await tester.pump(GoalsScreenState.logDebounce);
+    await tester.pumpAndSettle();
+    expect(dash.loads, 2, reason: 'one debounced recompute');
+  });
+
   testWidgets(
     'muscle row: summary meta + one mini bar per group, plain words',
     (tester) async {

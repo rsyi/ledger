@@ -9,6 +9,7 @@
 library;
 
 import 'package:airledger_engine/airledger_engine.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -35,6 +36,13 @@ class EngineLedgerConnector implements WarehouseConnector {
 
   EngineLedgerConnector._(this.config, this.defaultSpreadsheetId, this.repo,
       [this.tokens]);
+
+  /// Test seam: wraps a fake engine [repo] (no dylib, no sheets).
+  @visibleForTesting
+  EngineLedgerConnector.forTesting(this.repo)
+      : config = SheetsConfig(name: 'gsheets', spreadsheetId: 'test'),
+        defaultSpreadsheetId = 'test',
+        tokens = null;
 
   /// Open (creating if needed) the on-device ledger DB and prepare
   /// the sync-side sheets credentials. Works fully offline — the
@@ -136,6 +144,10 @@ class EngineLedgerConnector implements WarehouseConnector {
       recordToEngineJson(record),
     );
     SyncScheduler.instance?.onLocalWrite();
+    // An edit changes what the day achieved: refresh the program card,
+    // Week goals, synthesis (no post-log notification — kind filters).
+    LogEventBus.instance.publish(
+        LogEvent(view.name, record, kind: LogEventKind.updated));
   }
 
   @override
@@ -145,12 +157,11 @@ class EngineLedgerConnector implements WarehouseConnector {
       recordToEngineJson(record),
     );
     SyncScheduler.instance?.onLocalWrite();
-    // A program_moves delete (proposal Undo / Schedule rollback) changes
-    // the effective week: nudge the program day card + synthesis like a
-    // create would. Other views' deletes stay silent (no post-log
-    // notification for removing a row).
-    if (view.name == 'program_moves') {
-      LogEventBus.instance.publish(LogEvent(view.name, record));
-    }
+    // Every delete refreshes the surfaces that show logged work (a
+    // program_moves delete — proposal Undo / Schedule rollback — changes
+    // the effective week; a deleted set changes the day). Kind `deleted`
+    // keeps PostLogNotifier quiet.
+    LogEventBus.instance.publish(
+        LogEvent(view.name, record, kind: LogEventKind.deleted));
   }
 }

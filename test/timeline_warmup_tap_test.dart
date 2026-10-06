@@ -184,8 +184,7 @@ void main() {
     await _settle(tester);
     expect(repo.created, hasLength(3));
     expect(find.text('3 / 22'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
+    await _flushTimers(tester);
   });
 
   testWidgets('a tap landing on the group header\'s Log all (it slides down '
@@ -212,8 +211,7 @@ void main() {
     await _settle(tester);
     expect(repo.created, hasLength(1));
     expect(await PlanStore.loadForDate(_view, _mon), hasLength(21));
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
+    await _flushTimers(tester);
   });
 
   testWidgets('a stale chip (the planner rewrote the day under the open '
@@ -242,7 +240,6 @@ void main() {
       left.where((e) => e.values['weight'] == 270 && e.values['reps'] == 4),
       isEmpty,
     );
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
+    await _flushTimers(tester);
   });
 }

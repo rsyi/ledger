@@ -198,6 +198,11 @@ void main() {
     final repo = await _pump(tester);
     await tester.tap(find.byTooltip('Log all'));
     await _settle(tester);
+    // Confirms first (a stray tap must never log the whole group).
+    expect(repo.created, isEmpty);
+    expect(find.text('Log all 21 remaining sets?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Log all'));
+    await _settle(tester);
     expect(repo.created, hasLength(21));
     expect(find.text('21 / 21 ✓'), findsOneWidget);
     expect(find.byType(ExerciseRow), findsNothing);

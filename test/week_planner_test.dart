@@ -1049,6 +1049,36 @@ void main() {
       ]);
     });
 
+    test('MID-SESSION freeze: once a planned day has a logged set, a '
+        'reprice (TM change, accessory progression from today\'s own sets) '
+        'never rewrites it — ids stable, no duplicates; other days still '
+        'track', () async {
+      final view = _strengthView();
+      final sigs = await WeekPlanner.syncPlannedDays(
+          strengthView: view, program: program, today: friday,
+          workingMaxes: wms);
+      final fri0 = await PlanStore.loadForDate(view, friday);
+      // The user logs (and the timeline consumes) the first warm-up.
+      await PlanStore.remove(view, fri0.first.localId);
+      final logged = [
+        {'date': DateTime(2026, 10, 2), ...fri0.first.values},
+      ];
+      final sigs2 = await WeekPlanner.syncPlannedDays(
+        strengthView: view,
+        program: program,
+        today: friday,
+        workingMaxes: {...wms, 'deadlift': 360.0, 'press': 160.0},
+        storedSignatures: sigs,
+        loggedRows: logged,
+      );
+      final fri1 = await PlanStore.loadForDate(view, friday);
+      expect(fri1.map((e) => e.localId), fri0.skip(1).map((e) => e.localId));
+      expect(sigs2['2026-10-02'], sigs['2026-10-02'],
+          reason: 'frozen day keeps its stored signature');
+      // Saturday (OHP, untrained) still reprices.
+      expect(sigs2['2026-10-03'], isNot(sigs['2026-10-03']));
+    });
+
     group('program_moves (travel week of Mon Oct 5)', () {
       final phase = _loadYamlMap('$_fitnessRepo/phase.yaml');
       final sunday = DateTime(2026, 10, 4); // window Sun 4 .. Sat 10

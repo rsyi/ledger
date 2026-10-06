@@ -711,8 +711,22 @@ class WeekPlanner {
       final k = fmt.format(d);
       final sig =
           planDaySignature(byDay[k]!, moveKeys: moveKeysByDay[k] ?? '');
+      // MID-SESSION FREEZE (2026-10-05): a day the planner already wrote
+      // (stored signature) that has a logged set is a session in
+      // progress — never rewrite it. A reprice mid-workout (app resume
+      // after the camera/video picker; today's own sets feeding the
+      // accessory progression / references) used to swap every planned
+      // row for fresh localIds under the open Log screen, so the next
+      // stale chip tap logged a set whose twin stayed planned
+      // (duplicates). The stored signature carries forward; program
+      // changes reach the day again only if its logged sets go away.
+      final stored = storedSignatures[k];
+      if (stored != null && (loggedByDay[k]?.isNotEmpty ?? false)) {
+        signatures[k] = stored;
+        continue;
+      }
       signatures[k] = sig;
-      if (storedSignatures[k] == sig) continue;
+      if (stored == sig) continue;
       rewrite.add(k);
       for (final e in remainingAfterLogged(
           byDay[k]!, loggedByDay[k] ?? const [])) {

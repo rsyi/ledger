@@ -1408,18 +1408,45 @@ class _TimelineScreenState extends State<TimelineScreen> {
     await _deleteOptimistic(groupKeys);
   }
 
-  /// One-tap "Log all" for a template group: promotes every remaining
-  /// planned entry in the group through the same `_logNow` path as the
-  /// per-row circle — each stamped with the moment it's written, run
-  /// sequentially so the existing in-flight guards hold. No confirm;
-  /// a snackbar reports the count.
+  /// "Log all" for a template group: promotes every remaining planned
+  /// entry in the group through the same `_logNow` path as a chip tap —
+  /// each stamped with the moment it's written, run sequentially so the
+  /// existing in-flight guards hold.
+  ///
+  /// CONFIRMS first (2026-10-05 bug: "clicking on one warm-up logged
+  /// everything"). The button sits in the group header directly above
+  /// the first planned row, and every log inserts a row into the LOGGED
+  /// section ABOVE the plan — the first one adds the section header too
+  /// (~95 px) — so the header slides down under the finger: the next tap
+  /// aimed at the warm-up row landed on this button and promoted the
+  /// whole day. One stray tap must never write N rows.
   Future<void> _logAllTemplateGroup(String templateName) async {
     final current = await _items;
     final group = current
         .where((it) =>
             it.isPlanned && it.planned!.templateName == templateName)
         .toList();
-    if (group.isEmpty) return;
+    if (group.isEmpty || !mounted) return;
+    final n = group.length;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+            n == 1 ? 'Log the remaining set?' : 'Log all $n remaining sets?'),
+        content: const Text('Each set is logged as done, stamped now.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Log all'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
     for (final item in group) {
       // Skip rows already mid-flight from a per-row tap. notify: true so
       // each logged row flashes (the fade highlight accumulates across the
@@ -1512,7 +1539,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
     try {
       try {
         await widget.repository.create(widget.view, values);
-        await PlanStore.remove(widget.view, planned.localId);
+        final stale = !await _consumePlanned(planned);
         // Undo-logging: remember which planned entry this row came from
         // so the expanded panel's "Revert to plan" can delete the row and
         // restore the entry. Needs a row id (all ledger views have one;
@@ -1522,8 +1549,14 @@ class _TimelineScreenState extends State<TimelineScreen> {
           _undoMappings[rowId] = planned;
         }
         // UI shows the optimistic row; re-sync the cache (new row + shifted
-        // __row indices) from truth in the background, no spinner.
-        unawaited(_revalidate(_dateKey()));
+        // __row indices) from truth in the background, no spinner. A
+        // stale on-screen plan (the planner rewrote the day) reloads so
+        // the remaining chips carry the live entry ids.
+        if (stale) {
+          _reload();
+        } else {
+          unawaited(_revalidate(_dateKey()));
+        }
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1544,6 +1577,30 @@ class _TimelineScreenState extends State<TimelineScreen> {
     if (hook != null && llm != null && cache != null && rowId != null) {
       _runPostLogHook(hook, values, rowId, llm, cache);
     }
+  }
+
+  /// Removes the just-logged [planned] entry from PlanStore. Returns false
+  /// when its id was STALE — the week planner rewrote the day (fresh
+  /// localIds) while this screen still showed the old entries. Then the
+  /// live twin (same date + group + planned values) is consumed instead,
+  /// so a mid-session rewrite can never leave a duplicate planned copy of
+  /// a set that was just logged.
+  Future<bool> _consumePlanned(PlannedEntry planned) async {
+    final live = await PlanStore.loadForDate(widget.view, planned.date);
+    if (live.any((e) => e.localId == planned.localId)) {
+      await PlanStore.remove(widget.view, planned.localId);
+      return true;
+    }
+    String sig(Map<String, Object?> v) =>
+        [for (final k in v.keys.toList()..sort()) '$k=${v[k]}'].join('|');
+    final want = sig(planned.values);
+    for (final e in live) {
+      if (e.templateName == planned.templateName && sig(e.values) == want) {
+        await PlanStore.remove(widget.view, e.localId);
+        break;
+      }
+    }
+    return false;
   }
 
   /// Undo-logging: deletes the logged [row] and restores the planned entry

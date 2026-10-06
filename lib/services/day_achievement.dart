@@ -223,7 +223,8 @@ AchievedSet? bestSet(List<AchievedSet> sets) {
 }
 
 /// The achievement meta for one item's [sets]:
-///   * top-set item: `top 275×6` (`· 3 sets` when more than one);
+///   * top-set item: `top 275×6`, plus the rest when more than one
+///     (`· +3 sets 235×6` when uniform, else `· +3 sets`);
 ///   * uniform sets: `2×4 · 255 lb` / `3×8 · BW`;
 ///   * mixed: `3 sets · best 160×10`;
 ///   * not yet complete ([target] > sets): `1 of 3 sets · best 160×8`.
@@ -243,7 +244,14 @@ String? achievedMeta(
     return bestText == null ? of : '$of · ${top ? 'top' : 'best'} $bestText';
   }
   if (top && bestText != null) {
-    return n == 1 ? 'top $bestText' : 'top $bestText · $count';
+    if (n == 1) return 'top $bestText';
+    // The rest (back-offs folded in): `+3 sets 235×6` when uniform.
+    final rest = [...sets]..remove(best);
+    final k = rest.length;
+    final r0 = setLabel(rest.first);
+    final more = '+$k set${k == 1 ? '' : 's'}';
+    final same = r0 != null && rest.every((x) => setLabel(x) == r0);
+    return 'top $bestText · ${same ? '$more $r0' : more}';
   }
   if (bestText == null) return count;
   if (n == 1) return bestText;

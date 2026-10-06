@@ -126,4 +126,22 @@ void main() {
         "PM: Climb — HARD session (the week's quality/limit climbing; partner day). The Tue AM-4x4 + PM-climb double session is the week's biggest recovery bite — keep both honest, no junk volume.");
     expect(items.where((i) => i.name.startsWith('Climb')), hasLength(1));
   });
+
+  test('loose match refuses a prescribed variant the logged name lacks '
+      '(symmetric to loggedCoversPrescribed)', () {
+    expect(loggedMatchesPrescribed('Barbell Squat', 'Bulgarian split squat'),
+        isFalse);
+    expect(loggedMatchesPrescribed('Barbell Squat', 'Pistol squat'), isFalse);
+    expect(loggedMatchesPrescribed('Barbell Squat', 'Front squat'), isFalse);
+    expect(loggedMatchesPrescribed('Barbell Deadlift', 'RDL'), isFalse);
+    expect(loggedMatchesPrescribed('Flat Barbell Bench Press', 'Incline bench'),
+        isFalse);
+    // Still loose-matches when the logged name carries the variant too.
+    expect(loggedMatchesPrescribed('Bulgarian Split Squat', 'BSS'), isTrue);
+    expect(loggedMatchesPrescribed('Romanian Deadlift', 'RDL or leg curl'),
+        isTrue);
+    expect(loggedMatchesPrescribed('Barbell Squat', 'Squat volume'), isTrue);
+    expect(loggedMatchesPrescribed('Lying Leg Curl', 'RDL or leg curl'),
+        isTrue);
+  });
 }

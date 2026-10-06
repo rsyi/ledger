@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:airledger/services/day_achievement.dart';
+import 'package:airledger/services/missed_work.dart' show allocateDay;
 import 'package:airledger/services/prescribed_exercises.dart';
 
 AchievedSet s(String ex, num? w, int? reps) => AchievedSet.fromRecord(
@@ -17,7 +18,7 @@ void main() {
       expect(
           achievedMeta([s('Deadlift', 265, 5), s('Deadlift', 275, 6)],
               target: 1, top: true),
-          'top 275×6 · 2 sets');
+          'top 275×6 · +1 set 265×5');
     });
 
     test('uniform sets collapse to N×R · load', () {
@@ -92,6 +93,66 @@ void main() {
           ['Cable Face Pull', 'Hip Thrust']);
       expect([for (final c in r.extra[0].clips) c.mediaId], ['f']);
       expect(r.extra[1].sets, isEmpty, reason: 'clip-only (warm-up) extra');
+    });
+  });
+
+  group('Mon 2026-10-05 live rows (squat back-offs vs Bulgarian split squat)',
+      () {
+    // Today's prose → items; working sets in log order (warm-ups filtered
+    // upstream).
+    final items = parsePrescribedProse(
+        'Squat heavy: wave top per strength_wave_cut (wk1 5@81% / wk2 4@84% '
+        '/ wk3 3@86% / wk4 deload 5@~70% TM, RPE 7-8). Then Bulgarian split '
+        'squat 3x8-12/leg; bench volume 4x8 @ 68% TM; lateral raise '
+        '3x12-20; triceps extension 2-3x10-15. Accessories: double '
+        'progression, start bottom of range @ 1-2 RIR.',
+        null);
+    final logged = [
+      s('Barbell Squat', 270, 4),
+      s('Barbell Squat', 235, 6),
+      s('Barbell Squat', 235, 6),
+      s('Barbell Squat', 235, 6),
+      s('Bulgarian Split Squat', 20, 12),
+      s('Bulgarian Split Squat', 20, 10),
+      s('Flat Barbell Bench Press', 205, 4),
+      s('Flat Barbell Bench Press', 175, 7),
+      s('Flat Barbell Bench Press', 175, 8),
+      s('Flat Barbell Bench Press', 175, 7),
+    ];
+    int at(String name) => items.indexWhere((i) => i.name == name);
+
+    test('items parse as expected', () {
+      expect([for (final i in items) i.name], [
+        'Squat heavy',
+        'Bulgarian split squat',
+        'Bench volume',
+        'Lateral raise',
+        'Triceps extension',
+      ]);
+    });
+
+    test('back-off squats never credit the BSS item; they fold into Squat '
+        'heavy as extra sets', () {
+      final r = achieveDay(
+          items: items,
+          logged: logged,
+          isTop: [for (final i in items) i.name == 'Squat heavy']);
+      final sq = at('Squat heavy'), bss = at('Bulgarian split squat');
+      expect(r.items[bss].loggedSets, 2);
+      expect([for (final x in r.sets[bss]) x.weight], [20, 20]);
+      expect(achievedMeta(r.sets[bss], target: 3), '2 of 3 sets · best 20×12');
+      expect(r.items[sq].loggedSets, 1);
+      expect(r.sets[sq], hasLength(4));
+      expect(achievedMeta(r.sets[sq], target: 1, top: true),
+          'top 270×4 · +3 sets 235×6');
+      expect(r.extra, isEmpty, reason: 'nothing lands in Also logged');
+    });
+
+    test('allocateDay (missed work / done marks) agrees: BSS 2 of 3', () {
+      final a = allocateDay(items, [for (final x in logged) x.exercise]);
+      expect(a[at('Bulgarian split squat')].loggedSets, 2);
+      expect(a[at('Squat heavy')].loggedSets, 1);
+      expect(a[at('Bench volume')].loggedSets, 4);
     });
   });
 }

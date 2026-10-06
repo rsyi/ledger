@@ -209,13 +209,24 @@ Set<String> _tokens(String s) {
   return out;
 }
 
-/// True when a logged exercise name matches a prescribed name (shared
-/// significant token). Public so the UI can pull a prescribed item's
-/// history.
+/// True when a logged exercise name LOOSELY matches a prescribed name:
+/// some alternative of the prescription ("RDL or leg curl") shares a
+/// significant token with it AND names no variant qualifier ([_variant])
+/// the logged name lacks — the mirror of [loggedCoversPrescribed]'s rule.
+/// "Barbell Squat" shares "squat" with "Bulgarian split squat" but is a
+/// different movement (2026-10-05: back-off squats credited the BSS item
+/// "best 235×6"). Public so the UI can pull a prescribed item's history.
 bool loggedMatchesPrescribed(String loggedName, String prescribedName) {
   final a = _tokens(loggedName);
-  final b = _tokens(prescribedName);
-  return a.isNotEmpty && b.isNotEmpty && a.intersection(b).isNotEmpty;
+  if (a.isEmpty) return false;
+  for (final alt
+      in prescribedName.split(RegExp(r'\s+or\s+', caseSensitive: false))) {
+    final b = _tokens(alt);
+    if (b.isEmpty || a.intersection(b).isEmpty) continue;
+    if (b.difference(a).any(_variant.contains)) continue;
+    return true;
+  }
+  return false;
 }
 
 // Qualifiers that make a logged movement a DIFFERENT lift from a bare
@@ -265,14 +276,10 @@ int sharedTokenCount(String loggedName, String prescribedName) =>
 /// the set count — an item completes only once its full set target lands.
 List<PrescribedItem> markPrescribedDone(
     List<PrescribedItem> items, Iterable<String> loggedNames) {
-  final loggedTokens =
-      loggedNames.map(_tokens).where((t) => t.isNotEmpty).toList();
+  final names = loggedNames.toList();
   return [
     for (final it in items)
-      it.withLogged(() {
-        final k = _tokens(it.name);
-        if (k.isEmpty) return 0;
-        return loggedTokens.where((l) => l.intersection(k).isNotEmpty).length;
-      }()),
+      it.withLogged(
+          names.where((n) => loggedMatchesPrescribed(n, it.name)).length),
   ];
 }

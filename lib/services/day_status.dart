@@ -268,15 +268,27 @@ DayStatus buildDayStatus({
   var itemClips = [for (final _ in live) const <DayClip>[]];
   var extra = const <ExtraWork>[];
   if (logged != null) {
+    // SKIPPED items sit out of allocation: a skipped Mon "Bench volume"
+    // used to claim every bench set, leaving the moved-in "Bench heavy"
+    // and its back-offs pending (2026-10-05).
+    final active = [
+      for (var k = 0; k < live.length; k++)
+        if (skips[skipKey(day, live[k].item.name)] == null) k,
+    ];
     final r = achieveDay(
-      items: items,
+      items: [for (final k in active) items[k]],
       logged: logged,
       clips: clips,
-      isTop: [for (final e in live) topOf(e)],
+      isTop: [for (final k in active) topOf(live[k])],
     );
-    items = r.items;
-    sets = r.sets;
-    itemClips = r.clips;
+    sets = [...sets];
+    itemClips = [...itemClips];
+    items = [...items];
+    for (var j = 0; j < active.length; j++) {
+      items[active[j]] = r.items[j];
+      sets[active[j]] = r.sets[j];
+      itemClips[active[j]] = r.clips[j];
+    }
     extra = r.extra;
   }
 

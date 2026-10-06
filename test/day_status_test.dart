@@ -233,4 +233,47 @@ void main() {
       expect(st.items.single.state, DayItemState.pending);
     });
   });
+
+  test('Mon 10/5: a SKIPPED item never claims sets (moved-in Bench heavy '
+      'gets the bench work)', () {
+    final mon = DateTime(2026, 10, 5);
+    final wedNext = DateTime(2026, 10, 7);
+    final entries = [
+      EffectiveItem(item: it('Squat heavy', 'top set', 'AM', 1), home: mon),
+      EffectiveItem(item: it('Bench volume', '4x8 @ 68% TM', 'AM', 4), home: mon),
+      EffectiveItem(
+          item: it('Bench heavy', 'top set', 'AM', 1),
+          home: wedNext,
+          movedFrom: wedNext),
+      EffectiveItem(
+          item: it('Bench back-offs', '3x6-8 @ 72% TM', 'AM', 3),
+          home: wedNext,
+          movedFrom: wedNext),
+    ];
+    final skip = ProgramMove(
+      id: 'k',
+      to: mon,
+      from: mon,
+      item: 'Bench volume',
+      period: 'AM',
+      source: skipSource,
+      note: 'travel Wed–Sat',
+    );
+    final st = buildDayStatus(
+      date: mon,
+      entries: entries,
+      logged: [
+        s('Barbell Squat', 270, 4),
+        s('Flat Barbell Bench Press', 205, 4),
+        s('Flat Barbell Bench Press', 175, 8),
+        s('Flat Barbell Bench Press', 175, 7),
+        s('Flat Barbell Bench Press', 175, 7),
+      ],
+      skips: {skipKey(mon, 'Bench volume'): skip},
+    );
+    final by = {for (final i in st.items) i.entry.item.name: i};
+    expect(by['Bench volume']!.state, DayItemState.skipped);
+    expect(by['Bench heavy']!.state, DayItemState.done);
+    expect(by['Bench back-offs']!.state, DayItemState.done);
+  });
 }

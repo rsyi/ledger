@@ -177,8 +177,12 @@ class PlanStore {
   /// Drops the mapping for [rowId]. Called after a revert and whenever the
   /// row is deleted through the normal delete path (a deleted row can't be
   /// reverted). No-op when absent.
-  static Future<void> removeUndo(ViewSchema view, String rowId) async {
-    final raw = await _loadUndoRaw(view, DateTime.now());
+  static Future<void> removeUndo(
+    ViewSchema view,
+    String rowId, {
+    DateTime? now,
+  }) async {
+    final raw = await _loadUndoRaw(view, now ?? DateTime.now());
     if (raw.remove(rowId) == null) return;
     await _saveUndoRaw(view, raw);
   }

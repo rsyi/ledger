@@ -57,7 +57,9 @@ void main() {
     final view = _view();
     await PlanStore.putUndo(view, 'row-1', entry(view), now: t0);
     await PlanStore.putUndo(view, 'row-2', entry(view), now: t0);
-    await PlanStore.removeUndo(view, 'row-1');
+    // Clock pinned: the wall clock passed t0 + 14 d on 2026-10-05 and the
+    // load-time prune then dropped both mappings.
+    await PlanStore.removeUndo(view, 'row-1', now: t0);
     final mappings = await PlanStore.undoMappings(view, now: t0);
     expect(mappings.keys, ['row-2']);
   });

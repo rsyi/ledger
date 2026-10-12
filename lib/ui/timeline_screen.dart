@@ -819,6 +819,14 @@ class _TimelineScreenState extends State<TimelineScreen> {
       meta: meta,
       status: status,
       muted: slot.warmup,
+      // A known set type tags the row; warm-up slots are already named
+      // "Warm-up" (no duplicate tag).
+      tag: slot.warmup
+          ? null
+          : switch (parseSetType(slot.setType)) {
+              null || SetType.warmup => null,
+              final t => SetTypeTag(type: t),
+            },
       leading: _selectionMode && keys.isNotEmpty
           ? Icon(
               allSelected ? Icons.check_box : Icons.check_box_outline_blank,
@@ -2215,6 +2223,7 @@ class _CompletedSection extends StatelessWidget {
             expanded: expandedKeys.contains(item.keyString),
             isBest: best.contains(item.keyString),
             isWarmup: warmups.contains(item.keyString),
+            setType: item.isBatch ? null : parseSetType(item.logged?['set_type']),
             readOnly: readOnly,
             trailing: trailingFor?.call(item),
             onTap: () => onTap(item),
@@ -2255,6 +2264,11 @@ class _CompactLoggedTile extends StatelessWidget {
   /// "warm-up" tag so it reads differently from working sets.
   final bool isWarmup;
 
+  /// The row's tagged `set_type` (heavy / hypertrophy / skill / rehab /
+  /// warmup) — rendered as a coloured [SetTypeTag]; null → no tag
+  /// (unless [isWarmup], which always shows the warm-up tag).
+  final SetType? setType;
+
   /// When true, swipe-to-delete is hidden and the Edit/Move panel is
   /// suppressed. Long-press still does nothing because onLongPress is a
   /// no-op at that point.
@@ -2280,6 +2294,7 @@ class _CompactLoggedTile extends StatelessWidget {
     required this.expanded,
     this.isBest = false,
     this.isWarmup = false,
+    this.setType,
     required this.onTap,
     required this.onEdit,
     required this.onMove,
@@ -2318,6 +2333,7 @@ class _CompactLoggedTile extends StatelessWidget {
             '$batchSize ${view.repeatGroup?.label ?? "item"}s'
         : baseSubtitle;
     final time = _timeLabel();
+    final tag = isWarmup ? SetType.warmup : setType;
     final headerRow = InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -2355,12 +2371,12 @@ class _CompactLoggedTile extends StatelessWidget {
                               size: 14, color: scheme.primary),
                         ),
                       ),
-                    if (isWarmup)
-                      const WidgetSpan(
+                    if (tag != null)
+                      WidgetSpan(
                         alignment: PlaceholderAlignment.middle,
                         child: Padding(
-                          padding: EdgeInsets.only(right: 6),
-                          child: _WarmupTag(),
+                          padding: const EdgeInsets.only(right: 6),
+                          child: SetTypeTag(type: tag),
                         ),
                       ),
                     TextSpan(
@@ -2675,29 +2691,3 @@ class _InProgressBanner extends StatelessWidget {
 }
 
 
-/// Small muted "warm-up" chip marking ramp sets (planned and logged) in
-/// the timeline, so they read differently from working sets.
-class _WarmupTag extends StatelessWidget {
-  const _WarmupTag();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Text(
-        'warm-up',
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w500,
-          color: scheme.onSurfaceVariant,
-        ),
-      ),
-    );
-  }
-}

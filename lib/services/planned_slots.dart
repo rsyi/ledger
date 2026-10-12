@@ -60,6 +60,19 @@ class PlannedSlot<T> {
   bool get bodyweight =>
       exercise != null && isBodyweightExercise(exercise!);
 
+  /// The slot's `set_type` when every set (pending + done) carries the
+  /// SAME non-blank one (lower-cased) — else null (unknown / mixed).
+  String? get setType {
+    String? common;
+    for (final v in [for (final p in pending) p.values, ...done]) {
+      final t = v['set_type']?.toString().trim().toLowerCase();
+      if (t == null || t.isEmpty) return null;
+      if (common != null && common != t) return null;
+      common = t;
+    }
+    return common;
+  }
+
   /// `3×6 · 105 lb` / `3×8 · BW`; warm-ups list their ramp loads
   /// ascending: `45·50·70·95`.
   String get meta {

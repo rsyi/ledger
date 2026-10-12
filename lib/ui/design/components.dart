@@ -139,6 +139,9 @@ class ExerciseRow extends StatelessWidget {
   /// Selection tint.
   final bool selected;
 
+  /// Optional inline tag after the name (a [SetTypeTag]).
+  final Widget? tag;
+
   /// Optional second line under the name/meta line, in the meta style,
   /// one line, ellipsized (Integrations' status line). A widget so it
   /// can be a FutureBuilder / ValueListenableBuilder.
@@ -157,6 +160,7 @@ class ExerciseRow extends StatelessWidget {
     this.muted = false,
     this.highlighted = false,
     this.selected = false,
+    this.tag,
     this.subtitle,
   });
 
@@ -178,6 +182,14 @@ class ExerciseRow extends StatelessWidget {
                   )
                 : rowStyle,
           ),
+          if (tag != null)
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: tag,
+              ),
+            ),
           if (meta != null && meta!.isNotEmpty)
             TextSpan(
               text: '  $meta',
@@ -503,6 +515,40 @@ class StatusChip extends StatelessWidget {
           fontWeight: FontWeight.w600,
           color: c,
           height: 1.3,
+        ),
+      ),
+    );
+  }
+}
+
+/// Small set-type pill (`heavy`, `hypertrophy`, `skill`, `rehab`,
+/// `warm-up`) for logged and planned set rows. Warm-up is the muted grey
+/// tag; the others use their [SetTypeColors] hue on a translucent tint.
+class SetTypeTag extends StatelessWidget {
+  final SetType type;
+
+  const SetTypeTag({super.key, required this.type});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hue = SetTypeColors.of(context).forType(type);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: hue?.withValues(alpha: 0.14) ?? scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(AppRadius.chip),
+        border: Border.all(
+          color: hue?.withValues(alpha: 0.45) ?? scheme.outlineVariant,
+        ),
+      ),
+      child: Text(
+        type.label,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+          height: 1.3,
+          color: hue ?? scheme.onSurfaceVariant,
         ),
       ),
     );

@@ -214,3 +214,76 @@ class AppCard extends StatelessWidget {
     );
   }
 }
+
+/// A strength set's `set_type` (the schema's dropdown options). Drives
+/// [SetTypeColors] and the [SetTypeTag] pill.
+enum SetType {
+  warmup('warm-up'),
+  heavy('heavy'),
+  hypertrophy('hypertrophy'),
+  skill('skill'),
+  rehab('rehab');
+
+  /// The pill's text — spelled out, never abbreviated.
+  final String label;
+  const SetType(this.label);
+}
+
+/// Parses a stored `set_type` value; blank / unknown → null (no tag —
+/// never a guessed type).
+SetType? parseSetType(Object? raw) {
+  final s = raw?.toString().trim().toLowerCase();
+  return switch (s) {
+    'warmup' || 'warm-up' || 'warm up' => SetType.warmup,
+    'heavy' => SetType.heavy,
+    'hypertrophy' => SetType.hypertrophy,
+    'skill' => SetType.skill,
+    'rehab' => SetType.rehab,
+    _ => null,
+  };
+}
+
+/// Set-type tag hues: heavy red, hypertrophy orange, skill blue, rehab
+/// green. Warm-up has no hue — it keeps the muted grey tag. The dark
+/// palette uses light tints and the light palette deep shades so the
+/// label clears 4.5:1 on its own translucent pill over the surface.
+@immutable
+class SetTypeColors {
+  final Color heavy;
+  final Color hypertrophy;
+  final Color skill;
+  final Color rehab;
+
+  const SetTypeColors({
+    required this.heavy,
+    required this.hypertrophy,
+    required this.skill,
+    required this.rehab,
+  });
+
+  static const dark = SetTypeColors(
+    heavy: Color(0xFFFCA5A5), // red-300
+    hypertrophy: Color(0xFFFDBA74), // orange-300
+    skill: Color(0xFF93C5FD), // blue-300
+    rehab: Color(0xFF86EFAC), // green-300
+  );
+
+  static const light = SetTypeColors(
+    heavy: Color(0xFFB91C1C), // red-700
+    hypertrophy: Color(0xFF9A3412), // orange-800
+    skill: Color(0xFF1D4ED8), // blue-700
+    rehab: Color(0xFF166534), // green-800
+  );
+
+  static SetTypeColors of(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? dark : light;
+
+  /// The hue for [type]; null for warm-up (rendered muted grey).
+  Color? forType(SetType type) => switch (type) {
+        SetType.heavy => heavy,
+        SetType.hypertrophy => hypertrophy,
+        SetType.skill => skill,
+        SetType.rehab => rehab,
+        SetType.warmup => null,
+      };
+}

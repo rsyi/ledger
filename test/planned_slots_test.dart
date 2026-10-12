@@ -169,4 +169,21 @@ void main() {
     expect(setChipLabel(reps: 8), '8 reps');
     expect(formatNum(105.0), '105');
   });
+
+  test('slot setType: the shared set_type of every set, else null', () {
+    PlannedSetIn<String> t(String id, String? type) => PlannedSetIn(id, {
+          'exercise': 'Barbell Squat',
+          'reps': 5,
+          'weight': 240,
+          'set_type': ?type,
+        }, _g);
+    List<PlannedSlot<String>> slots(List<PlannedSetIn<String>> p) =>
+        groupPlannedSlots(pending: p).single.slots;
+    expect(slots([t('a', 'Heavy'), t('b', 'heavy')]).single.setType, 'heavy');
+    expect(slots([t('a', 'heavy'), t('b', null)]).single.setType, isNull);
+    expect(slots([t('a', 'heavy'), t('b', 'hypertrophy')]).single.setType,
+        isNull);
+    expect(slots(_saturday()).last.setType, isNull); // planner rows: untagged
+    expect(slots(_saturday()).first.setType, 'warmup');
+  });
 }

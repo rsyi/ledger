@@ -12,7 +12,8 @@
 //   1. the display window (Mon–Sun, snapToWeekStart: false) covers all
 //      seven days — Saturday included — for a cut week;
 //   2. ALL SEVEN days of the approved cut week, movements verbatim:
-//      Mon  squat heavy + bench volume + BSS + accessories
+//      Mon  squat heavy + squat back-offs (v17) + bench volume + BSS +
+//           accessories
 //      Tue  4x4 + hard climb (no barbell rows)
 //      Wed  bench heavy + squat volume + press volume + pull-ups
 //      Thu  calisthenics (muscle-ups main + handstand/front-lever skill
@@ -80,14 +81,53 @@ void main() {
             'dropped it from the displayed week');
   });
 
-  test('Mon: squat heavy + BSS + bench volume + laterals + triceps', () {
+  test('Mon: squat heavy + back-offs + BSS + bench volume + laterals + '
+      'triceps', () {
     expect(dayRows(0), [
       ('Barbell Squat', 1, 5), // wave week-1 top
+      ('Barbell Squat', 2, 5), // v17 back-offs @ 75% TM
       ('Bulgarian Split Squat', 3, 8),
       ('Flat Barbell Bench Press', 4, 8), // @ 68% TM
       ('Lateral Dumbbell Raise', 3, 12),
       ('Triceps Extension', 2, 10),
     ]);
+  });
+
+  // v17 (2026-10-12): Monday squat back-offs 2x5 @ 75% TM — priced off
+  // the live TM like every %TM slot, halved (min 1) on the cut-wave
+  // deload, and never given extra warm-ups (the top set's ramp covers it).
+  List<Map<String, Object?>> squatRows(DateTime mon) => [
+        for (final e in buildWeekPlannedEntries(program, mon,
+            workingMaxes: maxes, snapToWeekStart: false))
+          if (e['date'] == mon && e['exercise'] == 'Barbell Squat') e,
+      ];
+
+  test('v17 Mon squat back-offs: 2x5 @ 75% TM (240 lb off TM 320)', () {
+    final rows = squatRows(DateTime.utc(2026, 10, 26)); // wave wk1
+    final backoffs = [
+      for (final r in rows)
+        if (r['warmup'] != true && r['top'] != true) r,
+    ];
+    expect(backoffs, hasLength(2));
+    for (final r in backoffs) {
+      expect(r['reps'], 5);
+      expect(r['pct'], 0.75);
+      expect(r['weight'], 240);
+    }
+    expect(rows.where((r) => r['warmup'] == true), hasLength(4),
+        reason: 'one warm-up ramp for the day — back-offs add none');
+  });
+
+  test('v17 Mon squat back-offs halve on the cut-wave deload (Oct 19)', () {
+    final rows = squatRows(DateTime.utc(2026, 10, 19)); // wave wk4
+    final top = rows.singleWhere((r) => r['top'] == true);
+    expect(top['pct'], 0.70);
+    final backoffs = [
+      for (final r in rows)
+        if (r['warmup'] != true && r['top'] != true) r,
+    ];
+    expect(backoffs, hasLength(1));
+    expect(backoffs.single['weight'], 240);
   });
 
   test('Tue: 4x4 + hard climb, no lifting', () {

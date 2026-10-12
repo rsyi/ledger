@@ -343,6 +343,38 @@ void main() {
     }
   });
 
+  testWidgets('v17 Monday squat back-offs priced off the TM: 2×5 @ 75% '
+      '(240 lb off TM 320)',
+      (tester) async {
+    Finder inDay(String ymd, Finder f) => find.descendant(
+        of: find.byKey(ValueKey('routine-day-$ymd')), matching: f);
+    Finder rich(String t) => find.text(t, findRichText: true);
+
+    // Mon Oct 26 → cut wave week 1: top 5 @ 81% + 2 back-offs @ 75%.
+    await pump(tester, _FakeWmStore(_seedRows(confirmed: true)),
+        today: DateTime(2026, 10, 26));
+    expect(inDay('2026-10-26', rich('Squat 1×5 · 260 lb (81%)')),
+        findsOneWidget);
+    expect(inDay('2026-10-26', rich('Squat 2×5 · 240 lb (75%)')),
+        findsOneWidget);
+    // Wednesday's squat volume is unchanged (3×8 @ 65% → 210).
+    expect(inDay('2026-10-28', rich('Squat 3×8 · 210 lb (65%)')),
+        findsOneWidget);
+
+  });
+
+  testWidgets('v17 Monday squat back-offs halve to 1×5 on the Oct 19 '
+      'cut-wave deload', (tester) async {
+    Finder inDay(String ymd, Finder f) => find.descendant(
+        of: find.byKey(ValueKey('routine-day-$ymd')), matching: f);
+    Finder rich(String t) => find.text(t, findRichText: true);
+    // Mon Oct 19 → wave week 4 (deload): non-top sets halve (min 1).
+    await pump(tester, _FakeWmStore(_seedRows(confirmed: true)),
+        today: DateTime(2026, 10, 19));
+    expect(inDay('2026-10-19', rich('Squat 1×5 · 240 lb (75%)')),
+        findsOneWidget);
+  });
+
   testWidgets('TRAVEL WEEK: next week renders the EFFECTIVE days — Mon/Tue '
       'carry the moved work at home-day prices ("from Wed"), Wed–Sat read '
       'Skipped — travel, the 4x4 lands on Sunday', (tester) async {

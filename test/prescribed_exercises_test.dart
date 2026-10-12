@@ -59,6 +59,30 @@ void main() {
       expect(tri.targetSets, 2);
     });
 
+    test('v17 Mon prose: squat back-offs parse as their own item', () {
+      // Verbatim from airledger-fitness coach/program.yaml v17
+      // routine.week.mon.morning.
+      const mon =
+          'Squat heavy: wave top per strength_wave_cut (wk1 5@81% / wk2 '
+          '4@84% / wk3 3@86% / wk4 deload 5@~70% TM, RPE 7-8). Then squat '
+          'back-offs 2x5 @ 75% TM; Bulgarian split squat 3x8-12/leg; bench '
+          'volume 4x8 @ 68% TM; lateral raise 3x12-20; triceps extension '
+          '2-3x10-15. Accessories: double progression, start bottom of '
+          'range @ 1-2 RIR.';
+      final items = parsePrescribedProse(mon, null);
+      expect([for (final i in items) i.name], [
+        'Squat heavy',
+        'Squat back-offs',
+        'Bulgarian split squat',
+        'Bench volume',
+        'Lateral raise',
+        'Triceps extension',
+      ]);
+      final backoffs = items[1];
+      expect(backoffs.scheme, '2x5 @ 75% TM');
+      expect(backoffs.targetSets, 2);
+    });
+
     test('skips non-exercise clauses', () {
       final items = parsePrescribedProse(
           'Bench top set, then back-offs 3x5-8; No squat or deadlift today; '

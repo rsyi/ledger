@@ -56,7 +56,7 @@ void main() {
     final v = currentVersion(program);
     expect(v, isNotNull);
     expect(v!['id'], 'bulk-2026-27');
-    expect(v['version'], 16);
+    expect(v['version'], 17);
     // A trailing pending entry must be skipped.
     final withPending = {
       'versions': [
@@ -64,7 +64,7 @@ void main() {
         {'version': 99, 'pending': true, 'id': 'draft'},
       ],
     };
-    expect(currentVersion(withPending)!['version'], 16);
+    expect(currentVersion(withPending)!['version'], 17);
   });
 
   for (final c in cases) {

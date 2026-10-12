@@ -82,6 +82,8 @@ void main() {
       final mon = onDay(entries, w1Monday);
       expect(rows(mon), [
         'Barbell Squat -x5', // wave wk1 top
+        'Barbell Squat -x5', // v17 back-offs 2x5 @ 75% TM
+        'Barbell Squat -x5',
         'Bulgarian Split Squat -x8',
         'Bulgarian Split Squat -x8',
         'Bulgarian Split Squat -x8',
@@ -198,6 +200,7 @@ void main() {
           DateTime.utc(2026, 10, 19));
       expect(rows(w4), [
         'Barbell Squat -x5',
+        'Barbell Squat -x5', // v17 back-offs 2 → 1
         'Bulgarian Split Squat -x8',
         'Bulgarian Split Squat -x8',
         'Flat Barbell Bench Press -x8',
@@ -213,8 +216,10 @@ void main() {
         'volume slots still plan', () {
       final entries = buildWeekPlannedEntries(program, preMonday);
       final mon = onDay(entries, preMonday);
-      // No squat top — the wave starts Sep 28; the rest of Monday plans.
-      expect(rows(mon).where((r) => r.startsWith('Barbell Squat')), isEmpty);
+      // No squat top — the wave starts Sep 28; the rest of Monday plans
+      // (incl. the v17 %TM squat back-offs — a volume slot).
+      expect(rows(mon).where((r) => r.startsWith('Barbell Squat')),
+          ['Barbell Squat -x5', 'Barbell Squat -x5']);
       expect(mon.where((e) => e['top'] == true), isEmpty);
       expect(rows(mon), contains('Flat Barbell Bench Press -x8'));
     });
@@ -551,6 +556,8 @@ void main() {
         'Barbell Squat 155x3',
         'Barbell Squat 210x1',
         'Barbell Squat 260x5',
+        'Barbell Squat 240x5', // v17 back-offs: 320 × 0.75
+        'Barbell Squat 240x5',
         'Bulgarian Split Squat -x8',
         'Bulgarian Split Squat -x8',
         'Bulgarian Split Squat -x8',

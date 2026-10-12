@@ -991,6 +991,27 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   deadlift/RDL + NEXT Sat's OHP/row/face pulls + hard climb, Wed–Fri
   travel skips; Sat 10/10 = moved-out + skipped; the old Tue→Sun 10/11
   Norwegian row is now an invalid later move (superseded anyway).
+- **v17 Monday squat back-offs + set-type tags (2026-10-12, user-
+  approved)**: program.yaml v17 = v16 verbatim + ONE change — cut
+  `routine.week.mon` gains squat back-offs 2x5 @ 75% TM after the wave
+  top (prose "Then squat back-offs 2x5 @ 75% TM; …" → its own "Squat
+  back-offs" program-card item; `planned` gains `{ Barbell Squat, sets 2,
+  reps 5, pct 0.75 }`). Wed squat 3x8 @ 65% unchanged; deload weeks halve
+  it (Oct 19 = wave wk4 → 1×5; 75% back-off sits ABOVE the 70% deload
+  top, same as Fri deadlift — accepted). No extra warm-ups. Priced 240
+  off TM 320. WATCH: Wed squat RPE drift + Fri deadlift top — revert to
+  a top-set-only Monday if they grind. Pins bumped 16→17 (ledger,
+  ledger-mcp, fixtures incl. Monday prose). Sat program_moves for the
+  Oct 17/24 weeks unaffected (item names unchanged). LOG TIMELINE: new
+  design tokens `SetType`/`parseSetType`/`SetTypeColors` + `SetTypeTag`
+  pill (components.dart) — heavy red / hypertrophy orange / skill blue /
+  rehab green (dark = 300 tints, light = 700/800; ≥4.5:1 pinned),
+  warm-up = the old muted grey tag (`_WarmupTag` removed). Logged rows
+  tag their set_type; planned rows tag only when every set in the slot
+  shares one (`PlannedSlot.setType`; planner rows are untagged, so
+  program rows show none — deliberate, no planner/signature change);
+  ExerciseRow gained an optional `tag`. Today card achieved-set tags
+  SKIPPED (achieved text is a one-line summary; tags would clutter).
 - **Template retire — FULL (2026-09-30, Phase C; user-approved)**: the
   workout-template concept is gone everywhere. WHY: program.yaml v12+
   `routine:` (base week + phase_overrides) is the single source of the

@@ -1,6 +1,37 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:airledger/services/program_metrics.dart' show WeightRow;
+import 'package:airledger/models/database_config.dart';
+import 'package:airledger/models/view_schema.dart';
+import 'package:airledger/services/sheets_repository.dart' show Record;
+import 'package:airledger/services/warehouse_connector.dart';
 import 'package:airledger/services/weight_series.dart';
+
+class _Repo implements WarehouseConnector {
+  _Repo(this.rows);
+  final List<Record> rows;
+  int lists = 0;
+  bool fail = false;
+  @override
+  final DatabaseConfig config = SheetsConfig(name: 'g', spreadsheetId: 's');
+  @override
+  Future<List<Record>> list(ViewSchema view, {DateTime? onDate}) async {
+    lists++;
+    if (fail) throw Exception('locked');
+    return rows;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final _weightView = ViewSchema(
+  name: 'weight',
+  datasource: 'gsheets',
+  table: 'weight',
+  entities: const [],
+  measures: const [],
+  dimensions: const [],
+);
 
 void main() {
   group('dailyWeighInsFromRecords', () {
@@ -110,6 +141,40 @@ void main() {
       expect(r.daily, isEmpty);
       expect(r.error, isNull);
       expect(r.source, WeightSeriesSource.none);
+    });
+  });
+
+  // Perf #6 (2026-10-12): with a repo, daily averages come straight from
+  // the ledger list in Dart — the analytics SQLite mirror is no longer
+  // dropped + rebuilt on every call.
+  group('loadDailyWeighIns', () {
+    test('ledger path: one list, Dart averages, no analytics needed',
+        () async {
+      final repo = _Repo([
+        {'date': DateTime(2026, 10, 1), 'weight_lbs': 160.0},
+        {'date': DateTime(2026, 10, 1), 'weight_lbs': 161.0},
+        {'date': DateTime(2026, 10, 2), 'weight_lbs': 159.0},
+      ]);
+      final r = await loadDailyWeighIns(
+          analytics: null, view: _weightView, repo: repo);
+      expect(repo.lists, 1);
+      expect(r.source, WeightSeriesSource.ledger);
+      expect(r.daily.map((w) => w.weightLbs), [160.5, 159.0]);
+      expect(r.error, isNull);
+    });
+
+    test('empty ledger → honest none, no error; failed read → error',
+        () async {
+      final empty = await loadDailyWeighIns(
+          analytics: null, view: _weightView, repo: _Repo(const []));
+      expect(empty.source, WeightSeriesSource.none);
+      expect(empty.error, isNull);
+
+      final failing = _Repo(const [])..fail = true;
+      final r = await loadDailyWeighIns(
+          analytics: null, view: _weightView, repo: failing);
+      expect(r.source, WeightSeriesSource.none);
+      expect(r.error, startsWith('Weight ledger read failed'));
     });
   });
 }

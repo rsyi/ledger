@@ -4,21 +4,22 @@
 /// `weight` view: group by date, average `weight_lbs`; windowed metrics
 /// stay in pure Dart downstream).
 ///
-/// Two paths, primary + fallback:
-///  1. ANALYTICS — airlayer-compiled SQL over the LocalDb SQLite mirror
-///     (refreshed from [repo] best-effort each call). This is the same
-///     substrate the chat's run_query uses, but it's empty/stale until
-///     a mirror sync succeeds and needs the native airlayer lib.
-///  2. LEDGER — when the analytics path yields ZERO rows (native lib
-///     missing, mirror never populated, query failure), read the weight
-///     view's rows straight off the repository (the engine store — the
-///     exact list() the timeline renders from) and average per day in
-///     Dart. Same numbers, one fewer moving part.
+/// Two paths (perf #6, 2026-10-12 — order SWAPPED):
+///  1. LEDGER — read the weight view's rows straight off the repository
+///     (the engine store — the exact list() the timeline renders from)
+///     and average per day in Dart. Used whenever [repo] is given and
+///     the read succeeds (an empty ledger is an honest "no data").
+///  2. ANALYTICS — airlayer-compiled SQL over the LocalDb SQLite mirror
+///     AS IT STANDS, only when there is no repo or its read failed. The
+///     mirror is NO LONGER rebuilt here: every call used to DROP +
+///     re-INSERT the whole weight table just to average it per day.
+///     (chat run_query still refreshes the mirror for its own queries.)
 /// "No weigh-in data" is true only when BOTH paths come back empty.
 library;
 
 import '../models/view_schema.dart';
 import 'analytics_engine.dart';
+import 'perf.dart';
 import 'program_metrics.dart' show WeightRow;
 import 'warehouse_connector.dart';
 
@@ -35,14 +36,42 @@ typedef WeightSeriesResult = ({
   WeightSeriesSource source,
 });
 
-/// Loads the daily weigh-in series: airlayer first, direct ledger read
-/// as the fallback (see the library doc). Null [analytics]/[view]/[repo]
-/// degrade path by path; only all-paths-empty surfaces an error.
+/// Loads the daily weigh-in series: direct ledger read first, the
+/// analytics mirror as the fallback (see the library doc). Null
+/// [analytics]/[view]/[repo] degrade path by path; only all-paths-empty
+/// surfaces an error.
 Future<WeightSeriesResult> loadDailyWeighIns({
   required AnalyticsEngine? analytics,
   required ViewSchema? view,
   WarehouseConnector? repo,
+}) =>
+    Perf.span(
+      'weight.daily',
+      () => _loadDailyWeighIns(analytics: analytics, view: view, repo: repo),
+      metaOf: (r) => {'days': r.daily.length, 'source': r.source.name},
+    );
+
+Future<WeightSeriesResult> _loadDailyWeighIns({
+  required AnalyticsEngine? analytics,
+  required ViewSchema? view,
+  WarehouseConnector? repo,
 }) async {
+  String? ledgerError;
+  if (view != null && repo != null) {
+    try {
+      final daily = dailyWeighInsFromRecords(await repo.list(view));
+      return (
+        daily: daily,
+        error: null,
+        source: daily.isEmpty
+            ? WeightSeriesSource.none
+            : WeightSeriesSource.ledger,
+      );
+    } catch (e) {
+      ledgerError = 'Weight ledger read failed: $e';
+    }
+  }
+
   var primary = const <WeightRow>[];
   String? primaryError;
   if (view == null) {
@@ -51,11 +80,6 @@ Future<WeightSeriesResult> loadDailyWeighIns({
     primaryError = 'Analytics engine unavailable on this build.';
   } else {
     try {
-      if (repo != null) {
-        try {
-          await analytics.db.syncFromSheet(view, repo);
-        } catch (_) {/* stale cache is better than nothing */}
-      }
       final rows = await analytics.run(view, query: {
         'dimensions': ['weight.date'],
         'measures': ['weight.avg_weight_lbs'],
@@ -71,21 +95,11 @@ Future<WeightSeriesResult> loadDailyWeighIns({
       primaryError = 'Weight query failed: $e';
     }
   }
-
-  var fallback = const <WeightRow>[];
-  String? fallbackError;
-  if (primary.isEmpty && view != null && repo != null) {
-    try {
-      fallback = dailyWeighInsFromRecords(await repo.list(view));
-    } catch (e) {
-      fallbackError = 'Weight ledger read failed: $e';
-    }
-  }
   return selectWeightSeries(
     primary: primary,
-    primaryError: primaryError,
-    fallback: fallback,
-    fallbackError: fallbackError,
+    primaryError: ledgerError ?? primaryError,
+    fallback: const [],
+    fallbackError: null,
   );
 }
 

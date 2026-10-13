@@ -18,6 +18,7 @@ import 'day_achievement.dart' show AchievedSet, DayClip;
 import 'day_prescription.dart' show DayPrescription;
 import 'day_status.dart';
 import 'intent_docs.dart';
+import 'ledger_data_version.dart';
 import 'missed_work.dart';
 import 'prescribed_exercises.dart' show PrescribedItem;
 import 'program_moves.dart';
@@ -242,6 +243,34 @@ class WeekStateLoader {
     return null;
   }
 
+  /// SHARED WeekState (perf batch 3 / audit #4): identical loads —
+  /// same day × label × withMissed × week-start setting × parsed docs ×
+  /// sources × ledger data version — share ONE in-flight load (the
+  /// program card + day synthesis used to run two identical 2 s loads
+  /// side by side on a cold start). When every source is
+  /// [DataVersioned] (the engine ledger) the RESULT is also memoized
+  /// until any ledger write/sync/ingest bumps [LedgerDataVersion] (or
+  /// the Kaya cache clears / its TTL passes). Results are shared: treat
+  /// a WeekState as read-only.
+  static final Map<Object, Future<WeekState?>> _inflight = {};
+  static final Map<Object, ({DateTime at, WeekState? state})> _memo = {};
+  static const _memoCap = 8;
+
+  /// Drops shared/memoized loads (tests; config-source switch).
+  static void clearMemo() {
+    _inflight.clear();
+    _memo.clear();
+  }
+
+  bool get _memoizable {
+    bool ok(WarehouseConnector? r) => r == null || r is DataVersioned;
+    return ok(programMovesRepo) &&
+        ok(strengthRepo) &&
+        ok(workoutsRepo) &&
+        ok(cardioRepo) &&
+        ok(calisthenicsRepo);
+  }
+
   /// Loads [date]'s week. Cardio (a local read) is always read when
   /// configured. [withMissed] also reads the Kaya climbing tab and
   /// runs [detectMissedWork] with [date] as "today" (requires a strength
@@ -250,17 +279,6 @@ class WeekStateLoader {
     DateTime date, {
     String label = 'Today',
     bool withMissed = false,
-  }) =>
-      Perf.span(
-        'week_state.load',
-        () => _load(date, label: label, withMissed: withMissed),
-        meta: {'withMissed': withMissed},
-      );
-
-  Future<WeekState?> _load(
-    DateTime date, {
-    required String label,
-    required bool withMissed,
   }) async {
     IntentDocs docs;
     try {
@@ -268,9 +286,66 @@ class WeekStateLoader {
     } catch (_) {
       return null;
     }
+    final setting = weekStartSetting?.call();
+    final key = (
+      dayOnly(date),
+      label,
+      withMissed,
+      setting,
+      docs.program,
+      docs.phase,
+      docs.strategy,
+      (programMovesView?.name, programMovesRepo, strengthView?.name,
+          strengthRepo),
+      (workoutsView?.name, workoutsRepo, cardioView?.name, cardioRepo),
+      (climbingView?.name, climbingRepo, calisthenicsView?.name,
+          calisthenicsRepo),
+      LedgerDataVersion.instance.total,
+      ReadOnlyRowsCache.generation,
+    );
+    final memo = _memo[key];
+    if (memo != null) {
+      final age = now().difference(memo.at);
+      if (!age.isNegative && age < kayaCacheTtl) {
+        Perf.count('week_state.memo', meta: {'withMissed': withMissed});
+        return memo.state;
+      }
+      _memo.remove(key);
+    }
+    final pending = _inflight[key];
+    if (pending != null) {
+      Perf.count('week_state.shared', meta: {'withMissed': withMissed});
+      return pending;
+    }
+    final memoizable = _memoizable;
+    final f = Perf.span(
+      'week_state.load',
+      () => _load(docs, setting, date, label: label, withMissed: withMissed),
+      meta: {'withMissed': withMissed},
+    );
+    _inflight[key] = f;
+    try {
+      final state = await f;
+      if (memoizable) {
+        if (_memo.length >= _memoCap) _memo.remove(_memo.keys.first);
+        _memo[key] = (at: now(), state: state);
+      }
+      return state;
+    } finally {
+      if (identical(_inflight[key], f)) _inflight.remove(key);
+    }
+  }
+
+  Future<WeekState?> _load(
+    IntentDocs docs,
+    Object? setting,
+    DateTime date, {
+    required String label,
+    required bool withMissed,
+  }) async {
     final day = dayOnly(date);
     final wsDay = resolveWeekStartDay(
-      setting: weekStartSetting?.call(),
+      setting: setting,
       programVersion: currentVersion(docs.program),
     );
     final mon = weekStartOf(day, wsDay); // the week's first day

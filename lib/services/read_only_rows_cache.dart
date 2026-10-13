@@ -25,6 +25,9 @@ class ReadOnlyRowsCache {
       _inflight = {};
   static int _gen = 0;
 
+  /// Bumped by every [clear] (a Kaya import) — memo keys over these rows.
+  static int get generation => _gen;
+
   /// Drops every entry (after a Kaya import; tests).
   static void clear() {
     _cache.clear();

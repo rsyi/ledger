@@ -28,7 +28,8 @@ import 'sheets_repository.dart' show Record;
 import 'sync_scheduler.dart';
 import 'warehouse_connector.dart';
 
-class EngineLedgerConnector implements WarehouseConnector, RangeListable {
+class EngineLedgerConnector
+    implements WarehouseConnector, RangeListable, DataVersioned {
   @override
   final SheetsConfig config;
   final String defaultSpreadsheetId;

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:airledger/models/database_config.dart';
 import 'package:airledger/models/view_schema.dart';
+import 'package:airledger/services/ledger_data_version.dart';
 import 'package:airledger/services/program_provider.dart';
 import 'package:airledger/services/sheets_repository.dart' show Record;
 import 'package:airledger/services/warehouse_connector.dart';
@@ -34,6 +35,13 @@ class _CountingRepo implements WarehouseConnector {
   Future<void> delete(ViewSchema view, Record record) async {}
 }
 
+/// A version-tracked connector (EngineLedgerConnector's contract): its
+/// writes bump [LedgerDataVersion], so a WeekState over it can be
+/// memoized per data version.
+class _VersionedRepo extends _CountingRepo implements DataVersioned {
+  _VersionedRepo(super.rows);
+}
+
 ViewSchema _view(String name) => ViewSchema(
       name: name,
       datasource: 'gsheets',
@@ -56,6 +64,7 @@ void main() {
   setUp(() {
     ProgramProvider.clearCache();
     WeekStateLoader.clearKayaCache();
+    WeekStateLoader.clearMemo();
   });
 
   test('Kaya climbing tab is read once per TTL, re-read after it / a '
@@ -131,5 +140,65 @@ void main() {
     expect([for (final r in state!.strengthRows!) r['id']],
         ['recent', 'today']);
     expect(state.loggedOnDate, ['Barbell Squat']);
+  });
+
+  group('coalescing + memo (perf batch 3, audit #4)', () {
+    test('identical CONCURRENT loads share one in-flight load', () async {
+      if (!hasFitness) return;
+      final strength = _CountingRepo(const []);
+      final cardio = _CountingRepo(const []);
+      final provider = ProgramProvider((p) async => read(p));
+      WeekStateLoader loader() => WeekStateLoader(
+            loadDocs: provider.load,
+            strengthView: _view('strength'),
+            strengthRepo: strength,
+            cardioView: _view('cardio'),
+            cardioRepo: cardio,
+          );
+      final day = DateTime(2026, 10, 2);
+      final both = await Future.wait([
+        loader().load(day, withMissed: true),
+        loader().load(day, withMissed: true),
+      ]);
+      expect(identical(both[0], both[1]), isTrue);
+      expect(strength.lists, 1);
+      expect(cardio.lists, 1);
+
+      // Unversioned repos (fakes / Sheets) are never memoized once done.
+      await loader().load(day, withMissed: true);
+      expect(strength.lists, 2);
+      // Different shape → its own load.
+      await Future.wait([
+        loader().load(day),
+        loader().load(day, withMissed: true),
+      ]);
+      expect(strength.lists, 4);
+    });
+
+    test('version-tracked sources: the result is memoized per data '
+        'version; a ledger bump re-reads', () async {
+      if (!hasFitness) return;
+      final strength = _VersionedRepo(const []);
+      final provider = ProgramProvider((p) async => read(p));
+      WeekStateLoader loader() => WeekStateLoader(
+            loadDocs: provider.load,
+            strengthView: _view('strength'),
+            strengthRepo: strength,
+          );
+      final day = DateTime(2026, 10, 2);
+      final a = await loader().load(day, withMissed: true);
+      final b = await loader().load(day, withMissed: true);
+      expect(identical(a, b), isTrue);
+      expect(strength.lists, 1);
+
+      LedgerDataVersion.instance.bump('strength');
+      final c = await loader().load(day, withMissed: true);
+      expect(identical(a, c), isFalse);
+      expect(strength.lists, 2);
+
+      // Another day is another entry.
+      await loader().load(DateTime(2026, 10, 3), withMissed: true);
+      expect(strength.lists, 3);
+    });
   });
 }

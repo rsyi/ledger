@@ -41,3 +41,8 @@ class LedgerDataVersion {
     _epoch++;
   }
 }
+
+/// Marker: a connector whose every row change bumps [LedgerDataVersion]
+/// (EngineLedgerConnector). Results derived from such reads may be
+/// memoized per `LedgerDataVersion.instance.total` (WeekStateLoader).
+abstract interface class DataVersioned {}

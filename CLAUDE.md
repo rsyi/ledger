@@ -185,6 +185,18 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   (`onOpenWeek`), the Week tab's app-bar dumbbell, and every
   openProgram/openWeekPlan deep link (push the Program screen
   directly).
+- **Wilks basis = RPE-adjusted e1RM (2026-10-12, dbc591a)**: every
+  Wilks surface (weekly stat + decomposition, monthly trend, benchmark,
+  phase-start reference/floor) prices off `rpeAdjustedE1rm` (wilks.dart
+  — the Progress Lifts-row estimator: Epley over reps + RIR, capped at
+  12; no RPE = plain Epley; warm-ups excluded via working_sets) —
+  `WilksBasis.rpeE1rm` is the default. Strength page lines read "Squat
+  est. max 335 lb · lifted 275×5"; the strength header PL chip is
+  "est. total" (current per-lift estimates, estimatedMaxesAsOf).
+  DELIBERATE: sim_fit's calibration series stays PINNED to
+  `WilksBasis.actualMax` (fitted on that basis; re-fit deliberately);
+  sim2 already prices Wilks off its own e1RM state. StrengthRow gained
+  `setType`.
 - **Progress/Goals bottom-nav split (2026-09-29)**: the output-over-input
   principle made literal (user directive). The old combined Home tab
   divided into TWO tabs; the shell is now 5-tab: **Progress · Goals ·
@@ -1113,7 +1125,7 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   strength exercise options trimmed to a curated ~37 (mains first,
   then live-sheet frequency, recent-year bias).
 
-## Performance (2026-10-12 — batch 1 audit fixes + batch 2 date ranges / snapshot cache)
+## Performance (2026-10-12 — batch 1 audit fixes + batch 2 date ranges / snapshot cache + batch 3 cold start)
 
 - **Instrumentation**: `lib/services/perf.dart` (FLUTTER-FREE — pure
   services/tools import it) `Perf.span(name, fn, {meta, metaOf})` /
@@ -1171,10 +1183,8 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   load 22–37 ms UI parse → 0.03 ms cache hit (first load ~26 ms off the
   UI isolate); 8k-row strength list: 26–29 ms UI conversion → 0 (in the
   worker); engine-path RowCache encode 32–37 ms per reload → gone.
-- NOT done: #14; #4 (one debounced data-changed fan-out / shared
-  WeekState per (date, data version)) deferred until the batch-2
-  on-device re-measure says it's still needed — with the snapshot cache
-  every WeekState recompute is CPU over a ~180-day window, no reads.
+- NOT done: #14. #4's shared WeekState landed in batch 3 (below); a
+  single debounced data-changed fan-out is still not built.
 
 ### Batch 2 (2026-10-12 — on-device profile: strength = 33,547 rows)
 
@@ -1225,9 +1235,64 @@ store mutex; week_state.load / program_day_card / synthesis / goals
   today), day synthesis meals (today), program card info-sheet fallback,
   coach ledger dump (28-d dumpWindow onward). FULL (cached) reads stay
   where history is the point: Progress/home dashboard strength, lift
-  pages / plan data / forecast fits, Program screen + week planner
-  pricing, timeline calendar dots, weight series (2.1k rows), small
+  pages / plan data / forecast fits, timeline calendar dots, weight
+  series on trend pages (2.1k rows) — batch 3 moved the week planner,
+  Program screen pricing and critical-path weight to ranges — small
   views (program_moves, whoop_workouts, cardio, calisthenics, coach).
+
+### Batch 3 (2026-10-12 — cold-start critical path)
+
+Evidence (perf3.txt, PERF_LOG release): DocCache missed on EVERY cold
+start (program.yaml 820 ms, phase 431, strategy 457, dashboards 510 —
+memory-only cache); wm_store.load 2.0 s; week_state.load 2.15 s ×2
+CONCURRENT identical loads (card + synthesis); weight full list 1.35 s
+(2.1k rows) on Today; a FULL strength list 2.0 s (33,547 rows) right
+after Today — the WEEK PLANNER bootstrap sync (run + queued rerun).
+- **Disk last-good** (`disk_cache.dart`: `DiskCache.instance` =
+  `FileDiskCacheStore` over `<app support>/last_good`, wired in main();
+  null in tests/tools = memory-only). DocCache persists
+  `{path, sha (FNV-1a-64), fetchedAt, content}` per (config-source id
+  `DocCache.diskScope` — set by ConfigSourceRegistry._publish — × path);
+  the FIRST access of a path per process serves the disk copy and
+  revalidates once in the background; offline misses fall back to disk;
+  `clear()` (pull-to-refresh) never re-serves disk first. SwrCache gained
+  `persist: SwrPersist(key, encode, decode)` — WmStore /
+  ForecastMetaStore / ProjectionSnapshotStore now cache + persist the
+  RAW tab cells (keys include the spreadsheet id) with the parsed value
+  alongside. AppSettings already persisted (SharedPreferences) — no
+  change. Parsed-doc cache stays keyed on the raw text (disk copy parses
+  once; the YAML is not persisted parsed — int keys don't survive JSON).
+- **`RevalidationBus`** (revalidation_bus.dart): a background
+  revalidation that CHANGES served content publishes (`doc:<path>` /
+  the store name); unchanged ones never do. HomeScreen debounces 400 ms
+  → `_onWeekStartChanged` (replan + Goals/Progress/Today cards reload).
+- **Bootstrap warm**: `_initialize` kicks `ProgramProvider.load()` first
+  so the disk read + ~110 ms isolate parse overlap AppConfig/schemas.
+- **Shared WeekState (#4 done)**: WeekStateLoader.load keys on day ×
+  label × withMissed × week-start setting × parsed-doc identity × view
+  NAMES + repo identity × `LedgerDataVersion.total` × Kaya-cache
+  `generation`: identical concurrent loads share one future
+  (`week_state.shared`); when every ledger source is `DataVersioned`
+  (marker on EngineLedgerConnector) the result is MEMOIZED (8-entry,
+  ≤ Kaya TTL; `week_state.memo`). `WeekStateLoader.clearMemo()`.
+  WeekState is shared — never mutate it.
+- **Ranged weight**: `loadDailyWeighIns(from:)` → listRange; an empty
+  window falls back to the full list. `criticalWeightFrom(today)` =
+  today − `criticalWeightLookbackDays` (90; 7d avg + 28-d maintenance
+  over 7d-avg pairs need ~42) on Today (daily progress card), day
+  synthesis and Goals. Progress/forecast/trend pages keep full history.
+- **Planner**: `WeekPlanner.plannerStrengthRows` = listRange(today −
+  `plannerHistoryDays` (= strengthHistoryDays, 180), open-ended); the
+  Program screen prices from the SAME window (routine ≡ planned rows ≡
+  Today card). The bootstrap replan starts 2 s after the first frame.
+- New spans/counters: doc_cache.disk (hit=…), disk_hit/disk_miss,
+  disk_write, changed; `<store>.disk`, `<store>.changed`;
+  week_state.shared / week_state.memo; weight.daily `ranged=`.
+- Expected cold-start critical path: docs from disk (ms) + program
+  parse ~110 ms (isolate, overlapped) → Today: ONE week_state load
+  (ranged strength + small views) shared by card + synthesis, ranged
+  weight (~90 rows), WM from disk; network revalidations + the planner
+  (ranged) run after first paint.
 
 ## Dev gotchas (hard-won)
 

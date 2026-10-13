@@ -11,6 +11,7 @@ import '../models/database_config.dart';
 import '../models/view_schema.dart';
 import 'cell_codec.dart';
 import 'google_auth/sheets_auth.dart';
+import 'perf.dart';
 import 'warehouse_connector.dart';
 
 /// One row from a sheet, keyed by dimension name.
@@ -177,7 +178,12 @@ class SheetsRepository implements WarehouseConnector {
   /// Lists all records for [view], optionally filtered to those whose
   /// `date_field` falls on [onDate].
   @override
-  Future<List<Record>> list(ViewSchema view, {DateTime? onDate}) async {
+  Future<List<Record>> list(ViewSchema view, {DateTime? onDate}) =>
+      Perf.span('sheets.list', () => _list(view, onDate: onDate),
+          meta: {'view': view.name},
+          metaOf: (rows) => {'rows': rows.length});
+
+  Future<List<Record>> _list(ViewSchema view, {DateTime? onDate}) async {
     final spreadsheetId = _spreadsheetIdFor(view);
     final values = await _readAll(spreadsheetId, view.table);
     if (values.isEmpty) return [];

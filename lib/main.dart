@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'services/engine.dart';
 import 'services/notification_service.dart';
+import 'services/perf_frames.dart';
 import 'ui/config_gate.dart';
 import 'ui/design/tokens.dart' show StatusColors;
 import 'ui/home_screen.dart';
@@ -11,6 +12,8 @@ import 'ui/widgets/keyboard_inset_guard.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // >16 ms frame logging — profile builds / PERF_LOG only (no-op else).
+  installPerfFrameTimings();
   // Eagerly load the Rust engine + log its version so any FFI / jniLibs
   // misconfiguration shows up under the `flutter:` logcat tag before
   // the first schema parse rather than at the first form open.

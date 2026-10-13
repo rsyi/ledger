@@ -590,7 +590,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               wmSnapshotOf: wmStore.snapshot,
             );
         _replan = replan;
-        unawaited(replan());
+        // Off the cold-start critical path (perf batch 3): the sync runs
+        // after the first frame + a beat, so Today's reads go first on
+        // the engine's store lock (the persisted plan rows already show).
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          Timer(const Duration(seconds: 2),
+              () => unawaited(replan().catchError((Object _) {})));
+        });
         await _movesSub?.cancel();
         // A strength edit/delete re-checks the window too (a day whose
         // logged sets were all removed is no longer frozen mid-session).

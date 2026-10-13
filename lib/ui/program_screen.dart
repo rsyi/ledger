@@ -47,7 +47,7 @@ import '../services/routine_display.dart';
 import '../services/sheets_repository.dart' show Record;
 import '../services/warehouse_connector.dart';
 import '../services/week_plan.dart';
-import '../services/week_planner.dart' show buildWeekPlannedEntries;
+import '../services/week_planner.dart' show WeekPlanner, buildWeekPlannedEntries;
 import '../services/wm_store.dart';
 import '../services/wm_tabs.dart';
 import '../services/working_max.dart'
@@ -160,7 +160,10 @@ class _ProgramScreenState extends State<ProgramScreen> {
       var history = const <StrengthRow>[];
       if (widget.strengthRepo != null && widget.strengthView != null) {
         try {
-          final recs = await widget.strengthRepo!.list(widget.strengthView!);
+          // Same bounded window the planner prices from (perf batch 3)
+          // so the routine screen and the planned rows always agree.
+          final recs = await WeekPlanner.plannerStrengthRows(
+              widget.strengthRepo!, widget.strengthView!, _today);
           history = [for (final r in recs) ?_strengthRow(r)];
         } catch (_) {}
       }

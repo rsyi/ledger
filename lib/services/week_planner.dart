@@ -53,6 +53,7 @@ import 'app_settings.dart' show effectiveWeekStartDay;
 import 'week_start.dart' show weekStartOf;
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
+import 'week_state_loader.dart' show strengthHistoryDays;
 import 'wm_tabs.dart'
     show WmSnapshot, activeCapsByLift, currentWorkingMaxesByLift;
 import 'working_sets.dart' show warmupIndices;
@@ -919,6 +920,23 @@ class WeekPlanner {
   static Future<void>? _inFlight;
   static Future<void>? _rerun;
 
+  /// How far back the planner reads strength rows (perf batch 3): the
+  /// reference e1RM needs 42 days, accessory double progression the last
+  /// comparable session — the SAME window the Today card's WeekState
+  /// prices from ([strengthHistoryDays]), so planner and card agree.
+  static const plannerHistoryDays = strengthHistoryDays;
+
+  /// The planner's strength read: [plannerHistoryDays] before [today],
+  /// open-ended forward (horizon days' logged sets). A `listRange` —
+  /// it used to list the full 33k-row history (~2 s on device) on every
+  /// bootstrap.
+  static Future<List<Record>> plannerStrengthRows(
+      WarehouseConnector connector, ViewSchema strengthView, DateTime today) {
+    return connector.listRange(strengthView,
+        from: DateTime(
+            today.year, today.month, today.day - plannerHistoryDays));
+  }
+
   static Future<void> _ensure({
     required EngineLedgerRepository repo,
     required WarehouseConnector connector,
@@ -934,7 +952,7 @@ class WeekPlanner {
       final program = docs.program;
       if (program == null) return; // no/bad program.yaml: retry next run
 
-      final rows = await connector.list(strengthView);
+      final rows = await plannerStrengthRows(connector, strengthView, today);
       final history = [for (final r in rows) ?_strengthRow(r)];
       final references = liftReferencesAsOf(history, today);
 

@@ -23,10 +23,14 @@ void installPerfFrameTimings() {
       final r = t.rasterDuration.inMicroseconds;
       if (b > 16000 || r > 16000) {
         Perf.record('frame.jank', b > r ? b : r);
-        developer.log(
-            'jank frame build=${(b / 1000).toStringAsFixed(1)}ms '
-            'raster=${(r / 1000).toStringAsFixed(1)}ms',
-            name: 'perf');
+        final line = 'jank frame build=${(b / 1000).toStringAsFixed(1)}ms '
+            'raster=${(r / 1000).toStringAsFixed(1)}ms';
+        if (Perf.forceLog) {
+          // ignore: avoid_print
+          print('[perf] $line');
+        } else {
+          developer.log(line, name: 'perf');
+        }
       }
     }
   });

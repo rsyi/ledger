@@ -124,8 +124,15 @@ class Perf {
     final m = meta == null || meta.isEmpty
         ? ''
         : ' ${meta.entries.map((e) => '${e.key}=${e.value}').join(' ')}';
-    developer.log('$name ${(us / 1000).toStringAsFixed(1)}ms$m',
-        name: 'perf');
+    final line = '$name ${(us / 1000).toStringAsFixed(1)}ms$m';
+    // developer.log never reaches logcat in a release build; with the
+    // explicit PERF_LOG define, print so `adb logcat -s flutter` sees it.
+    if (forceLog) {
+      // ignore: avoid_print
+      print('[perf] $line');
+    } else {
+      developer.log(line, name: 'perf');
+    }
   }
 
   /// Records one sample from an external timer (frame timings).

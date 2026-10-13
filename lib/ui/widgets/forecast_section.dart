@@ -42,6 +42,7 @@
 ///     disclosure. Visible labels carry no section numbers.
 library;
 
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:fl_chart/fl_chart.dart';
@@ -264,6 +265,9 @@ class ForecastSection extends StatefulWidget {
     this.steadyStateWeeks = 52,
   });
 
+  /// Quiet period before an interaction's MC re-run (perf #15).
+  static const mcDebounce = Duration(milliseconds: 350);
+
   @override
   State<ForecastSection> createState() => _ForecastSectionState();
 }
@@ -281,6 +285,10 @@ class _ForecastSectionState extends State<ForecastSection> {
   late Sim2Run _run;
   Sim2McSummary? _mc;
   int _mcToken = 0;
+
+  /// Debounce for MC re-runs after an interaction (perf #15): a burst of
+  /// stepper taps used to spawn one 200-path isolate PER TAP.
+  Timer? _mcDebounce;
 
   /// Fitted params with the nightly recalibration scales applied —
   /// the baseline the param sheet's EDITED marker compares against.
@@ -318,10 +326,16 @@ class _ForecastSectionState extends State<ForecastSection> {
       (b) =>
           b.emphasis == 'cut' && !day.isBefore(b.start) && !day.isAfter(b.end),
     );
-    _recompute();
+    _recompute(debounceMc: false);
   }
 
-  void _recompute() {
+  @override
+  void dispose() {
+    _mcDebounce?.cancel();
+    super.dispose();
+  }
+
+  void _recompute({bool debounceMc = true}) {
     // Deterministic runs are synchronous — ~170 weekly steps, safe on
     // stepper taps.
     _run = sim2Run(
@@ -332,7 +346,18 @@ class _ForecastSectionState extends State<ForecastSection> {
       observedBw: widget.inputs.observedBw,
       observedIndexTotal: widget.inputs.observedIndexTotal,
     );
-    _kickMc();
+    if (!debounceMc) {
+      _kickMc();
+      return;
+    }
+    // Stale results are already dropped by token; invalidate the shown
+    // P(V8) now and start ONE run once the taps settle.
+    ++_mcToken;
+    _mc = null;
+    _mcDebounce?.cancel();
+    _mcDebounce = Timer(ForecastSection.mcDebounce, () {
+      if (mounted) _kickMc();
+    });
   }
 
   /// 200-path MC off the UI thread; deterministic lines render

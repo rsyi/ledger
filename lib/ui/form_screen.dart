@@ -196,7 +196,9 @@ class _FormScreenState extends State<FormScreen> {
         .where((d) => d.input?.widget == WidgetType.autocomplete)
         .toList();
     if (autocompleteDims.isNotEmpty) {
-      _loadRecentRows();
+      // Perf #15: the full-table list (strength: every row) waits for
+      // the push transition to finish so it never competes with it.
+      _afterRouteTransition(_loadRecentRows);
       _loadAdHocCache(autocompleteDims);
     }
     unawaited(_restoreVideoDraft());
@@ -235,6 +237,29 @@ class _FormScreenState extends State<FormScreen> {
         setState(() => _adHocCache[dim.name] = cached);
       }
     }
+  }
+
+  /// Runs [fn] once this route's push animation has completed (next
+  /// frame when there is none / it already finished).
+  void _afterRouteTransition(VoidCallback fn) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final anim = ModalRoute.of(context)?.animation;
+      if (anim == null || anim.isCompleted) {
+        fn();
+        return;
+      }
+      late final AnimationStatusListener listener;
+      listener = (status) {
+        if (status == AnimationStatus.forward ||
+            status == AnimationStatus.reverse) {
+          return;
+        }
+        anim.removeStatusListener(listener);
+        if (mounted) fn();
+      };
+      anim.addStatusListener(listener);
+    });
   }
 
   Future<void> _loadRecentRows() async {

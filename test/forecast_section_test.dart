@@ -240,9 +240,44 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('nutrition-delta-reset')));
     await tester.pump();
+    await tester.pump(ForecastSection.mcDebounce); // P(V8) re-run lands
     await tester.pump();
     expect(summaryText(tester), before);
     expect(find.byKey(const ValueKey('nutrition-whatif')), findsNothing);
+  });
+
+  // Perf #15 (2026-10-12): a burst of stepper taps runs the 200-path MC
+  // ONCE (debounced), not once per tap.
+  testWidgets('stepper burst → one debounced MC run', (tester) async {
+    var runs = 0;
+    tester.view.physicalSize = const Size(800, 5200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: ForecastSection(
+            inputs: inputs(n: nutrition()),
+            today: _today,
+            mcRunner: (j) {
+              runs++;
+              return testMcRunner(j);
+            },
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    expect(runs, 1, reason: 'initial run is immediate');
+    for (var i = 0; i < 4; i++) {
+      await tester.tap(find.byKey(const ValueKey('nutrition-delta-plus')));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(runs, 1, reason: 'still inside the debounce window');
+    await tester.pump(ForecastSection.mcDebounce);
+    await tester.pump();
+    expect(runs, 2);
+    expect(textOf(tester, 'nutrition-delta-value'), '+400 kcal/day');
   });
 
   testWidgets('capacity toggle removes the (default-on) capacity line',
@@ -324,6 +359,7 @@ void main() {
     await scrollTo(tester, find.byKey(const ValueKey('sim2-params-reset')));
     await tester.tap(find.byKey(const ValueKey('sim2-params-reset')));
     await tester.pump();
+    await tester.pump(ForecastSection.mcDebounce); // P(V8) re-run lands
     await tester.pump();
     expect(summaryText(tester), before);
   });

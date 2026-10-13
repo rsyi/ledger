@@ -19,6 +19,7 @@ import 'engine.dart';
 import 'engine_schema_adapter.dart';
 import 'google_auth/sheets_auth.dart';
 import 'log_event_bus.dart';
+import 'perf.dart';
 import 'sheets_repository.dart' show Record;
 import 'sync_scheduler.dart';
 import 'warehouse_connector.dart';
@@ -99,11 +100,16 @@ class EngineLedgerConnector implements WarehouseConnector {
   /// re-syncs once on an `unauthorized (401)` result.
   Future<List<Map<String, dynamic>>> sync(List<Map<String, dynamic>> views) {
     final t = tokens;
-    if (t == null) return repo.sync(views);
-    return syncWithTokenRefresh(
-      tokens: t,
-      setToken: repo.setAccessToken,
-      runSync: () => repo.sync(views),
+    return Perf.span(
+      'engine.sync',
+      () => t == null
+          ? repo.sync(views)
+          : syncWithTokenRefresh(
+              tokens: t,
+              setToken: repo.setAccessToken,
+              runSync: () => repo.sync(views),
+            ),
+      meta: {'views': views.length},
     );
   }
 
@@ -116,18 +122,25 @@ class EngineLedgerConnector implements WarehouseConnector {
 
   @override
   Future<List<Record>> list(ViewSchema view, {DateTime? onDate}) async {
-    final raw = await repo.list(
-      viewSchemaToEngineJson(view),
-      onDate: onDate,
+    // listRecords converts tagged → native INSIDE the worker isolate
+    // (perf #3) — the UI isolate gets ready records.
+    return Perf.span(
+      'engine.list',
+      () => repo.listRecords(viewSchemaToEngineJson(view), onDate: onDate),
+      meta: {'view': view.name, if (onDate != null) 'onDate': true},
+      metaOf: (rows) => {'rows': rows.length},
     );
-    return raw.map(recordFromEngineJson).toList();
   }
 
   @override
   Future<Record> create(ViewSchema view, Record record) async {
-    final raw = await repo.create(
-      viewSchemaToEngineJson(view),
-      recordToEngineJson(record),
+    final raw = await Perf.span(
+      'engine.create',
+      () => repo.create(
+        viewSchemaToEngineJson(view),
+        recordToEngineJson(record),
+      ),
+      meta: {'view': view.name},
     );
     SyncScheduler.instance?.onLocalWrite();
     final created = recordFromEngineJson(raw);

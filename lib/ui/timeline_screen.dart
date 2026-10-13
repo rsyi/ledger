@@ -17,6 +17,7 @@ import '../services/derive.dart';
 import '../services/display_names.dart';
 import '../services/qbo_push_store.dart';
 import '../services/qbo_service.dart';
+import '../services/engine_ledger_connector.dart';
 import '../services/row_cache.dart';
 import '../services/github_client.dart';
 import '../services/list_display_render.dart';
@@ -103,6 +104,14 @@ class _Item {
 ///   - planned rows from local plan store (filtered to selected date)
 /// Planned rows appear at the top so they're easy to act on during a workout.
 class TimelineScreen extends StatefulWidget {
+  /// Whether the timeline keeps its RowCache (persisted JSON of every
+  /// listed table). Perf #7 (2026-10-12): NOT for the local-first engine
+  /// — its list() is already a local SQLite read, and the cache used to
+  /// re-encode + write the whole table on every reload / date tap / log.
+  /// Network-backed connectors (direct Sheets) keep it.
+  static bool usesRowCache(WarehouseConnector repo) =>
+      repo is! EngineLedgerConnector;
+
   final ViewSchema view;
   final WarehouseConnector repository;
   final LlmClient? llm;
@@ -414,11 +423,16 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// scan, so serving the cache first keeps it off the open/reload path.
   Future<void> _loadLoggedDates() async {
     if (widget.view.dateField == null) return;
-    final cached = await RowCache.get(widget.view, RowCache.allDatesKey);
+    final useCache = TimelineScreen.usesRowCache(widget.repository);
+    final cached = useCache
+        ? await RowCache.get(widget.view, RowCache.allDatesKey)
+        : null;
     if (cached != null) _applyLoggedDates(cached);
     try {
       final rows = await widget.repository.list(widget.view);
-      await RowCache.put(widget.view, RowCache.allDatesKey, rows);
+      if (useCache) {
+        await RowCache.put(widget.view, RowCache.allDatesKey, rows);
+      }
       if (!mounted) return;
       _applyLoggedDates(rows);
     } catch (_) {
@@ -471,6 +485,10 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// writes and on explicit Refresh so you always see confirmed state.
   Future<List<_Item>> _fetch({bool forceFresh = false}) async {
     final dateKey = _dateKey();
+    if (!TimelineScreen.usesRowCache(widget.repository)) {
+      // Local-first engine: list() IS the local store — no row cache.
+      return _assemble(await _listFromSheet());
+    }
     if (!forceFresh) {
       final cached = await RowCache.get(widget.view, dateKey);
       if (cached != null) {

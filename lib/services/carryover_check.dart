@@ -60,6 +60,16 @@ class CarryoverCheck {
 
   static bool _running = false;
 
+  /// "Nothing missed" memo (perf #13, 2026-10-12): `<day>|<dataVersion>`
+  /// of the last run whose missed-work load came back empty. The poller
+  /// re-ran a FULL week load every ~10 min all day when nothing was
+  /// missed; with the same day + local data version the answer can't
+  /// have grown (logging only removes missed work; a new day resets).
+  static String? _nothingMissedKey;
+
+  /// Test hook.
+  static void debugReset() => _nothingMissedKey = null;
+
   /// Runs the gates in cheap-first order — hour, meta, missed work
   /// non-empty (local reads), a FRESH sync ([freshSync]: false → return
   /// without touching meta, retried on the next resume/tick), then
@@ -68,6 +78,9 @@ class CarryoverCheck {
   /// today and calls [ask] with the missed work. Never throws: a failing
   /// gate read skips the run; a failing [ask] is swallowed (meta stays
   /// set). Concurrent calls (bootstrap + resume + poller) collapse to one.
+  /// [dataVersion] (optional) enables the "nothing missed" memo: same
+  /// day + same version → [CarryoverOutcome.nothingMissed] without
+  /// reloading the week.
   static Future<CarryoverOutcome> maybeRun({
     required DateTime now,
     required Future<String?> Function(String key) metaGet,
@@ -76,6 +89,7 @@ class CarryoverCheck {
     required Future<bool> Function() freshSync,
     required Future<bool> Function() alreadyPlanned,
     required Future<void> Function(MissedWork missed) ask,
+    Object? dataVersion,
   }) async {
     if (now.hour < earliestHour) return CarryoverOutcome.tooEarly;
     if (_running) return CarryoverOutcome.busy;
@@ -85,8 +99,15 @@ class CarryoverCheck {
       if (await metaGet(metaKey) == today) {
         return CarryoverOutcome.alreadyChecked;
       }
+      final memoKey = dataVersion == null ? null : '$today|$dataVersion';
+      if (memoKey != null && memoKey == _nothingMissedKey) {
+        return CarryoverOutcome.nothingMissed;
+      }
       final mw = await missed();
-      if (mw == null || mw.isEmpty) return CarryoverOutcome.nothingMissed;
+      if (mw == null || mw.isEmpty) {
+        if (memoKey != null) _nothingMissedKey = memoKey;
+        return CarryoverOutcome.nothingMissed;
+      }
       if (!await freshSync()) return CarryoverOutcome.notSynced;
       if (await alreadyPlanned()) {
         await metaSet(metaKey, today);

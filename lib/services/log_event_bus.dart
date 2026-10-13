@@ -38,8 +38,15 @@ class LogEventBus {
 
   final _controller = StreamController<LogEvent>.broadcast();
 
+  int _version = 0;
+
+  /// Monotonic count of published events — a cheap LOCAL data version
+  /// (perf #13: the carryover check's "nothing missed" memo keys on it).
+  int get version => _version;
+
   /// Fired by the connector after a successful create / update / delete.
   void publish(LogEvent event) {
+    _version++;
     if (_controller.hasListener) _controller.add(event);
   }
 

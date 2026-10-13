@@ -84,6 +84,7 @@ void main() {
     late List<String> order;
 
     setUp(() {
+      CarryoverCheck.debugReset();
       meta = {};
       asks = 0;
       missedLoads = 0;
@@ -96,8 +97,10 @@ void main() {
       bool proposalToday = false,
       bool synced = true,
       Future<void> Function()? ask,
+      Object? dataVersion,
     }) => CarryoverCheck.maybeRun(
       now: now ?? fri7,
+      dataVersion: dataVersion,
       metaGet: (k) async => meta[k],
       metaSet: (k, v) async {
         order.add('meta');
@@ -122,6 +125,30 @@ void main() {
         if (ask != null) await ask();
       },
     );
+
+    // Perf #13 (2026-10-12): "nothing missed" is remembered per day +
+    // local data version — the ~10-min poller no longer reloads the week.
+    test('nothing-missed memo: same day + version skips the week load',
+        () async {
+      const none = MissedWork(missed: [], remainingDays: []);
+      expect(await run(missed: none, dataVersion: 7),
+          CarryoverOutcome.nothingMissed);
+      expect(await run(missed: none, dataVersion: 7),
+          CarryoverOutcome.nothingMissed);
+      expect(missedLoads, 1, reason: 'memo hit');
+      // A local write bumps the version → reload.
+      expect(await run(missed: none, dataVersion: 8),
+          CarryoverOutcome.nothingMissed);
+      expect(missedLoads, 2);
+      // A new day reloads too (yesterday's work may now be missed).
+      expect(await run(dataVersion: 8, now: DateTime(2026, 10, 3, 7)),
+          CarryoverOutcome.asked);
+      expect(missedLoads, 3);
+      // No version → no memo (legacy callers).
+      await run(missed: none);
+      await run(missed: none);
+      expect(missedLoads, 5);
+    });
 
     test('runs once: sets meta BEFORE asking, then asks', () async {
       expect(await run(), CarryoverOutcome.asked);

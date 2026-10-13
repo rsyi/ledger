@@ -1033,6 +1033,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       final now = DateTime.now();
                       await CarryoverCheck.maybeRun(
                         now: now,
+                        // Local writes bump it; a new day resets the memo.
+                        dataVersion: LogEventBus.instance.version,
                         metaGet: carryoverLedger.metaGet,
                         metaSet: carryoverLedger.metaSet,
                         freshSync: () async {

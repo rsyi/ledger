@@ -17,6 +17,7 @@ import 'package:airledger_engine/airledger_engine.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../ledger_data_version.dart';
 import 'integration.dart';
 import 'kaya_api.dart';
 
@@ -657,6 +658,8 @@ class KayaIntegration implements Integration {
           'records': records,
           'deleted_ids': deleted,
         });
+        // Cached ledger reads of this view refresh (perf batch 2).
+        LedgerDataVersion.instance.bump(climbingViewJson['name']?.toString());
         final sortedIds = fetchedIds.toList()..sort();
         await repo.metaSet(_kIds, jsonEncode(sortedIds));
       }

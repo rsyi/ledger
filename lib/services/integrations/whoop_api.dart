@@ -31,6 +31,7 @@ import 'package:http/http.dart' as http;
 
 import '../app_config.dart' show WhoopApiConfig;
 import '../../ui/oauth_webview_screen.dart';
+import '../ledger_data_version.dart';
 import 'integration.dart';
 
 const _kAuthorizeUrl = 'https://api.prod.whoop.com/oauth/oauth2/auth';
@@ -676,6 +677,8 @@ class WhoopApiIntegration implements Integration {
           'records': records,
           if (stale != null && stale.isNotEmpty) 'deleted_dates': stale,
         });
+        // Cached ledger reads of this view refresh (perf batch 2).
+        LedgerDataVersion.instance.bump(recoveryViewJson['name']?.toString());
         known
           ..addAll(emitted)
           ..removeAll(stale ?? const <String>[]);
@@ -725,6 +728,8 @@ class WhoopApiIntegration implements Integration {
             'records': rows,
             if (deleted.isNotEmpty) 'deleted_ids': deleted,
           });
+          // Cached ledger reads of this view refresh (perf batch 2).
+          LedgerDataVersion.instance.bump(workoutsView['name']?.toString());
           // Update the id baseline + the id→day map (window-scoped).
           for (final r in rows) {
             final id = ((r['workout_id'] as Map)['value']) as String;

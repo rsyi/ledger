@@ -30,6 +30,7 @@ import 'dart:convert';
 import 'package:airledger_engine/airledger_engine.dart';
 import 'package:flutter/material.dart';
 
+import '../ledger_data_version.dart';
 import 'health_connect_gateway.dart';
 import 'integration.dart';
 
@@ -401,6 +402,8 @@ class MacrofactorIntegration implements Integration {
           'records': records,
           'deleted_ids': deleted,
         });
+        // Cached ledger reads of this view refresh (perf batch 2).
+        LedgerDataVersion.instance.bump(mealsViewJson['name']?.toString());
         for (final r in records) {
           final id = ((r['hc_id'] as Map)['value']) as String;
           final dt = ((r['eaten_at'] as Map)['value']) as String;

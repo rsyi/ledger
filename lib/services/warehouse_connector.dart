@@ -62,3 +62,60 @@ class UnimplementedConnector implements WarehouseConnector {
   @override
   Future<void> delete(ViewSchema view, Record record) async => _bail('delete');
 }
+
+/// A connector that can serve a DATE-RANGE read natively (perf batch 2:
+/// the engine ledger's indexed `date_key`). Use [WarehouseRangeList.listRange]
+/// at call sites — it dispatches here when available and falls back to
+/// `list` + [filterRecordsToRange] for every other connector (fakes,
+/// Sheets, SQL warehouses), so callers never need to know.
+abstract interface class RangeListable {
+  /// Live rows whose `date_field` CALENDAR DATE is within [from]..[to]
+  /// (inclusive; either bound optional — times are ignored). Views
+  /// without a date_field return every row; no bounds = the full list.
+  Future<List<Record>> listRange(ViewSchema view,
+      {DateTime? from, DateTime? to});
+}
+
+extension WarehouseRangeList on WarehouseConnector {
+  /// See [RangeListable.listRange]. Same semantics on every connector.
+  Future<List<Record>> listRange(ViewSchema view,
+      {DateTime? from, DateTime? to}) async {
+    final Object self = this;
+    if (self is RangeListable) {
+      // Promoted to RangeListable (not a WarehouseConnector subtype, so
+      // this calls the interface member, not this extension).
+      return self.listRange(view, from: from, to: to);
+    }
+    final rows = await list(view);
+    return filterRecordsToRange(view, rows, from: from, to: to);
+  }
+}
+
+/// The calendar day of a date-field cell: a DateTime, or a string that
+/// starts with an ISO date (lenient, like the engine's `date_key`).
+DateTime? recordDayOf(Object? v) {
+  if (v is DateTime) return DateTime(v.year, v.month, v.day);
+  if (v is String && v.length >= 10) {
+    final d = DateTime.tryParse(v.substring(0, 10));
+    if (d != null) return DateTime(d.year, d.month, d.day);
+  }
+  return null;
+}
+
+/// The engine's `list_range` semantics over an in-memory list: rows whose
+/// date-field calendar day is within [from]..[to] (inclusive). No
+/// date_field (or no bounds) → [rows] unchanged; a dateless row never
+/// matches a bounded range. Order preserved.
+List<Record> filterRecordsToRange(ViewSchema view, List<Record> rows,
+    {DateTime? from, DateTime? to}) {
+  final field = view.dateField;
+  if (field == null || (from == null && to == null)) return rows;
+  final lo = from == null ? null : DateTime(from.year, from.month, from.day);
+  final hi = to == null ? null : DateTime(to.year, to.month, to.day);
+  return [
+    for (final r in rows)
+      if (recordDayOf(r[field]) case final d?
+          when (lo == null || !d.isBefore(lo)) && (hi == null || !d.isAfter(hi)))
+        r,
+  ];
+}

@@ -17,6 +17,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../app_config.dart' show WithingsConfig;
+import '../ledger_data_version.dart';
 import '../../ui/oauth_webview_screen.dart';
 import 'integration.dart';
 
@@ -264,6 +265,8 @@ class WithingsIntegration implements Integration {
           'fill_if_blank_fields': ['weight_lbs', 'time'],
           'records': records,
         });
+        // Cached ledger reads of this view refresh (perf batch 2).
+        LedgerDataVersion.instance.bump(weightViewJson['name']?.toString());
         final days = _decodeDays(await repo.metaGet(_kDays));
         for (final r in records) {
           days.add(((r['date'] as Map)['value']) as String);
@@ -305,6 +308,8 @@ class WithingsIntegration implements Integration {
           'records': windowRecords,
           'deleted_dates': deleted,
         });
+        // Cached ledger reads of this view refresh (perf batch 2).
+        LedgerDataVersion.instance.bump(weightViewJson['name']?.toString());
         knownDays.addAll(currentDays);
         knownDays.removeAll(deleted);
         await repo.metaSet(_kDays, jsonEncode(knownDays.toList()..sort()));

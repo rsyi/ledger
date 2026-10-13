@@ -12,7 +12,7 @@ import '../models/view_schema.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
 
-class LazyConnector implements WarehouseConnector {
+class LazyConnector implements WarehouseConnector, RangeListable {
   LazyConnector(this.config, this._connect);
 
   @override
@@ -40,6 +40,11 @@ class LazyConnector implements WarehouseConnector {
   @override
   Future<List<Record>> list(ViewSchema view, {DateTime? onDate}) async =>
       (await _get()).list(view, onDate: onDate);
+
+  @override
+  Future<List<Record>> listRange(ViewSchema view,
+          {DateTime? from, DateTime? to}) async =>
+      (await _get()).listRange(view, from: from, to: to);
 
   @override
   Future<Record> create(ViewSchema view, Record record) async =>

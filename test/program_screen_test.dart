@@ -191,6 +191,24 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  // Perf #11 (2026-10-12): pricing is memoized per (loaded data, week) —
+  // rebuilds and paging back to a priced week never re-price.
+  testWidgets('pricing memoized per data version × week', (tester) async {
+    ProgramScreen.debugPriceCount = 0;
+    await pump(tester, _FakeWmStore(_seedRows(confirmed: true)));
+    final first = ProgramScreen.debugPriceCount;
+    expect(first, greaterThanOrEqualTo(1));
+    await tester.tap(find.byTooltip('Next week'));
+    await tester.pumpAndSettle();
+    expect(ProgramScreen.debugPriceCount, first + 1);
+    await tester.tap(find.byTooltip('Previous week'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Next week'));
+    await tester.pumpAndSettle();
+    expect(ProgramScreen.debugPriceCount, first + 1,
+        reason: 'both weeks already priced for this data');
+  });
+
   testWidgets('header + day tiles: plain-words status, one summary line, '
       'bare rows with %-of-TM — and never the word wave', (tester) async {
     await pump(tester, _FakeWmStore(_seedRows(confirmed: true)));

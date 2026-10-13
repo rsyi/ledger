@@ -31,6 +31,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/view_schema.dart';
+import '../services/perf.dart';
 import '../services/bodyweight_cache.dart' show BodyweightCache;
 import '../services/display_names.dart' show sentenceCase;
 import '../services/effective_plan.dart';
@@ -66,6 +67,10 @@ import 'widgets/pinned_tooltip_line_chart.dart';
 /// Weeks are the CONFIGURED week (week_start.dart: synced setting >
 /// program.yaml `week_start` > Monday) — Sat–Fri for the user.
 class ProgramScreen extends StatefulWidget {
+  /// Real routine-pricing passes run (perf #11 memo test hook).
+  @visibleForTesting
+  static int debugPriceCount = 0;
+
   final ProgramProvider provider;
 
   /// Training-max tab reader/writer; null hides the TRAINING MAXES
@@ -351,6 +356,30 @@ class _ProgramScreenState extends State<ProgramScreen> {
 // Week view
 // ---------------------------------------------------------------------------
 
+/// One displayed week's priced routine (see [_RoutineView._priced]).
+class _PricedWeek {
+  final Map<Object?, Object?>? version;
+  final List<DayPlan> week;
+  final ProgramSlice? repSlice;
+  final Map<String, double> maxes;
+  final Map<String, ProgramMove> skips;
+  final Map<DateTime, List<EffectiveItem>> effWeek;
+  final Set<String> pricedMovedIn;
+  final Map<DateTime, List<SessionLine>> linesByDay;
+  final String? backoff;
+  const _PricedWeek({
+    required this.version,
+    required this.week,
+    required this.repSlice,
+    required this.maxes,
+    required this.skips,
+    required this.effWeek,
+    required this.pricedMovedIn,
+    required this.linesByDay,
+    required this.backoff,
+  });
+}
+
 class _RoutineView extends StatelessWidget {
   final _RoutineData data;
   final DateTime weekStart;
@@ -378,12 +407,30 @@ class _RoutineView extends StatelessWidget {
     required this.onRefreshMaxes,
   });
 
-  @override
-  Widget build(BuildContext context) {
+  /// Memoized pricing (perf #11, 2026-10-12): the week plan + TM/cap
+  /// resolution + effective-week pricing used to rerun on EVERY build
+  /// (any setState — the TM busy spinner, a refresh). Keyed per loaded
+  /// [_RoutineData] instance (= data version; an Expando, so it dies
+  /// with the data) × displayed week × today × week-start day.
+  static final Expando<Map<(DateTime, DateTime, int), _PricedWeek>> _memo =
+      Expando('routine-pricing');
+
+  static _PricedWeek _priced(
+      _RoutineData data, DateTime weekStart, DateTime today) {
+    final wsDay = effectiveWeekStartDay(data.docs.program);
+    final byKey = _memo[data] ??= {};
+    return byKey[(weekStart, today, wsDay)] ??= Perf.spanSync(
+      'program_screen.price',
+      () => _price(data, weekStart, today, wsDay),
+    );
+  }
+
+  static _PricedWeek _price(
+      _RoutineData data, DateTime weekStart, DateTime today, int wsDay) {
+    ProgramScreen.debugPriceCount++;
     final program = data.docs.program!;
     final phase = data.docs.phase;
     final version = currentVersion(program);
-    final wsDay = effectiveWeekStartDay(program);
     final week = buildWeekPlan(program, phase, weekStart, weekStartDay: wsDay);
 
     // The header's block/wave status reads the program STRUCTURE week
@@ -459,6 +506,34 @@ class _RoutineView extends StatelessWidget {
     };
     final linesByDay = sessionLinesByDay(entries);
     final backoff = backoffLine(version?['backoff_rule']);
+
+    return _PricedWeek(
+      version: version,
+      week: week,
+      repSlice: repSlice,
+      maxes: maxes,
+      skips: skips,
+      effWeek: effWeek,
+      pricedMovedIn: pricedMovedIn,
+      linesByDay: linesByDay,
+      backoff: backoff,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final phase = data.docs.phase;
+    final wm = data.wm;
+    final p = _priced(data, weekStart, today);
+    final version = p.version;
+    final week = p.week;
+    final repSlice = p.repSlice;
+    final maxes = p.maxes;
+    final skips = p.skips;
+    final effWeek = p.effWeek;
+    final pricedMovedIn = p.pricedMovedIn;
+    final linesByDay = p.linesByDay;
+    final backoff = p.backoff;
 
     final todayUtc = DateTime.utc(today.year, today.month, today.day);
     const gutter = EdgeInsets.symmetric(horizontal: AppSpace.gutter);

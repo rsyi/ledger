@@ -1113,7 +1113,7 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   strength exercise options trimmed to a curated ~37 (mains first,
   then live-sheet frequency, recent-year bias).
 
-## Performance (2026-10-12 — audit low-risk fixes; #2/#4/#14 WAIT for an on-device profile)
+## Performance (2026-10-12 — batch 1 audit fixes + batch 2 date ranges / snapshot cache)
 
 - **Instrumentation**: `lib/services/perf.dart` (FLUTTER-FREE — pure
   services/tools import it) `Perf.span(name, fn, {meta, metaOf})` /
@@ -1171,8 +1171,63 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   load 22–37 ms UI parse → 0.03 ms cache hit (first load ~26 ms off the
   UI isolate); 8k-row strength list: 26–29 ms UI conversion → 0 (in the
   worker); engine-path RowCache encode 32–37 ms per reload → gone.
-- NOT done (await an on-device profile): #2/#4 shared per-view snapshot
-  + one debounced data-changed signal, #14.
+- NOT done: #14; #4 (one debounced data-changed fan-out / shared
+  WeekState per (date, data version)) deferred until the batch-2
+  on-device re-measure says it's still needed — with the snapshot cache
+  every WeekState recompute is CPU over a ~180-day window, no reads.
+
+### Batch 2 (2026-10-12 — on-device profile: strength = 33,547 rows)
+
+Evidence: `engine.list view=strength` 1.2–3.0 s each, 6+ per cold start
+→ Today → Week; tiny views queued 1–1.6 s behind it on the engine's
+store mutex; week_state.load / program_day_card / synthesis / goals
+3–4 s each.
+- **ENGINE `date_key`** (airledger, schema_version 3): rows carry an
+  indexed `date_key` (yyyy-mm-dd of the view's date_field; Date,
+  DateTime's calendar date, or an ISO-prefixed string; NULL otherwise),
+  index `(view_name, deleted, date_key)`. Writes key rows (create /
+  update / mark_synced — which now takes the ViewSchema / ingest via
+  create+update). Pre-v3 rows are backfilled LAZILY PER VIEW on the
+  first dated read (the store never sees view schemas at open): one
+  transaction, per-view meta marker `date_key_field:<view>` = the field
+  used (a changed date_field re-keys). Host: 33k-row backfill ~120–200 ms
+  release (expect ~0.5–1 s once on the Pixel). `Store::list_range` /
+  FFI `airledger_engine_ledger_list_range` / sdk-dart
+  `listRecordsRange(view, from:, to:)` (calendar-date inclusive, either
+  bound optional; no date_field → everything). `list(onDate)` narrows
+  through the index too. FFI `ledger_call` now releases the store lock
+  BEFORE serializing results (small views no longer wait out a 33k
+  JSON encode). Host FFI (33k synthetic): full listRecords 290–490 ms →
+  week range 2–4 ms, 180-day range (~4k rows) ~25 ms, onDate 3 ms.
+- **`LedgerDataVersion`** (ledger_data_version.dart): per-view local
+  data version. Bumped by EngineLedgerConnector create/update/delete
+  (BEFORE the LogEvent publish, so bus listeners re-read fresh), by
+  `sync()` for every view whose result has pulled/pushed/deleted/
+  conflicts ≠ 0 or an error, and after EVERY integration
+  `repo.ingest(...)` call (withings ×2, whoop ×2, kaya, macrofactor —
+  they write through the sdk repo directly; a NEW ingest call site
+  MUST bump too or cached reads go stale).
+- **Snapshot cache** in EngineLedgerConnector: list / list(onDate) /
+  listRange results cached per (view, date_field, read shape) × the
+  view's version; identical in-flight reads share a future; 64-entry
+  LRU; failed reads uncached; `clearCache()`. Results are UNMODIFIABLE
+  (List.unmodifiable + UnmodifiableMapView records) — they're shared:
+  copy (`List.of` / `Map.of`) before sorting or editing.
+- **`listRange`**: `WarehouseRangeList.listRange(view, from:, to:)`
+  extension on every WarehouseConnector — dispatches to `RangeListable`
+  (EngineLedgerConnector, LazyConnector) else list +
+  `filterRecordsToRange` (same semantics), so fakes/Sheets just work.
+  RANGED consumers: WeekStateLoader strength (from
+  `strengthHistoryDays` = 180 before the week, open-ended after —
+  `WeekState.strengthRows` is that window, NOT all-time: reference e1RM,
+  accessory last-comparable-session, set grading and the program card's
+  info sheet look back ≤180 d), today status card (strength + meals:
+  today), day synthesis meals (today), program card info-sheet fallback,
+  coach ledger dump (28-d dumpWindow onward). FULL (cached) reads stay
+  where history is the point: Progress/home dashboard strength, lift
+  pages / plan data / forecast fits, Program screen + week planner
+  pricing, timeline calendar dots, weight series (2.1k rows), small
+  views (program_moves, whoop_workouts, cardio, calisthenics, coach).
 
 ## Dev gotchas (hard-won)
 

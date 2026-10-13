@@ -221,7 +221,8 @@ class DaySynthesisService {
     final meals = <SynthMeal>[];
     if (mealsView != null && mealsRepo != null) {
       try {
-        for (final r in await mealsRepo!.list(mealsView!)) {
+        for (final r in await mealsRepo!
+            .listRange(mealsView!, from: dayStart, to: dayStart)) {
           final eaten = _date(r['eaten_at']);
           if (eaten == null) continue;
           if (eaten.isBefore(dayStart) || !eaten.isBefore(dayEnd)) continue;

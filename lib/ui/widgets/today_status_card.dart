@@ -329,7 +329,8 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     final mr = widget.mealsRepo;
     if (mv != null && mr != null) {
       try {
-        for (final r in await mr.list(mv)) {
+        for (final r
+            in await mr.listRange(mv, from: dayStart, to: dayStart)) {
           final eaten = _date(r['eaten_at']);
           if (eaten == null) continue;
           if (eaten.isBefore(dayStart) || !eaten.isBefore(dayEnd)) continue;
@@ -349,7 +350,8 @@ class TodayStatusCardState extends State<TodayStatusCard> {
     final sr = widget.strengthRepo;
     if (sv != null && sr != null) {
       try {
-        for (final r in await sr.list(sv)) {
+        for (final r
+            in await sr.listRange(sv, from: dayStart, to: dayStart)) {
           final d = _date(r['date']);
           if (d == null) continue;
           if (d.year != dayStart.year ||

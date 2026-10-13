@@ -771,7 +771,10 @@ class ProgramDayCardState extends State<ProgramDayCard> {
 
     List<Map<String, Object?>> rows = const [];
     try {
-      rows = _strengthRows ?? await sr.list(sv);
+      rows = _strengthRows ??
+          await sr.listRange(sv,
+              from: DateTime(
+                  today.year, today.month, today.day - strengthHistoryDays));
     } catch (_) {/* honest empty */}
 
     String? todayText;

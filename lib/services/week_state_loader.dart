@@ -63,8 +63,9 @@ class WeekState {
   /// move pulls work from (ResolvedWeek.prescribed).
   final Map<DateTime, List<PrescribedItem>> prescribed;
 
-  /// Every strength row (null when no strength source / the read
-  /// failed) — the card's info sheet reuses it.
+  /// Strength rows from [strengthHistoryDays] before the week onward
+  /// (null when no strength source / the read failed) — the card's
+  /// pricing + info sheet reuse it. NOT all-time history.
   final List<Record>? strengthRows;
 
   /// Exercise names of the WORKING sets logged on [date] (warm-ups
@@ -150,6 +151,13 @@ class WeekState {
         skips: skips,
       );
 }
+
+/// How far before the loaded week WeekStateLoader reads strength rows
+/// (perf batch 2). [WeekState.strengthRows] is this window, not all-time:
+/// pricing history (reference e1RM = 42 d window with carry-forward;
+/// accessory double progression = last comparable session) and the
+/// program card's info sheet look back at most this far.
+const strengthHistoryDays = 180;
 
 class WeekStateLoader {
   /// Program/phase/strategy docs (e.g. `ProgramProvider.load`).
@@ -285,7 +293,17 @@ class WeekStateLoader {
     final missedOn = withMissed && sv != null && sr != null;
     final reads = await Future.wait<Object?>([
       _try(mv == null || mr == null ? null : () => mr.list(mv)),
-      _try(sv == null || sr == null ? null : () => sr.list(sv)),
+      // Strength is the 33k-row view: a RANGE read (perf batch 2) — the
+      // effective week (+ everything after it: pull-forward next-week
+      // days) and [strengthHistoryDays] of history before it, enough for
+      // the reference e1RM (42 d + carry-forward), the accessory
+      // progression's / info sheet's last comparable session and set
+      // grading. NOT the all-time history (lift pages read that).
+      _try(sv == null || sr == null
+          ? null
+          : () => sr.listRange(sv,
+              from: DateTime(
+                  mon.year, mon.month, mon.day - strengthHistoryDays))),
       _try(wv == null || wr == null ? null : () => wr.list(wv)),
       _try(!missedOn || cv == null || cr == null
           ? null

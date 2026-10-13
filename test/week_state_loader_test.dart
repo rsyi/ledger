@@ -100,4 +100,36 @@ void main() {
     await loader(climbing).load(day);
     expect(climbing.lists, 3);
   });
+
+  test('strength is read as a bounded window: strengthHistoryDays before '
+      'the week onward, not all-time (perf batch 2)', () async {
+    if (!hasFitness) return;
+    final strengthView = ViewSchema(
+      name: 'strength',
+      datasource: 'gsheets',
+      table: 'strength',
+      entities: const [],
+      measures: const [],
+      dateField: 'date',
+      dimensions: [
+        for (final d in ['id', 'date', 'exercise'])
+          Dimension(name: d, type: DimensionType.string, expr: d),
+      ],
+    );
+    final repo = _CountingRepo([
+      {'id': 'old', 'date': '2019-03-01', 'exercise': 'Barbell Squat'},
+      {'id': 'recent', 'date': '2026-08-01', 'exercise': 'Barbell Squat'},
+      {'id': 'today', 'date': '2026-10-02', 'exercise': 'Barbell Squat'},
+    ]);
+    final state = await WeekStateLoader(
+      loadDocs: ProgramProvider((p) async => read(p)).load,
+      strengthView: strengthView,
+      strengthRepo: repo,
+      now: () => DateTime(2026, 10, 2, 9),
+    ).load(DateTime(2026, 10, 2));
+    expect(state, isNotNull);
+    expect([for (final r in state!.strengthRows!) r['id']],
+        ['recent', 'today']);
+    expect(state.loggedOnDate, ['Barbell Squat']);
+  });
 }

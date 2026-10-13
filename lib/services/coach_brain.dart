@@ -688,7 +688,9 @@ in a desktop Claude session — you cannot edit files from here.''';
       if (repo == null) continue; // read-only view, no direct-sheet repo
       List<Record> rows;
       try {
-        rows = await repo.list(view);
+        // Only [dumpWindow] (+ future) is rendered: a range read (perf
+        // batch 2) instead of the 33k-row strength history.
+        rows = await repo.listRange(view, from: today.subtract(dumpWindow));
       } catch (_) {
         continue; // view exists but isn't listable here — skip
       }

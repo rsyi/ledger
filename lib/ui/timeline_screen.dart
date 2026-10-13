@@ -1699,7 +1699,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
         // the prompt still renders rather than the hook silently dropping).
         List<Record> allRows = [];
         try {
-          allRows = await widget.repository.list(widget.view);
+          // Copy: connector results may be shared + unmodifiable.
+          allRows = List.of(await widget.repository.list(widget.view));
         } catch (_) {
           allRows = [];
         }

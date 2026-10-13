@@ -219,9 +219,14 @@ void main() {
     expect(find.text('Strength'), findsOneWidget); // app bar
     expect(find.byKey(const ValueKey('weekly-wilks')), findsOneWidget);
     expect(find.textContaining('Wilks '), findsWidgets);
-    expect(find.text('Squat 300 lb'), findsOneWidget);
-    expect(find.text('Bench 200 lb'), findsOneWidget);
-    expect(find.text('Deadlift 315 lb'), findsOneWidget);
+    // RPE-adjusted e1RM basis (2026-10-12): est. max per lift + the
+    // heaviest set actually lifted. Squat 300×1 @ 8 → 300 × (1 + 3/30)
+    // = 330; the 225×5 @ 5 ramp set is a warm-up (shared rule) and
+    // never counts (it would estimate 300).
+    expect(find.text('Squat est. max 330 lb · lifted 300×1'), findsOneWidget);
+    expect(find.text('Bench est. max 220 lb · lifted 200×1'), findsOneWidget);
+    expect(
+        find.text('Deadlift est. max 347 lb · lifted 315×1'), findsOneWidget);
     expect(find.textContaining(' points'), findsNWidgets(3));
     expect(find.byKey(const ValueKey('projection-card-strength_total')),
         findsOneWidget);

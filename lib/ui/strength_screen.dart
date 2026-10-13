@@ -2,9 +2,11 @@
 /// tab's Strength row. The strength half of the old Plan tab plus the
 /// weekly Wilks breakdown that used to be a bottom sheet:
 ///
-///   * THIS WEEK — the weekly actual-max Wilks decomposed into its three
-///     lifts (each line kg × coefficient; the lines sum to the stat),
-///     with the note on why it won't match the per-lift e1RMs;
+///   * THIS WEEK — the weekly Wilks (RPE-adjusted e1RM basis since
+///     2026-10-12 — the Progress Lifts rows' estimate) decomposed into
+///     its three lifts (each line kg × coefficient; the lines sum to the
+///     stat), each with the heaviest set actually lifted as a secondary
+///     "lifted 275×5";
 ///   * PROJECTION — "Staying on this program, by …" + the strength-total
 ///     chart with the capacity toggle;
 ///   * MORE PROJECTIONS — climbing, VO2 max, fatigue budget folds;
@@ -69,7 +71,7 @@ class StrengthScreen extends StatelessWidget {
   }
 }
 
-/// THIS WEEK: the weekly actual-max Wilks and its per-lift
+/// THIS WEEK: the weekly Wilks (est. max basis) and its per-lift
 /// decomposition (was the Progress strength row's detail sheet).
 class WeeklyWilksCard extends StatelessWidget {
   final List<StrengthRow> rows;
@@ -131,7 +133,10 @@ class WeeklyWilksCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      '${name(p.lift)} ${fmtLb(p.weightLbs.roundToDouble())} lb'
+                      '${name(p.lift)} est. max '
+                      '${fmtLb(p.weightLbs.roundToDouble())} lb'
+                      '${p.lifted == null ? '' : ' · lifted '
+                                '${fmtLb(p.lifted!.weight)}×${p.lifted!.reps}'}'
                       '${p.carriedFrom == null ? '' : ' · carried from '
                                 '${DateFormat('MMM d').format(p.carriedFrom!)}'}',
                       style: row,
@@ -146,11 +151,12 @@ class WeeklyWilksCard extends StatelessWidget {
             ),
           const SizedBox(height: 8),
           Text(
-            'The heaviest weight you actually lifted per lift this week '
-            '(any reps; a lift not trained this week carries its last '
-            'week), scored against bodyweight. These are actual lifts, '
-            'not estimates — so they won\'t add up to the per-lift '
-            'estimated maxes on the Progress tab.',
+            'Per lift, this week\'s best estimated max — the same '
+            'RPE-adjusted e1RM as the Progress Lifts rows (reps plus '
+            'reps in reserve, capped at 12; no RPE logged = taken to '
+            'failure; warm-ups excluded) — scored against bodyweight. '
+            'A lift not trained this week carries its last week. '
+            '"lifted" is the heaviest set you actually did that week.',
             style: meta,
           ),
         ],

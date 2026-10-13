@@ -18,7 +18,7 @@ import 'dart:math' as math;
 import 'program_metrics.dart'
     show StrengthRow, WeightRow, gradeSets, mainLiftByExercise,
         rpeAdjustedE1rm, weekStartOf, weeklyRollup;
-import 'wilks.dart' show weeklyWilksSeries, wilksPointsLb;
+import 'wilks.dart' show WilksBasis, weeklyWilksSeries, wilksPointsLb;
 
 /// The four main lifts the simulator models, in canonical order.
 const List<String> simLifts = ['squat', 'bench', 'deadlift', 'press'];
@@ -321,8 +321,17 @@ WeeklySeries buildWeeklySeries({
     if (window.length >= 5) gradeP75Raw[i] = percentile(window, 0.75);
   }
 
-  // Weekly Wilks (actual-max display standard).
-  final wilksWeeks = weeklyWilksSeries(strengthRows, weightRows);
+  // Weekly Wilks on the ACTUAL-MAX basis, pinned explicitly: this is
+  // calibration data (sim_calibrate's flat-vs-model error), fitted when
+  // actual-max was the display standard. The display moved to the
+  // RPE-adjusted estimate on 2026-10-12; the fit stays put until a
+  // deliberate re-calibration (the sim2 forecast prices Wilks off its
+  // own e1RM state, so it's already on the estimate basis).
+  final wilksWeeks = weeklyWilksSeries(
+    strengthRows,
+    weightRows,
+    basis: WilksBasis.actualMax,
+  );
   final wilksByMonday = {for (final w in wilksWeeks) w.weekStart: w};
   final wilks = List<double?>.filled(n, null);
   final wilksTotal = List<double?>.filled(n, null);

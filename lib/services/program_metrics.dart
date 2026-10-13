@@ -32,6 +32,11 @@ class StrengthRow {
   final bool? paused;
   final bool? belted;
 
+  /// The row's `set_type` tag (warmup/heavy/hypertrophy/skill/rehab) or
+  /// null when untagged — feeds the shared warm-up rule
+  /// (working_sets.dart) where a consumer excludes warm-ups (Wilks).
+  final String? setType;
+
   const StrengthRow({
     required this.date,
     required this.exercise,
@@ -41,6 +46,7 @@ class StrengthRow {
     this.notes,
     this.paused,
     this.belted,
+    this.setType,
   });
 }
 

@@ -377,11 +377,14 @@ last_bulk:
         findsOneWidget);
     // Actual-weight conventions (405×2 → 405); the basis entry names
     // both bases — recent e1RM = Epley estimate, bulk & all-time =
-    // actual, sharing the Wilks trend chart's actual-max basis.
+    // actual; since 2026-10-12 the Wilks trend shares the RECENT
+    // column's estimate basis.
     expect(find.textContaining('ACTUALLY lifted'), findsNWidgets(2));
     expect(find.textContaining('405×2 counts as 405'), findsOneWidget);
     expect(find.textContaining('reps capped at'), findsOneWidget);
-    expect(find.textContaining('actual-max basis'), findsOneWidget);
+    expect(find.textContaining('the same estimate the Wilks stat'),
+        findsOneWidget);
+    expect(find.textContaining('actual-max basis'), findsNothing);
     // The compact tag stays on the card; the sheet's basis entry
     // carries the full two-basis note.
     expect(find.text('bulk: actual'), findsOneWidget);
@@ -635,6 +638,7 @@ phases:
             exercise: r['exercise'] as String,
             weight: (r['weight'] as num).toDouble(),
             reps: (r['reps'] as num).toInt(),
+            rpe: (r['rpe'] as num?)?.toDouble(),
           ),
       ],
       [
@@ -667,10 +671,15 @@ phases:
 
     // The decomposition: actual weights, dated carry, per-lift points,
     // and the exact sum line matching the stat.
+    // Estimate basis (2026-10-12): RPE-adj e1RM + the lifted set.
+    // squat 295×1 @ 8 → 324.5 → 325; bench 225×2 @ 8 → 255;
+    // deadlift 315×1 @ 8 → 346.5 → 347.
     final decomposition = [
-      'squat 295 → ${parts[0].displayPoints.toStringAsFixed(1)} points',
-      'bench 225 → ${parts[1].displayPoints.toStringAsFixed(1)} points',
-      'deadlift 315 (carried from Sep 14) → '
+      'squat est. 325 · lifted 295×1 → '
+          '${parts[0].displayPoints.toStringAsFixed(1)} points',
+      'bench est. 255 · lifted 225×2 → '
+          '${parts[1].displayPoints.toStringAsFixed(1)} points',
+      'deadlift est. 347 · lifted 315×1 (carried from Sep 14) → '
           '${parts[2].displayPoints.toStringAsFixed(1)} points',
       '= $stat',
     ].join('\n');
@@ -678,7 +687,7 @@ phases:
 
     // The two-surface basis note.
     expect(
-      find.textContaining('14-day best e1RM ESTIMATES'),
+      find.textContaining('those take the best of 14 days'),
       findsOneWidget,
     );
 

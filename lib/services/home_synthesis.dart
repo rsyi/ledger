@@ -115,6 +115,10 @@ StrengthRow? strengthRowFromRecord(Map<String, Object?> r) {
     weight: weight,
     reps: reps.round(),
     rpe: asNum(r['rpe']),
+    setType: switch (r['set_type']?.toString().trim()) {
+      null || '' => null,
+      final t => t,
+    },
   );
 }
 

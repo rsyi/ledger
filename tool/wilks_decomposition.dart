@@ -1,12 +1,15 @@
 // ignore_for_file: avoid_print
 
-/// Prints the CURRENT weekly actual-max Wilks decomposition off-device
+/// Prints the CURRENT weekly Wilks decomposition off-device
 /// (2026-09-25): the same [weeklyWilksSeries] + [wilksWeekDecomposition]
 /// the hero STRENGTH row's detail sheet renders, computed from the live
 /// sheet mirror — the sanity check that the sheet's three lift lines
 /// sum to the displayed stat with real data.
 ///
-///   dart run tool/wilks_decomposition.dart [program.yaml path]
+///   dart run tool/wilks_decomposition.dart [program.yaml path] [--actual]
+///
+/// Default basis = the display standard (RPE-adjusted e1RM since
+/// 2026-10-12); --actual prints the retired actual-max basis.
 ///
 /// The accounting week start comes from the live program.yaml
 /// (default ~/repos/airledger-fitness/coach/program.yaml — v7 says
@@ -29,8 +32,9 @@ const _spreadsheetId = '1C1rSudguUv00gYsb7i82XV6OM1V2KSZ4BGwMliwKDG4';
 
 Future<void> main(List<String> args) async {
   final home = Platform.environment['HOME']!;
-  final programPath = args.isNotEmpty
-      ? args[0]
+  final positional = [for (final a in args) if (!a.startsWith('--')) a];
+  final programPath = positional.isNotEmpty
+      ? positional[0]
       : '$home/repos/airledger-fitness/coach/program.yaml';
   final program =
       loadYaml(await File(programPath).readAsString()) as Map<Object?, Object?>;
@@ -67,6 +71,12 @@ Future<void> main(List<String> args) async {
   final sEx = sHead.indexOf('exercise');
   final sWt = sHead.indexOf('weight');
   final sReps = sHead.indexOf('reps');
+  final sRpe = sHead.indexOf('rpe');
+  final sType = sHead.contains('set type')
+      ? sHead.indexOf('set type')
+      : sHead.indexOf('set_type');
+  String? at(List<Object?> r, int i) =>
+      i < 0 || r.length <= i ? null : r[i]?.toString().trim();
   final rows = <StrengthRow>[];
   for (final r in strengthTab.skip(1)) {
     if ([sDate, sEx, sWt, sReps].any((i) => r.length <= i)) continue;
@@ -75,16 +85,28 @@ Future<void> main(List<String> args) async {
     final reps = double.tryParse(r[sReps]?.toString() ?? '');
     final ex = r[sEx]?.toString() ?? '';
     if (d == null || wt == null || reps == null || ex.isEmpty) continue;
+    final type = at(r, sType);
     rows.add(
-      StrengthRow(date: d, exercise: ex, weight: wt, reps: reps.round()),
+      StrengthRow(
+        date: d,
+        exercise: ex,
+        weight: wt,
+        reps: reps.round(),
+        rpe: double.tryParse(at(r, sRpe) ?? ''),
+        setType: type == null || type.isEmpty ? null : type,
+      ),
     );
   }
 
+  final basis = args.contains('--actual')
+      ? WilksBasis.actualMax
+      : defaultWilksBasis;
   final weeks = weeklyWilksSeries(
     rows,
     daily,
     through: DateTime.now(),
     weekStartDay: wsDay,
+    basis: basis,
   );
   if (weeks.isEmpty) {
     print('no computable Wilks weeks');
@@ -93,11 +115,13 @@ Future<void> main(List<String> args) async {
   final week = weeks.last;
   final parts = wilksWeekDecomposition(week);
   String day(DateTime d) => d.toIso8601String().substring(0, 10);
-  print('week of ${day(week.weekStart)} (week start day $wsDay) · '
+  print('basis ${basis.name} · '
+      'week of ${day(week.weekStart)} (week start day $wsDay) · '
       'bw ${week.bodyweightLbs.toStringAsFixed(1)} lb');
   for (final p in parts) {
     print(
       '  ${p.lift.padRight(9)} ${p.weightLbs.toStringAsFixed(0).padLeft(4)}'
+      '${p.lifted == null ? '' : ' (lifted ${p.lifted!.weight.toStringAsFixed(0)}×${p.lifted!.reps})'}'
       '${p.carriedFrom == null ? '            ' : ' (carried ${day(p.carriedFrom!)})'.padRight(12)}'
       ' → ${p.displayPoints.toStringAsFixed(1)}w'
       '  (exact ${p.points.toStringAsFixed(4)})',

@@ -1,5 +1,5 @@
 import 'package:airledger/services/program_metrics.dart'
-    show StrengthRow, WeightRow;
+    show StrengthRow, WeightRow, rpeAdjustedE1rm;
 import 'package:airledger/services/wilks.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -7,13 +7,17 @@ StrengthRow _set(
   String date,
   String exercise,
   double weight,
-  int reps,
-) =>
+  int reps, {
+  double? rpe,
+  String? setType,
+}) =>
     StrengthRow(
       date: DateTime.parse(date),
       exercise: exercise,
       weight: weight,
       reps: reps,
+      rpe: rpe,
+      setType: setType,
     );
 
 WeightRow _bw(String date, double lbs) =>
@@ -354,20 +358,171 @@ void main() {
       }
     });
 
-    test('actualMax is the default basis', () {
+    test('actualMax is no longer the default basis (rpeE1rm is, '
+        '2026-10-12)', () {
       final rows = [
         _set('2026-08-03', 'Barbell Squat', 405, 2),
         _set('2026-08-05', 'Flat Barbell Bench Press', 225, 3),
         _set('2026-08-10', 'Barbell Deadlift', 455, 1),
       ];
       expect(
-        monthlyWilksSeries(rows, weights).single.totalLbs,
+        monthlyWilksSeries(rows, weights, basis: WilksBasis.actualMax)
+            .single
+            .totalLbs,
         closeTo(405 + 225 + 455, 1e-9),
       );
+      // Default: no RPE logged → plain capped Epley per set.
       expect(
         weeklyWilksSeries(rows, weights).first.totalLbs,
-        closeTo(405 + 225 + 455, 1e-9),
+        closeTo(405 * (1 + 2 / 30) + 225 * (1 + 3 / 30) + 455 * (1 + 1 / 30),
+            1e-9),
       );
+    });
+  });
+
+  group('rpe-adjusted e1RM basis (the default, 2026-10-12)', () {
+    // Sat-start accounting week of 2026-10-10 (the live report).
+    final weighIns = [_bw('2026-10-10', 161.3)];
+    List<StrengthRow> week({List<StrengthRow> extra = const []}) => [
+          _set('2026-10-10', 'Barbell Squat', 135, 5, setType: 'warmup'),
+          _set('2026-10-10', 'Barbell Squat', 275, 5, rpe: 8.5),
+          _set('2026-10-11', 'Flat Barbell Bench Press', 185, 4, rpe: 8),
+          _set('2026-10-11', 'Barbell Deadlift', 285, 3, rpe: 7),
+          ...extra,
+        ];
+
+    test('275×5 @ RPE 8.5 → squat ≈ 330–335 (the Lifts-row estimate)', () {
+      final w = weeklyWilksSeries(
+        week(),
+        weighIns,
+        weekStartDay: DateTime.saturday,
+      ).last;
+      expect(w.liftLbs['squat'], closeTo(275 * (1 + 6.5 / 30), 1e-9));
+      expect(w.liftLbs['squat'], inInclusiveRange(330, 335));
+      // Same per-set estimator the Progress Lifts rows use.
+      expect(w.liftLbs['squat'], rpeAdjustedE1rm(275, 5, 8.5));
+      expect(w.liftLbs['bench'], rpeAdjustedE1rm(185, 4, 8));
+      expect(w.liftLbs['deadlift'], rpeAdjustedE1rm(285, 3, 7));
+      expect(
+        w.totalLbs,
+        closeTo(w.liftLbs.values.fold<double>(0, (a, b) => a + b), 1e-9),
+      );
+    });
+
+    test('heaviest-lifted set is kept alongside the estimate', () {
+      final w = weeklyWilksSeries(
+        week(),
+        weighIns,
+        weekStartDay: DateTime.saturday,
+      ).last;
+      expect(w.liftTopSet['squat'], (weight: 275.0, reps: 5));
+      final parts = wilksWeekDecomposition(w);
+      expect(parts.first.lift, 'squat');
+      expect(parts.first.lifted, (weight: 275.0, reps: 5));
+    });
+
+    test('missing RPE falls back to capped Epley (treated as failure)', () {
+      final w = weeklyWilksSeries(
+        [
+          _set('2026-10-10', 'Barbell Squat', 275, 5),
+          _set('2026-10-11', 'Flat Barbell Bench Press', 185, 15),
+          _set('2026-10-11', 'Barbell Deadlift', 285, 3),
+        ],
+        weighIns,
+        weekStartDay: DateTime.saturday,
+      ).last;
+      expect(w.liftLbs['squat'], closeTo(275 * (1 + 5 / 30), 1e-9));
+      // reps capped at 12, same as the Lifts rows.
+      expect(w.liftLbs['bench'], closeTo(185 * (1 + 12 / 30), 1e-9));
+    });
+
+    test('warm-ups are excluded (shared working_sets rule)', () {
+      // Day top: 255×1 @ 9.5 → 267.75. A tagged warm-up with a low RPE
+      // would otherwise estimate higher (225×5 @ 5 → 300), and so would
+      // an untagged UNRATED ramp set lighter than every rated set
+      // (245×5, no RPE → 285.8) — both are warm-ups by the shared rule.
+      final w = weeklyWilksSeries(
+        [
+          _set('2026-10-10', 'Barbell Squat', 225, 5,
+              rpe: 5, setType: 'warmup'),
+          _set('2026-10-10', 'Barbell Squat', 245, 5),
+          _set('2026-10-10', 'Barbell Squat', 255, 1, rpe: 9.5),
+          _set('2026-10-11', 'Flat Barbell Bench Press', 185, 4, rpe: 8),
+          _set('2026-10-11', 'Barbell Deadlift', 285, 3, rpe: 7),
+        ],
+        weighIns,
+        weekStartDay: DateTime.saturday,
+      ).last;
+      expect(w.liftLbs['squat'], rpeAdjustedE1rm(255, 1, 9.5));
+    });
+
+    test('non-main / variant exercise names never count', () {
+      final w = weeklyWilksSeries(
+        week(extra: [
+          _set('2026-10-11', 'Pause Squat', 315, 5, rpe: 8),
+          _set('2026-10-11', 'Front Squat', 315, 5, rpe: 8),
+        ]),
+        weighIns,
+        weekStartDay: DateTime.saturday,
+      ).last;
+      expect(w.liftLbs['squat'], rpeAdjustedE1rm(275, 5, 8.5));
+    });
+
+    test('benchmark + reference sit on the SAME basis as the stat', () {
+      // A cut walked in with heavy singles, now 5s at RPE 8.5: on the
+      // actual-max basis the 5s read as a crash below the singles'
+      // floor; on the estimate basis the demonstrated strength holds.
+      final rows = [
+        _set('2026-09-05', 'Barbell Squat', 315, 1, rpe: 9),
+        _set('2026-09-05', 'Flat Barbell Bench Press', 210, 1, rpe: 9),
+        _set('2026-09-05', 'Barbell Deadlift', 320, 1, rpe: 9),
+        ...week(),
+      ];
+      final bw = [_bw('2026-09-05', 161.3), ...weighIns];
+      final months = monthlyWilksSeries(rows, bw);
+      final bench = wilksBenchmark(months)!;
+      final weeks =
+          weeklyWilksSeries(rows, bw, weekStartDay: DateTime.saturday);
+      // Benchmark month total = the month's best estimates, no mixing.
+      final sep = months.firstWhere((m) => m.monthStart.month == 9);
+      expect(
+        sep.totalLbs,
+        closeTo(
+          rpeAdjustedE1rm(315, 1, 9) +
+              rpeAdjustedE1rm(210, 1, 9) +
+              rpeAdjustedE1rm(320, 1, 9),
+          1e-9,
+        ),
+      );
+      expect(bench.wilks, greaterThanOrEqualTo(weeks.last.wilks - 1e-9));
+      // Actual basis would show the current week ~7% under the singles
+      // week; the estimate basis keeps it within 3%.
+      final actual = weeklyWilksSeries(rows, bw,
+          weekStartDay: DateTime.saturday, basis: WilksBasis.actualMax);
+      expect(actual.last.wilks / actual.first.wilks, lessThan(0.95));
+      expect(weeks.last.wilks / weeks.first.wilks, greaterThan(0.97));
+    });
+
+    test('estimatedMaxesAsOf: latest trained week per lift, same values',
+        () {
+      final rows = [
+        _set('2026-10-03', 'Overhead Press', 135, 5, rpe: 8),
+        ...week(),
+      ];
+      final m = estimatedMaxesAsOf(
+        rows,
+        DateTime(2026, 10, 12),
+        weekStartDay: DateTime.saturday,
+        lifts: const ['squat', 'bench', 'deadlift', 'press'],
+      );
+      final w = weeklyWilksSeries(rows, weighIns,
+              weekStartDay: DateTime.saturday, through: DateTime(2026, 10, 12))
+          .last;
+      for (final l in wilksLifts) {
+        expect(m[l]!.value, w.liftLbs[l]);
+      }
+      expect(m['press']!.value, rpeAdjustedE1rm(135, 5, 8));
+      expect(m['press']!.date, DateTime(2026, 10, 3));
     });
   });
 
@@ -453,7 +608,8 @@ void main() {
 
     test('weeks expose per-lift lbs and the week each value was trained',
         () {
-      final weeks = weeklyWilksSeries(rows, weighIns);
+      final weeks =
+          weeklyWilksSeries(rows, weighIns, basis: WilksBasis.actualMax);
       expect(weeks, hasLength(2));
       final w2 = weeks.last;
       expect(
@@ -469,7 +625,8 @@ void main() {
     });
 
     test('parts are exact kg×coeff shares that sum to the stat', () {
-      final w2 = weeklyWilksSeries(rows, weighIns).last;
+      final w2 =
+          weeklyWilksSeries(rows, weighIns, basis: WilksBasis.actualMax).last;
       final parts = wilksWeekDecomposition(w2);
       expect([for (final p in parts) p.lift], wilksLifts);
       final coeff = wilks2020MaleCoeff(159 * kgPerLb);

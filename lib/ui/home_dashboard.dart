@@ -28,7 +28,7 @@
 /// guides). Row taps: weight → Program, inputs → the status ledger
 /// (direct navigation); the STRENGTH row opens its DETAIL SHEET first
 /// (2026-09-25 — tap-model parity with the cards): the weekly
-/// actual-max Wilks DECOMPOSED into its three constituent lifts
+/// Wilks (est.-max basis since 2026-10-12) DECOMPOSED into its three constituent lifts
 /// (actual weight or a dated "carried from" tag, per-lift kg×coeff
 /// points,
 /// an exact sum line matching the stat) plus the basis note that
@@ -1112,9 +1112,11 @@ class HomeDashboardState extends State<HomeDashboard> {
     final daily = (await _weights)?.daily ?? const <WeightRow>[];
     final rows = await _strengthRows;
     final wsDay = await _weekStartDay();
-    // Actual-max basis (weeklyWilksSeries' default since 2026-09-22) —
-    // the hero's wilks_stability verdict grades real lifted numbers,
-    // same basis as the strength domain's chart and stat.
+    // RPE-adjusted e1RM basis (weeklyWilksSeries' default since
+    // 2026-10-12 — the Lifts rows' estimate) — the hero's
+    // wilks_stability verdict, its phase-start reference and floor all
+    // come off this ONE series, same basis as the strength domain's
+    // chart, benchmark and stat.
     final wilksWeeks = rows.isEmpty || daily.isEmpty
         ? const <WilksWeek>[]
         : weeklyWilksSeries(rows, daily, through: _today, weekStartDay: wsDay);
@@ -1747,8 +1749,8 @@ class HomeDashboardState extends State<HomeDashboard> {
               'The heaviest weight you\'ve ACTUALLY lifted (any reps '
               '≥ 1 — a 405×2 counts as 405; no Epley, no estimates) '
               'over the full strength history — your actual 1RM '
-              'ceiling, on the same actual-max convention as the '
-              'Wilks trend chart\'s benchmark. Lives here rather than '
+              'ceiling (the Wilks trend + benchmark moved to the '
+              'estimated-max basis 2026-10-12). Lives here rather than '
               'on the card since the last-bulk column took its slot '
               '(2026-09-22). Its Wilks points use the bodyweight you '
               'carried THE MONTH the top was set (contemporaneous, '
@@ -1764,11 +1766,10 @@ class HomeDashboardState extends State<HomeDashboard> {
               'Two bases here: the recent column is an ESTIMATED 1RM '
               '(Epley over effective reps = reps + RIR, capped at 12 '
               '— the airlayer max_e1rm_rpe measure) — what you\'ve '
-              'shown lately; the last-bulk and all-time tops are '
-              'ACTUAL weight lifted — the same actual-max basis as '
-              'the Wilks trend chart and its best-ever benchmark. A '
-              'recent e1RM can sit above an actual top without you '
-              'ever having lifted it.',
+              'shown lately — the same estimate the Wilks stat, trend '
+              'and benchmark use; the last-bulk and all-time tops are '
+              'ACTUAL weight lifted. A recent e1RM can sit above an '
+              'actual top without you ever having lifted it.',
         ),
         _DetailEntry(
           label: 'working max',
@@ -1809,7 +1810,8 @@ class HomeDashboardState extends State<HomeDashboard> {
     }
     final week = weeks.last;
     String liftLine(WilksLiftPart p) =>
-        '${p.lift} ${fmtLb(p.weightLbs.roundToDouble())}'
+        '${p.lift} est. ${fmtLb(p.weightLbs.roundToDouble())}'
+        '${p.lifted == null ? '' : ' · lifted ${fmtLb(p.lifted!.weight)}×${p.lifted!.reps}'}'
         '${p.carriedFrom == null ? '' : ' (carried from ${DateFormat('MMM d').format(p.carriedFrom!)})'}'
         ' → ${p.displayPoints.toStringAsFixed(1)} points';
     final nav = widget.onOpenStrengthDomain ?? widget.onOpenProgram;
@@ -1820,10 +1822,11 @@ class HomeDashboardState extends State<HomeDashboard> {
           label: 'this week',
           value: row.detail,
           explain:
-              'Weekly ACTUAL-max Wilks: per lift, the heaviest weight '
-              'you actually lifted this accounting week (any reps ≥ 1 '
-              '— no Epley, no estimates; untrained lifts carry the '
-              'last trained week\'s weight), summed and priced at the '
+              'Weekly Wilks on estimated maxes: per lift, this '
+              'accounting week\'s best RPE-adjusted e1RM — the same '
+              'estimate as the Lifts rows (reps + reps in reserve, '
+              'capped at 12; warm-ups excluded; untrained lifts carry '
+              'the last trained week), summed and priced at the '
               'week\'s average bodyweight '
               '(${week.bodyweightLbs.toStringAsFixed(1)} lb). The '
               'floor hangs off the phase-start reference.',
@@ -1842,11 +1845,12 @@ class HomeDashboardState extends State<HomeDashboard> {
         ),
         const _DetailEntry(
           label: 'vs the per-lift numbers',
-          value: 'lifts: e1RM · this stat: actual',
+          value: 'same estimate · weekly vs 14-day',
           explain:
-              'The per-lift numbers (Lifts / STRENGTH) are 14-day best '
-              'e1RM ESTIMATES (always ≥ actual) — they will not sum '
-              'to this weekly actual-lift total.',
+              'Same per-set estimate as the per-lift numbers (Lifts / '
+              'STRENGTH); those take the best of 14 days, this stat '
+              'the best of the accounting week. "lifted" is the '
+              'heaviest set actually done.',
         ),
       ],
       actionLabel: nav == null ? null : 'Open Strength',

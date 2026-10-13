@@ -27,7 +27,7 @@ library;
 
 import 'domain_config.dart';
 import 'home_synthesis.dart'
-    show allTimeBestE1rms, fmtLb, fmtMonthTag, recentBestE1rm, synthesisLifts;
+    show fmtLb, fmtMonthTag, recentBestE1rm, synthesisLifts;
 import 'program_metrics.dart'
     show StrengthRow, WeightRow, gradeSets, liftReferencesAsOf,
         mainLiftByExercise, weekStartOf;
@@ -116,11 +116,9 @@ class MetricUnavailable extends MetricData {
 // Strength built-ins
 // ---------------------------------------------------------------------------
 
-/// Powerlifting-style total: sum of the four main lifts' all-time best
-/// capped e1RMs (Epley, reps capped at 12 — home_synthesis
-/// [allTimeBestE1rms]; the home card's all-time top column is ACTUAL
-/// weight since 2026-09-22 and no longer shares this expression).
-/// Returns the sum over the lifts that HAVE
+/// Powerlifting-style total: sum of the four main lifts' given values
+/// (the `pl_total` metric feeds the CURRENT RPE-adjusted estimates
+/// since 2026-10-12 — wilks.dart [estimatedMaxesAsOf]). Returns the sum over the lifts that HAVE
 /// history plus the list of missing lifts, so the UI can label an
 /// incomplete total honestly. Null total when no lift has history.
 ({double total, List<String> missing})? plTotal(
@@ -411,10 +409,22 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       if (inputs.strengthRows.isEmpty) {
         return const MetricUnavailable('no strength history');
       }
-      final t = plTotal(allTimeBestE1rms(inputs.strengthRows));
+      // EST. TOTAL (2026-10-12): the CURRENT RPE-adjusted e1RM per lift
+      // (S+B+D+P) — the latest trained accounting week's best, warm-ups
+      // excluded — on the SAME basis + numbers as the Wilks stat beside
+      // it in the strength header (wilks.dart estimatedMaxesAsOf), so
+      // "Wilks · est. total" read off one set of per-lift values. Was
+      // the all-time best plain-Epley total.
+      final est = estimatedMaxesAsOf(
+        inputs.strengthRows,
+        inputs.today,
+        weekStartDay: inputs.weekStartDay,
+        lifts: synthesisLifts,
+      );
+      final t = plTotal({for (final e in est.entries) e.key: e.value.value});
       if (t == null) return const MetricUnavailable('no main-lift sets yet');
       return MetricStats(
-        [MetricStat(label: 'total', value: withUnit(t.total))],
+        [MetricStat(label: 'est. total', value: withUnit(t.total))],
         note: t.missing.isEmpty ? null : 'missing: ${t.missing.join(', ')}',
       );
 
@@ -463,10 +473,11 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
     case 'wilks':
       // WILKS-2020 SBD score (squat+bench+deadlift only — NOT the
       // 4-lift pl_total). The stat stays WEEKLY-current, on the
-      // ACTUAL-MAX basis (2026-09-22): heaviest weight actually lifted
-      // per lift that week (any reps >= 1, carried forward when
-      // untrained) at that week's 7-day-avg bodyweight. All semantics
-      // + verified constants: wilks.dart.
+      // RPE-ADJUSTED e1RM basis (2026-10-12; was actual-max from
+      // 2026-09-22): per lift the week's best Lifts-row estimate over
+      // non-warm-up sets (carried forward when untrained) at that
+      // week's 7-day-avg bodyweight. All semantics + verified
+      // constants: wilks.dart.
       if (inputs.strengthRows.isEmpty) {
         return const MetricUnavailable('no strength history');
       }
@@ -481,7 +492,7 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       );
       if (weeks.isEmpty) {
         return const MetricUnavailable(
-          'no squat/bench/deadlift sets with reps ≤ 5 yet',
+          'no squat/bench/deadlift working sets yet',
         );
       }
       final last = weeks.last;
@@ -504,10 +515,10 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       // can't drag a point, monthly-mean bodyweight carried through
       // months with no weigh-in (which is what lets the series run
       // back through sparse weigh-in eras instead of truncating).
-      // Basis = ACTUAL MAX (2026-09-22, user: "done against actually
-      // max lift numbers, not e1RM") — the heaviest weight lifted, so
-      // the series tracks real strength through the cut, and its
-      // all-time max is the benchmark line below.
+      // Basis = RPE-ADJUSTED e1RM (2026-10-12 — the Lifts rows'
+      // estimate; actual-max from 2026-09-22 understated 3–5-rep wave
+      // tops), and its all-time max is the benchmark line below — the
+      // series, benchmark and reference all share the basis.
       if (inputs.strengthRows.isEmpty) {
         return const MetricUnavailable('no strength history');
       }
@@ -521,7 +532,7 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       );
       if (months.isEmpty) {
         return const MetricUnavailable(
-          'no squat/bench/deadlift sets with reps ≤ 5 yet',
+          'no squat/bench/deadlift working sets yet',
         );
       }
       // `window_years:` no longer clips HERE (2026-09-22, range
@@ -540,9 +551,8 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       // that date — the Wilks the cut was walked into with. Weekly,
       // not monthly, on purpose: the cut-start month's point keeps
       // absorbing best-of-month sets logged during the cut itself,
-      // which would move the yardstick. Recomputed on the actual-max
-      // basis since 2026-09-22 (same basis as the series — apples to
-      // apples). The series shows the full computable history (user
+      // which would move the yardstick. Same basis as the series
+      // (the default — apples to apples). The series shows the full computable history (user
       // 2026-09-22: "wilks should be tracked for longer"). floor_pct
       // then hangs the acceptable-drop line under the reference:
       // reference × (1 − pct/100); 3+ weeks below the floor = the act
@@ -694,7 +704,7 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
 /// dashboards.yaml is a heading, not a chip. Unknown ids fall back to
 /// the raw id.
 const _headlineLabels = {
-  'pl_total': 'PL',
+  'pl_total': 'est. total',
   'e1rm_reference': 'e1RM',
   'recent_e1rm_rpe': 'e1RM (RPE-adj)',
   'all_time_best_weight': 'best',

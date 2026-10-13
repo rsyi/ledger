@@ -476,20 +476,39 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// dashboards.yaml `weekly_drivers:` evaluated against local rows.
   /// Null → no drivers declared for the phase; the old quota strip
   /// renders unchanged.
-  late Future<List<DriverEval>?> _drivers;
+  Future<List<DriverEval>?>? _driversF;
+  Future<List<DriverEval>?> get _drivers =>
+      _driversF ??= _computeDrivers();
 
   /// Recomp one-screen status (tracking spec 2026-09-27): the weekly
   /// review computed live from local rows for the current configured week.
   /// Non-null ONLY when the effective phase is recomp — every other
   /// phase keeps the driver checklist strip untouched.
-  late Future<_RecompData?> _recomp;
+  Future<_RecompData?>? _recompF;
+  Future<_RecompData?> get _recomp =>
+      _recompF ??= _guard(_computeRecomp);
 
   // Derived per-card futures.
   late Future<PhaseHeroData?> _hero;
   late Future<_BodyData?> _body;
   late Future<_StrengthData?> _strength;
-  late Future<_ExecData?> _exec;
-  late Future<_EngineData?> _engine;
+  // THIS WEEK strip / legacy-grid futures. In `progressOnly` mode
+  // (perf #10) they start LAZILY — only if a widget that reads them
+  // actually builds (the legacy-grid fallback); the Progress layout
+  // never does, so their work is skipped.
+  Future<_ExecData?>? _execF;
+  Future<_EngineData?>? _engineF;
+  Future<_ExecData?> get _exec => _execF ??= _computeExec();
+  Future<_EngineData?> get _engine => _engineF ??= _computeEngine();
+
+  /// Test hook: which lazy futures have started.
+  @visibleForTesting
+  ({bool drivers, bool recomp, bool exec, bool engine}) get debugStarted => (
+        drivers: _driversF != null,
+        recomp: _recompF != null,
+        exec: _execF != null,
+        engine: _engineF != null,
+      );
 
   @override
   void initState() {
@@ -530,13 +549,18 @@ class HomeDashboardState extends State<HomeDashboard> {
     _strengthRows = _loadStrengthRows();
     _climbDates = _loadClimbDates();
     _live = _computeLive();
-    _drivers = _computeDrivers();
-    _recomp = _guard(_computeRecomp);
+    _driversF = _execF = _engineF = _recompF = null;
+    if (!widget.progressOnly) {
+      _driversF = _computeDrivers();
+      _recompF = _guard(_computeRecomp);
+    }
     _hero = _computeHero();
     _body = _computeBody();
     _strength = _computeStrength();
-    _exec = _computeExec();
-    _engine = _computeEngine();
+    if (!widget.progressOnly) {
+      _execF = _computeExec();
+      _engineF = _computeEngine();
+    }
   }
 
   /// Pull-to-refresh entry point (home_screen's RefreshIndicator).
@@ -545,8 +569,9 @@ class HomeDashboardState extends State<HomeDashboard> {
   /// reality).
   Future<void> reload() async {
     setState(() => _startLoad(force: true));
-    await Future.wait([
-      _hero, _body, _strength, _exec, _engine, _live, _drivers, _recomp, //
+    await Future.wait<Object?>([
+      _hero, _body, _strength, _live, //
+      ?_execF, ?_engineF, ?_driversF, ?_recompF,
     ]);
   }
 

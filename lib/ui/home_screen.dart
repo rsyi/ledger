@@ -18,6 +18,7 @@ import '../services/engine.dart';
 import '../services/engine_ledger_connector.dart';
 import '../services/sync_scheduler.dart';
 import '../services/engine_schema_adapter.dart';
+import 'widgets/lazy_indexed_stack.dart';
 import 'widgets/sync_status_button.dart';
 import 'widgets/today_status_card.dart';
 import 'widgets/log_list_row.dart';
@@ -1850,8 +1851,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _tabWeek: goalsTab,
                 _tabProgress: progressTab,
               };
-              return IndexedStack(
+              // LAZY (perf #10): Week + Progress mount on first visit —
+              // their loads no longer run at boot behind Today.
+              return LazyIndexedStack(
                 index: _tab,
+                eager: const {_tabToday, _tabLog},
                 // Fill the body between app bar and nav bar. Without this
                 // the stack sizes to the loosest child and can keep a
                 // stale (half-height) constraint after a keyboard/tab

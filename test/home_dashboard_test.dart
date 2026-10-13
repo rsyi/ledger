@@ -1551,6 +1551,18 @@ last_bulk:
       expect(find.text('ON TRACK'), findsNothing); // old shouting pill
     });
 
+    // Perf #10 (2026-10-12): progressOnly never renders the THIS WEEK
+    // strip / legacy cards, so their futures never start.
+    testWidgets('progressOnly skips the unused strip futures', (tester) async {
+      await pumpProgress(tester);
+      final started =
+          (tester.state(find.byType(HomeDashboard)) as dynamic).debugStarted;
+      expect(started.drivers, isFalse);
+      expect(started.recomp, isFalse);
+      expect(started.exec, isFalse);
+      expect(started.engine, isFalse);
+    });
+
     testWidgets('lifts: one row per lift — e1RM, status-coloured change vs '
         'last bulk, age in words', (tester) async {
       await pumpProgress(tester);

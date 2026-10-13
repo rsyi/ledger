@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/database_config.dart' show SheetsConfig;
 import '../models/github_config.dart';
 import '../models/model_config.dart';
 import '../models/quickbooks_config.dart';
@@ -52,6 +53,7 @@ import '../services/post_log_notifier.dart';
 import '../services/qbo_service.dart';
 import '../services/schema_loader.dart';
 import '../services/schema_sync.dart';
+import '../services/lazy_connector.dart';
 import '../services/sheets_repository.dart';
 import '../services/transient_retry.dart';
 import '../services/warehouse_connector.dart';
@@ -334,6 +336,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<_Bootstrap> _initialize() async {
+    // AnalyticsEngine = airlayer compiler + LocalDb SQLite cache, used by
+    // the chat's run_query tool. Best-effort (null when the native lib
+    // fails to load). Kicked off FIRST so it overlaps the awaits below.
+    final analyticsF = AnalyticsEngine.create()
+        .then<AnalyticsEngine?>((a) => a, onError: (Object _) => null);
     final assetConfig = await AppConfig.load();
     final packageInfo = await PackageInfo.fromPlatform();
 
@@ -458,7 +465,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await HeartRateService.instance?.disconnect();
       final hrService = HeartRateService(repo: repo.repo);
       HeartRateService.instance = hrService;
-      await hrService.init();
+      // Not awaited (perf #9): init only seeds the maxHr notifier from
+      // meta — listeners update when it lands.
+      unawaited(hrService.init().catchError((Object _) {}));
       IntegrationRegistry.init(
         integrations: [
           if (weightView != null)
@@ -566,17 +575,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             .listen((_) => unawaited(replan()));
       }
     }
-    // Read-only views: connect a direct SheetsRepository that bypasses the
-    // engine ledger entirely. Only established when at least one loaded view
-    // is read-only — avoids a superfluous auth round-trip on builds without
-    // read-only views.
+    // Read-only views: a direct SheetsRepository that bypasses the
+    // engine ledger entirely. Only created when at least one loaded view
+    // is read-only. LAZY (perf #9): the token exchange happens on the
+    // first read-only read, not before first paint.
     WarehouseConnector? readOnlyRepo;
     final hasReadOnlyViews = views.any((v) => v.hasInputOverlay && v.readOnly);
     if (hasReadOnlyViews) {
-      readOnlyRepo = await retryTransient(
-        () => SheetsRepository.connectWithAuth(
-          defaultSpreadsheetId: spreadsheetId,
-          auth: dataAuth,
+      readOnlyRepo = LazyConnector(
+        SheetsConfig(name: 'gsheets', spreadsheetId: spreadsheetId),
+        () => retryTransient(
+          () => SheetsRepository.connectWithAuth(
+            defaultSpreadsheetId: spreadsheetId,
+            auth: dataAuth,
+          ),
         ),
       );
     }
@@ -601,16 +613,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       metaGet: engineRepo?.metaGet,
       metaSet: engineRepo?.metaSet,
     );
-    // AnalyticsEngine = airlayer compiler + LocalDb SQLite cache. Used by
-    // the chat's run_query tool. Best-effort: if the native lib fails to
-    // load on this platform, the chat opens without run_query and the
-    // rest of the app keeps working.
-    AnalyticsEngine? analytics;
-    try {
-      analytics = await AnalyticsEngine.create();
-    } catch (_) {
-      analytics = null;
-    }
+    // Started the top of the bootstrap (perf #9) so it overlaps the
+    // network awaits; by here it has normally already completed.
+    final analytics = await analyticsF;
     return _Bootstrap(
       views: views,
       repository: repo,

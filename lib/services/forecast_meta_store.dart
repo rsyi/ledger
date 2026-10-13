@@ -25,19 +25,31 @@ class ForecastMetaStore {
 
   static const cacheTtl = Duration(minutes: 15);
 
-  final SwrCache<ForecastMeta> _cache = SwrCache(
+  /// Raw tab cells (persisted — perf batch 3) + the parsed meta.
+  late final SwrCache<({List<List<Object?>> raw, ForecastMeta meta})>
+      _cache = SwrCache(
     name: 'forecast_meta',
     ttl: cacheTtl,
+    persist: SwrPersist(
+      key: 'forecast_meta|$spreadsheetId',
+      encode: (v) => v.raw,
+      decode: (j) {
+        final raw = [
+          for (final r in (j as List)) (r as List).cast<Object?>(),
+        ];
+        return (raw: raw, meta: ForecastMeta.fromTab(raw));
+      },
+    ),
   );
 
   /// STALE-WHILE-REVALIDATE (perf #8): fresh → cached; stale → last-good
   /// immediately + one background refresh; [force] awaits fresh. Every
   /// failure degrades to the cached copy or null.
   Future<ForecastMeta?> load({bool force = false}) async {
-    return _cache.get(_fetch, force: force);
+    return (await _cache.get(_fetch, force: force))?.meta;
   }
 
-  Future<ForecastMeta> _fetch() async {
+  Future<({List<List<Object?>> raw, ForecastMeta meta})> _fetch() async {
     final client = await auth.client(readOnly: true);
     try {
       final api = sheets.SheetsApi(client);
@@ -45,8 +57,11 @@ class ForecastMetaStore {
         spreadsheetId,
         "'$forecastMetaTabName'",
       );
-      final meta = ForecastMeta.fromTab(resp.values ?? const []);
-      return meta;
+      final raw = [
+        for (final r in resp.values ?? const <List<Object?>>[])
+          r.cast<Object?>(),
+      ];
+      return (raw: raw, meta: ForecastMeta.fromTab(raw));
     } finally {
       client.close();
     }

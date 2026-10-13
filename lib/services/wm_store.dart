@@ -38,8 +38,26 @@ class WmStore {
   /// Short cache — prescriptions don't need to be fresher than this.
   static const cacheTtl = Duration(minutes: 3);
 
-  final SwrCache<WmSnapshot> _cache =
-      SwrCache(name: 'wm_store', ttl: cacheTtl);
+  /// Caches the RAW tab cells + the parsed snapshot: the raw cells are
+  /// what persists to disk (perf batch 3 — a cold start prices the plan
+  /// from the last-good TMs instead of waiting ~2 s on Sheets).
+  late final SwrCache<WmTabsRaw> _cache = SwrCache(
+    name: 'wm_store',
+    ttl: cacheTtl,
+    persist: SwrPersist(
+      key: 'wm_store|$spreadsheetId',
+      encode: (v) => {'wm': v.wm, 'readings': v.readings},
+      decode: (j) {
+        final m = j as Map;
+        return WmTabsRaw(_cells(m['wm']), _cells(m['readings']));
+      },
+    ),
+  );
+
+  static List<List<Object?>> _cells(Object? v) => [
+        for (final r in (v as List? ?? const []))
+          (r as List).cast<Object?>(),
+      ];
 
   Future<T> _withApi<T>(
       Future<T> Function(sheets.SheetsApi api) fn) =>
@@ -51,26 +69,13 @@ class WmStore {
   /// the cached copy; past it the last-good copy immediately + one
   /// background refresh; [force] (and the first read after a write)
   /// awaits fresh data. The two tabs are read in PARALLEL.
-  Future<WmSnapshot?> snapshot({bool force = false}) =>
-      _cache.get(_fetch, force: force);
+  Future<WmSnapshot?> snapshot({bool force = false}) async =>
+      (await _cache.get(_fetch, force: force))?.snapshot;
 
-  Future<WmSnapshot> _fetch() => _withApi((api) async {
+  Future<WmTabsRaw> _fetch() => _withApi((api) async {
         final tabs = await Future.wait(
             [_tab(api, wmTabName), _tab(api, readingsTabName)]);
-        final wmValues = tabs[0];
-        final readingValues = tabs[1];
-        final wmHead = _headerIndex(wmValues);
-        final rdHead = _headerIndex(readingValues);
-        return (
-          workingMax: <WorkingMaxRow>[
-            for (final r in wmValues.skip(1))
-              ?WorkingMaxRow.fromCells(wmHead, r),
-          ],
-          readings: <ReadingRow>[
-            for (final r in readingValues.skip(1))
-              ?ReadingRow.fromCells(rdHead, r),
-          ],
-        );
+        return WmTabsRaw(tabs[0], tabs[1]);
       });
 
   /// Confirms a pending seed by appending a duplicate row with
@@ -162,7 +167,7 @@ class WmStore {
     }
   }
 
-  static Map<String, int> _headerIndex(List<List<Object?>> tab) =>
+  static Map<String, int> headerIndex(List<List<Object?>> tab) =>
       tab.isEmpty
           ? const {}
           : {
@@ -172,4 +177,25 @@ class WmStore {
 
   static String _fmt(num v) =>
       v == v.roundToDouble() ? v.round().toString() : v.toString();
+}
+
+/// The two WM tabs' raw cells (what persists) + the parsed snapshot
+/// (computed once per value).
+class WmTabsRaw {
+  WmTabsRaw(this.wm, this.readings);
+  final List<List<Object?>> wm;
+  final List<List<Object?>> readings;
+
+  late final WmSnapshot snapshot = () {
+    final wmHead = WmStore.headerIndex(wm);
+    final rdHead = WmStore.headerIndex(readings);
+    return (
+      workingMax: <WorkingMaxRow>[
+        for (final r in wm.skip(1)) ?WorkingMaxRow.fromCells(wmHead, r),
+      ],
+      readings: <ReadingRow>[
+        for (final r in readings.skip(1)) ?ReadingRow.fromCells(rdHead, r),
+      ],
+    );
+  }();
 }

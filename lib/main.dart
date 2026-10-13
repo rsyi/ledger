@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
+import 'services/disk_cache.dart';
 import 'services/engine.dart';
 import 'services/notification_service.dart';
 import 'services/perf_frames.dart';
@@ -14,6 +17,11 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   // >16 ms frame logging — profile builds / PERF_LOG only (no-op else).
   installPerfFrameTimings();
+  // Last-good snapshots on disk (perf batch 3): program/phase/strategy/
+  // dashboards docs + the WM / forecast-meta / projection tabs paint from
+  // here on a cold start and revalidate in the background.
+  DiskCache.instance = FileDiskCacheStore(getApplicationSupportDirectory()
+      .then((d) => Directory('${d.path}/last_good')));
   // Eagerly load the Rust engine + log its version so any FFI / jniLibs
   // misconfiguration shows up under the `flutter:` logcat tag before
   // the first schema parse rather than at the first form open.

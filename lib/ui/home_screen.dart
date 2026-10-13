@@ -67,6 +67,7 @@ import '../services/forecast_meta_store.dart';
 import '../services/google_auth/data_account.dart';
 import '../services/google_auth/google_identity.dart';
 import '../services/projection_snapshot_store.dart';
+import '../services/revalidation_bus.dart';
 import '../services/projection_tracking.dart' show PhaseProjections;
 import '../services/wm_store.dart';
 import 'chat_screen.dart';
@@ -167,6 +168,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Re-runs the week planner when a program_moves row is written or
   /// deleted (moves/skips change which days carry which work).
   StreamSubscription<LogEvent>? _movesSub;
+
+  /// Background revalidations that CHANGED a last-good copy (program
+  /// docs from disk, WM tabs, …) → one debounced re-load (perf batch 3).
+  StreamSubscription<String>? _revalidatedSub;
+  Timer? _revalidatedDebounce;
 
   /// The week-planner run (set by bootstrap); also re-run on resume so
   /// moves that arrived by sync (coach, nightly) reach the plan.
@@ -289,11 +295,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     AppSettings.weekStartSetting.addListener(_onWeekStartChanged);
+    _revalidatedSub = RevalidationBus.instance.stream.listen((_) {
+      _revalidatedDebounce?.cancel();
+      _revalidatedDebounce = Timer(
+          const Duration(milliseconds: 400), _onWeekStartChanged);
+    });
     _bootstrap = _initialize();
   }
 
   /// The week start changed (Settings screen, or a refresh picked up a
-  /// change made elsewhere): re-plan the week window and refresh every
+  /// change made elsewhere) — or a background revalidation replaced a
+  /// last-good copy the screens painted from (program docs, WM tabs;
+  /// RevalidationBus): re-plan the week window and refresh every
   /// week-shaped surface (Week tab goals, Today cards, Progress).
   void _onWeekStartChanged() {
     final replan = _replan;
@@ -304,12 +317,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(_dashboardKey.currentState?.reload());
     _todayStatusKey.currentState?.refresh();
     _todayProgramKey.currentState?.reload();
+    _dailyProgressKey.currentState?.reload();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     AppSettings.weekStartSetting.removeListener(_onWeekStartChanged);
+    _revalidatedSub?.cancel();
+    _revalidatedDebounce?.cancel();
     _syncTimer?.cancel();
     _movesSub?.cancel();
     super.dispose();
@@ -342,6 +358,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // fails to load). Kicked off FIRST so it overlaps the awaits below.
     final analyticsF = AnalyticsEngine.create()
         .then<AnalyticsEngine?>((a) => a, onError: (Object _) => null);
+    // Warm the intent docs NOW (perf batch 3): disk last-good → the
+    // ~470 KB program.yaml parse (worker isolate) overlaps the rest of
+    // the bootstrap instead of starting when the first card asks.
+    final warmSource = ConfigSourceRegistry.active.value;
+    if (warmSource != null) {
+      unawaited(ProgramProvider(warmSource.docFetcher)
+          .load()
+          .then((_) {}, onError: (Object _) {}));
+    }
     final assetConfig = await AppConfig.load();
     final packageInfo = await PackageInfo.fromPlatform();
 

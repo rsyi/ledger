@@ -39,9 +39,22 @@ class ProjectionSnapshotStore {
   /// Snapshots change at most once per block — a long cache is safe.
   static const cacheTtl = Duration(minutes: 30);
 
-  final SwrCache<List<ProjectionSnapshot>> _cache = SwrCache(
+  /// Raw tab cells (persisted — perf batch 3) + the parsed snapshots.
+  late final SwrCache<
+      ({List<List<Object?>> raw, List<ProjectionSnapshot> parsed})> _cache =
+      SwrCache(
     name: 'projection_store',
     ttl: cacheTtl,
+    persist: SwrPersist(
+      key: 'projection_store|$spreadsheetId',
+      encode: (v) => v.raw,
+      decode: (j) {
+        final raw = [
+          for (final r in (j as List)) (r as List).cast<Object?>(),
+        ];
+        return (raw: raw, parsed: parseProjectionSnapshots(raw));
+      },
+    ),
   );
 
   /// STALE-WHILE-REVALIDATE (perf #8): fresh → cached; stale → last-good
@@ -49,10 +62,11 @@ class ProjectionSnapshotStore {
   /// failure degrades to the cached copy or null.
   Future<List<ProjectionSnapshot>?> load({bool force = false}) async {
     if (_fixed != null) return _fixed;
-    return _cache.get(_fetch, force: force);
+    return (await _cache.get(_fetch, force: force))?.parsed;
   }
 
-  Future<List<ProjectionSnapshot>> _fetch() async {
+  Future<({List<List<Object?>> raw, List<ProjectionSnapshot> parsed})>
+      _fetch() async {
     final client = await auth!.client(readOnly: true);
     try {
       final api = sheets.SheetsApi(client);
@@ -60,8 +74,11 @@ class ProjectionSnapshotStore {
         spreadsheetId,
         "'$projectionSnapshotsTabName'",
       );
-      final out = parseProjectionSnapshots(resp.values ?? const []);
-      return out;
+      final raw = [
+        for (final r in resp.values ?? const <List<Object?>>[])
+          r.cast<Object?>(),
+      ];
+      return (raw: raw, parsed: parseProjectionSnapshots(raw));
     } finally {
       client.close();
     }

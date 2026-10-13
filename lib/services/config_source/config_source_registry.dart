@@ -198,6 +198,7 @@ class ConfigSourceRegistry {
   @visibleForTesting
   static void reset() {
     active.value = null;
+    DocCache.diskScope = null;
     initialized = false;
     _store = const SecureSecretStore();
     _baked = null;
@@ -206,6 +207,8 @@ class ConfigSourceRegistry {
   }
 
   static void _publish(ConfigSource? s) {
+    // Persisted docs are namespaced by source (perf batch 3).
+    DocCache.diskScope = s?.id;
     final prev = active.value;
     if (prev != null && s != null && prev.id == s.id) {
       active.value = s; // same location (e.g. re-signed-in): no cache drop

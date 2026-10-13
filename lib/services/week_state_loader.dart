@@ -26,6 +26,7 @@ import 'program_week.dart' show dayOnly, prescribedDay;
 import 'resolved_week.dart';
 import 'week_start.dart';
 import 'sheets_repository.dart' show Record;
+import 'read_only_rows_cache.dart';
 import 'warehouse_connector.dart';
 import '../models/view_schema.dart';
 import 'whoop_activity.dart';
@@ -197,39 +198,23 @@ class WeekStateLoader {
   /// Whether the strength source is configured (missed work needs it).
   bool get hasStrength => strengthView != null && strengthRepo != null;
 
-  /// Session cache of the read-only Kaya climbing tab's dates: that read
-  /// is a NETWORK fetch of ~1.4k rows, and the tab only changes on a Kaya
-  /// import — re-reading it on every log event (program card) / coach
-  /// turn was the slow path. Single entry keyed by repo identity + view
-  /// name (the card and the coach share the bootstrap's read-only repo);
-  /// failed reads are never cached.
-  static const kayaCacheTtl = Duration(minutes: 30);
-  static ({
-    WarehouseConnector repo,
-    String view,
-    DateTime at,
-    List<DateTime> days,
-  })? _kaya;
+  /// Session cache of the read-only Kaya climbing tab: that read is a
+  /// NETWORK fetch of ~1.4k rows, and the tab only changes on a Kaya
+  /// import. Now the SHARED [ReadOnlyRowsCache] (perf #5) — Goals, the
+  /// dashboard, Plan data and the coach read through the same entry.
+  /// Keyed by repo identity + view name; failed reads are never cached.
+  static const kayaCacheTtl = ReadOnlyRowsCache.ttl;
 
   /// Drops the Kaya cache (after an import; tests).
-  static void clearKayaCache() => _kaya = null;
+  static void clearKayaCache() => ReadOnlyRowsCache.clear();
 
   static Future<List<DateTime>> _kayaDays(
-      ViewSchema view, WarehouseConnector repo, DateTime now) async {
-    final c = _kaya;
-    if (c != null &&
-        identical(c.repo, repo) &&
-        c.view == view.name &&
-        now.difference(c.at) < kayaCacheTtl &&
-        !now.isBefore(c.at)) {
-      return c.days;
-    }
-    final days = <DateTime>[
-      for (final r in await repo.list(view)) ?_date(r['date']),
-    ];
-    _kaya = (repo: repo, view: view.name, at: now, days: days);
-    return days;
-  }
+          ViewSchema view, WarehouseConnector repo, DateTime now) async =>
+      <DateTime>[
+        for (final r in await ReadOnlyRowsCache.list(view, repo,
+            now: () => now))
+          ?_date(r['date']),
+      ];
 
   /// [read], or null when the source is missing or the read throws
   /// (every source degrades honestly).

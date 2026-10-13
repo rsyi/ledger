@@ -51,6 +51,7 @@ import '../services/weight_series.dart' show loadDailyWeighIns;
 import '../services/whoop_activity.dart';
 import '../services/wilks.dart' show contemporaneousBodyweightLbs;
 import 'design/design.dart';
+import '../services/read_only_rows_cache.dart';
 
 /// Everything the goal rows render from — one evaluation over the
 /// current accounting week.
@@ -198,7 +199,8 @@ class GoalsScreenState extends State<GoalsScreen> {
   ) async {
     if (repo == null || view == null) return const [];
     try {
-      return await repo.list(view);
+      // Read-only (Kaya climbing) views go through the shared cache.
+      return await ReadOnlyRowsCache.listIfReadOnly(view, repo);
     } catch (_) {
       return const [];
     }

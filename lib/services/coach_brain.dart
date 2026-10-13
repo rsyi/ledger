@@ -17,6 +17,7 @@ import 'warehouse_connector.dart';
 import 'week_planner.dart' show buildWeekPlannedEntries;
 import 'week_state_loader.dart';
 import 'whoop_activity.dart';
+import 'read_only_rows_cache.dart';
 
 /// Fetches one coach doc by repo path (e.g. `coach/goals.md`). Returns
 /// the file's contents, or null when the file doesn't exist. Throwing is
@@ -418,7 +419,7 @@ in a desktop Claude session — you cannot edit files from here.''';
         final repo = v.readOnly ? readOnlyRepo : repository;
         if (repo == null) return {};
         return {
-          for (final r in await repo.list(v))
+          for (final r in await ReadOnlyRowsCache.listIfReadOnly(v, repo))
             if (d(r['date']) case final x?) DateTime(x.year, x.month, x.day),
         };
       }

@@ -32,6 +32,7 @@ import '../services/warehouse_connector.dart';
 import '../services/weight_series.dart';
 import 'design/design.dart';
 import 'widgets/forecast_section.dart';
+import '../services/read_only_rows_cache.dart';
 
 /// Where the forecast pages read from (the bottom-nav shell builds one
 /// and hands it to every page it opens).
@@ -184,7 +185,8 @@ Future<List<ClimbAscent>> _loadClimbs(PlanSources src) async {
   final climbs = <ClimbAscent>[];
   if (src.climbingRepo == null || src.climbingView == null) return climbs;
   try {
-    final recs = await src.climbingRepo!.list(src.climbingView!);
+    final recs = await ReadOnlyRowsCache.listIfReadOnly(
+        src.climbingView!, src.climbingRepo!);
     final vRe = RegExp(r'^v(\d+)', caseSensitive: false);
     for (final r in recs) {
       final raw = r['date'];

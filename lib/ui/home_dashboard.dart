@@ -175,6 +175,7 @@ import 'widgets/plan_sections.dart' show BlockTimeline;
 import 'design/design.dart' hide AppText;
 import 'design/tokens.dart' as ds show AppText;
 import 'widgets/skeleton.dart';
+import '../services/read_only_rows_cache.dart';
 
 class HomeDashboard extends StatefulWidget {
   /// Working-max controller tabs (3-min cached). Null → STRENGTH renders
@@ -625,8 +626,8 @@ class HomeDashboardState extends State<HomeDashboard> {
     final kaya = <DateTime>[];
     try {
       if (widget.climbingRepo != null && widget.climbingView != null) {
-        for (final r
-            in await widget.climbingRepo!.list(widget.climbingView!)) {
+        for (final r in await ReadOnlyRowsCache.listIfReadOnly(
+            widget.climbingView!, widget.climbingRepo!)) {
           final raw = r['date'];
           final d = raw is DateTime
               ? raw

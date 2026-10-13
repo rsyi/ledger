@@ -60,7 +60,7 @@ dart run tool/brand.dart --config ~/repos/airledger-fitness/ledger.yaml
 applies ledger.yaml's app_name transiently and reverts strings.xml
 after building; the repo default in strings.xml is also "Ledger" now,
 so plain `flutter build apk` carries the right label too. Manual:
-`flutter analyze` (baseline ~32 infos, all pre-existing) →
+`flutter analyze` (baseline 29 infos, all pre-existing) →
 `flutter build apk --release` → `adb -s 66260DLKX00010 install -r
 build/app/outputs/flutter-apk/app-release.apk`. `flutter test`: 7 known
 pre-existing failures (3 live-DB integration suites + 4 schema_loader);
@@ -1112,6 +1112,67 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   candidate rows left honestly blank; wraps/sleeves never backfilled.
   strength exercise options trimmed to a curated ~37 (mains first,
   then live-sheet frequency, recent-year bias).
+
+## Performance (2026-10-12 — audit low-risk fixes; #2/#4/#14 WAIT for an on-device profile)
+
+- **Instrumentation**: `lib/services/perf.dart` (FLUTTER-FREE — pure
+  services/tools import it) `Perf.span(name, fn, {meta, metaOf})` /
+  `spanSync` / `count`: wall time + a DevTools `TimelineTask` +
+  `developer.log(name: 'perf')` in debug/profile or release with
+  `--dart-define=PERF_LOG=true`; rolling per-name counters
+  (`Perf.stats`). `perf_frames.dart` logs >16 ms frames (profile /
+  PERF_LOG only; installed in main). Spans: engine.list/create/sync,
+  sheets.list, program.load/fetch/parse(+hit), doc_cache.hit/stale/miss,
+  `<store>.load|hit|stale` (wm_store, forecast_meta, projection_store),
+  ro_rows.load/hit, weight.daily, week_state.load,
+  day_synthesis.buildContext, goals.compute, program_day_card.load,
+  plan_data.load, program_screen.price. Profile on device:
+  `flutter run --profile` → `adb logcat | grep perf`.
+- **#1 parsed intent docs** (program_provider.dart): parsed map cached
+  keyed on the RAW text (identical/==) — program.yaml parses once per
+  content change; parse runs in `Isolate.run` for docs ≥32 KB (inline
+  under FLUTTER_TEST — real isolates never finish in fake-async).
+  Parsed docs are deep PLAIN + UNMODIFIABLE Map/List (never mutate
+  them). `ProgramProvider.clearCache()` busts raw docs only.
+- **#3** sdk-dart `EngineLedgerRepository.listRecords` (tagged→native in
+  the worker isolate; `list` API unchanged) — EngineLedgerConnector.list
+  uses it. Pure Dart: no dylib rebuild.
+- **#5** `ReadOnlyRowsCache` (read_only_rows_cache.dart): ONE 30-min
+  cache (connector identity × view, coalesced, failures uncached) for
+  the read-only Kaya climbing tab — Goals, Progress dashboard, Plan
+  data, coach and WeekStateLoader (`clearKayaCache()` = its clear).
+  Ledger views bypass it (`listIfReadOnly`).
+- **#6** loadDailyWeighIns: ledger list → Dart daily averages FIRST;
+  the analytics query over the EXISTING mirror is only the
+  no-repo/failed-read fallback (it used to DROP+rebuild the mirror on
+  every call).
+- **#7** TimelineScreen skips RowCache for EngineLedgerConnector
+  (`TimelineScreen.usesRowCache`); direct-Sheets connectors keep it.
+- **#8 stale-while-revalidate**: DocCache (stale → last-good now + one
+  background refetch; failed refresh keeps last-good; clear() bumps a
+  generation) and `SwrCache` (swr_cache.dart) under WmStore /
+  ForecastMetaStore / ProjectionSnapshotStore (force/invalidate-after-
+  write await fresh). WmStore reads its two tabs in parallel (no
+  batchGet: a missing tab 400s the whole batch).
+- **#9** startup: read-only repo is a `LazyConnector` (token exchange on
+  first read-only read; stable identity); AnalyticsEngine.create starts
+  at the top of the bootstrap; HeartRateService.init not awaited.
+- **#10** `LazyIndexedStack`: Week + Progress mount on first visit
+  (Today/Log eager); HomeDashboard progressOnly starts drivers/recomp/
+  exec/engine futures lazily (getters) — only if something reads them.
+- **#11** Program screen pricing memoized (Expando on the loaded
+  _RoutineData × week × today × week-start day).
+- **#13** carryover: "nothing missed" remembered per day ×
+  `LogEventBus.instance.version` (bumped on every local write).
+- **#15** ForecastSection debounces the MC re-run 350 ms
+  (`ForecastSection.mcDebounce`; initial run immediate); FormScreen's
+  autocomplete full-table list waits for the push transition.
+- Host-AOT microbenchmarks (scratchpad bench2): program.yaml repeat
+  load 22–37 ms UI parse → 0.03 ms cache hit (first load ~26 ms off the
+  UI isolate); 8k-row strength list: 26–29 ms UI conversion → 0 (in the
+  worker); engine-path RowCache encode 32–37 ms per reload → gone.
+- NOT done (await an on-device profile): #2/#4 shared per-view snapshot
+  + one debounced data-changed signal, #14.
 
 ## Dev gotchas (hard-won)
 

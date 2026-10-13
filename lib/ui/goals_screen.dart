@@ -47,7 +47,7 @@ import '../services/app_settings.dart'
 import '../services/week_start.dart' show weekStartOf;
 import '../services/week_state_loader.dart';
 import '../services/warehouse_connector.dart';
-import '../services/weight_series.dart' show loadDailyWeighIns;
+import '../services/weight_series.dart' show criticalWeightFrom, loadDailyWeighIns;
 import '../services/whoop_activity.dart';
 import '../services/wilks.dart' show contemporaneousBodyweightLbs;
 import 'design/design.dart';
@@ -296,6 +296,9 @@ class GoalsScreenState extends State<GoalsScreen> {
               analytics: widget.analytics,
               view: widget.weightView,
               repo: widget.weightRepo,
+              // Critical path: 7d avg + maintenance need ~6 weeks, not
+              // the 2.1k-row history (perf batch 3).
+              from: criticalWeightFrom(_today),
             ));
     final daily = weights?.daily ?? const <WeightRow>[];
     final bw = observedWeightStats(daily, _today).bw7dAvg ??

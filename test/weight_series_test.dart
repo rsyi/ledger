@@ -24,6 +24,29 @@ class _Repo implements WarehouseConnector {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+/// Range-capable repo (the engine connector's shape) — records ranged
+/// reads separately from full lists.
+class _RangeRepo extends _Repo implements RangeListable {
+  _RangeRepo(super.rows);
+  final ranges = <DateTime?>[];
+  @override
+  Future<List<Record>> listRange(ViewSchema view,
+      {DateTime? from, DateTime? to}) async {
+    ranges.add(from);
+    return filterRecordsToRange(view, rows, from: from, to: to);
+  }
+}
+
+final _datedWeightView = ViewSchema(
+  name: 'weight',
+  datasource: 'gsheets',
+  table: 'weight',
+  entities: const [],
+  measures: const [],
+  dimensions: const [],
+  dateField: 'date',
+);
+
 final _weightView = ViewSchema(
   name: 'weight',
   datasource: 'gsheets',
@@ -175,6 +198,47 @@ void main() {
           analytics: null, view: _weightView, repo: failing);
       expect(r.source, WeightSeriesSource.none);
       expect(r.error, startsWith('Weight ledger read failed'));
+    });
+  });
+
+  group('ranged critical-path read (perf batch 3)', () {
+    test('from: reads only the window via listRange — never the full '
+        'history', () async {
+      final repo = _RangeRepo([
+        {'date': '2019-01-01', 'weight_lbs': 200.0},
+        {'date': '2026-10-01', 'weight_lbs': 160.0},
+        {'date': '2026-10-02', 'weight_lbs': 159.0},
+      ]);
+      final r = await loadDailyWeighIns(
+        analytics: null,
+        view: _datedWeightView,
+        repo: repo,
+        from: DateTime(2026, 7, 4),
+      );
+      expect(repo.ranges, [DateTime(2026, 7, 4)]);
+      expect(repo.lists, 0);
+      expect(r.daily.map((w) => w.weightLbs), [160.0, 159.0]);
+    });
+
+    test('an empty window falls back to the full history (the '
+        'contemporaneous weigh-in fallback still sees old data)', () async {
+      final repo = _RangeRepo([
+        {'date': '2019-01-01', 'weight_lbs': 200.0},
+      ]);
+      final r = await loadDailyWeighIns(
+        analytics: null,
+        view: _datedWeightView,
+        repo: repo,
+        from: DateTime(2026, 7, 4),
+      );
+      expect(repo.lists, 1);
+      expect(r.daily.single.weightLbs, 200.0);
+    });
+
+    test('criticalWeightFrom covers the nutrition model window', () {
+      final from = criticalWeightFrom(DateTime(2026, 10, 12, 9));
+      expect(from, DateTime(2026, 10, 12 - criticalWeightLookbackDays));
+      expect(criticalWeightLookbackDays, greaterThanOrEqualTo(28 + 7 + 7));
     });
   });
 }

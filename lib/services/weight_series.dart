@@ -36,30 +36,56 @@ typedef WeightSeriesResult = ({
   WeightSeriesSource source,
 });
 
+/// Lookback for CRITICAL-PATH weight consumers (perf batch 3): Today's
+/// macros/protein target, the day synthesis and the Week tab need the
+/// current 7-day average + the nutrition model's adaptive maintenance
+/// (28-day window over 7-day-average trend pairs) — ~42 days; 90 keeps
+/// margin. Full history (2.1k rows) stays for trend/forecast pages.
+const criticalWeightLookbackDays = 90;
+
+/// The [loadDailyWeighIns] `from` bound for a critical-path read as of
+/// [today].
+DateTime criticalWeightFrom(DateTime today) =>
+    DateTime(today.year, today.month, today.day - criticalWeightLookbackDays);
+
 /// Loads the daily weigh-in series: direct ledger read first, the
 /// analytics mirror as the fallback (see the library doc). Null
 /// [analytics]/[view]/[repo] degrade path by path; only all-paths-empty
-/// surfaces an error.
+/// surfaces an error. [from] (critical paths — [criticalWeightFrom])
+/// reads only rows on/after that day via `listRange`; an EMPTY window
+/// falls back to the full history so the contemporaneous-weigh-in
+/// fallback still finds an old weigh-in.
 Future<WeightSeriesResult> loadDailyWeighIns({
   required AnalyticsEngine? analytics,
   required ViewSchema? view,
   WarehouseConnector? repo,
+  DateTime? from,
 }) =>
     Perf.span(
       'weight.daily',
-      () => _loadDailyWeighIns(analytics: analytics, view: view, repo: repo),
-      metaOf: (r) => {'days': r.daily.length, 'source': r.source.name},
+      () => _loadDailyWeighIns(
+          analytics: analytics, view: view, repo: repo, from: from),
+      metaOf: (r) => {
+        'days': r.daily.length,
+        'source': r.source.name,
+        'ranged': from != null,
+      },
     );
 
 Future<WeightSeriesResult> _loadDailyWeighIns({
   required AnalyticsEngine? analytics,
   required ViewSchema? view,
   WarehouseConnector? repo,
+  DateTime? from,
 }) async {
   String? ledgerError;
   if (view != null && repo != null) {
     try {
-      final daily = dailyWeighInsFromRecords(await repo.list(view));
+      var records = from == null
+          ? await repo.list(view)
+          : await repo.listRange(view, from: from);
+      if (from != null && records.isEmpty) records = await repo.list(view);
+      final daily = dailyWeighInsFromRecords(records);
       return (
         daily: daily,
         error: null,

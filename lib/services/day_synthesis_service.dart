@@ -14,7 +14,7 @@ import 'program_observed.dart' show observedWeightStats;
 import 'program_provider.dart';
 import 'warehouse_connector.dart';
 import 'week_state_loader.dart';
-import 'weight_series.dart' show loadDailyWeighIns;
+import 'weight_series.dart' show criticalWeightFrom, loadDailyWeighIns;
 import 'whoop_activity.dart';
 import 'program_week.dart' show dayOnly;
 import 'wilks.dart' show contemporaneousBodyweightLbs;
@@ -260,6 +260,7 @@ class DaySynthesisService {
           analytics: analytics,
           view: weightView,
           repo: weightRepo,
+          from: criticalWeightFrom(clock),
         );
         final daily = series.daily;
         if (daily.isNotEmpty) {

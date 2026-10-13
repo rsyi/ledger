@@ -17,7 +17,7 @@ import '../../services/program_metrics.dart' show WeightRow;
 import '../../services/program_observed.dart' show observedWeightStats;
 import '../../services/program_provider.dart' show IntentDocs, ProgramProvider;
 import '../../services/warehouse_connector.dart';
-import '../../services/weight_series.dart' show loadDailyWeighIns;
+import '../../services/weight_series.dart' show criticalWeightFrom, loadDailyWeighIns;
 import '../../services/wilks.dart' show contemporaneousBodyweightLbs;
 import '../design/design.dart';
 import 'skeleton.dart';
@@ -190,6 +190,9 @@ class DailyProgressCardState extends State<DailyProgressCard> {
               analytics: widget.analytics,
               view: widget.weightView,
               repo: widget.weightRepo,
+              // Critical path: 7d avg + maintenance need ~6 weeks, not
+              // the 2.1k-row history (perf batch 3).
+              from: criticalWeightFrom(dayStart),
             ));
     final daily = weights?.daily ?? const <WeightRow>[];
     final bw = observedWeightStats(daily, dayStart).bw7dAvg ??

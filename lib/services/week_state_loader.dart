@@ -31,6 +31,7 @@ import 'warehouse_connector.dart';
 import '../models/view_schema.dart';
 import 'whoop_activity.dart';
 import 'working_sets.dart';
+import 'perf.dart';
 
 /// Cardio `type`s that count as a 4x4 session (blank counts too) — same
 /// filter as the Goals tab and tool/missed_work.dart.
@@ -241,6 +242,17 @@ class WeekStateLoader {
     DateTime date, {
     String label = 'Today',
     bool withMissed = false,
+  }) =>
+      Perf.span(
+        'week_state.load',
+        () => _load(date, label: label, withMissed: withMissed),
+        meta: {'withMissed': withMissed},
+      );
+
+  Future<WeekState?> _load(
+    DateTime date, {
+    required String label,
+    required bool withMissed,
   }) async {
     IntentDocs docs;
     try {

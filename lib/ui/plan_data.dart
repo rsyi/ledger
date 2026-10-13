@@ -33,6 +33,7 @@ import '../services/weight_series.dart';
 import 'design/design.dart';
 import 'widgets/forecast_section.dart';
 import '../services/read_only_rows_cache.dart';
+import '../services/perf.dart';
 
 /// Where the forecast pages read from (the bottom-nav shell builds one
 /// and hands it to every page it opens).
@@ -201,7 +202,10 @@ Future<List<ClimbAscent>> _loadClimbs(PlanSources src) async {
 
 /// Loads everything the forecast pages need. Null only when the intent
 /// docs can't load.
-Future<PlanData?> loadPlanData(PlanSources src, DateTime today) async {
+Future<PlanData?> loadPlanData(PlanSources src, DateTime today) =>
+    Perf.span('plan_data.load', () => _loadPlanData(src, today));
+
+Future<PlanData?> _loadPlanData(PlanSources src, DateTime today) async {
   final IntentDocs docs;
   try {
     docs = await src.provider.load();

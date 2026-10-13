@@ -52,6 +52,7 @@ import '../services/whoop_activity.dart';
 import '../services/wilks.dart' show contemporaneousBodyweightLbs;
 import 'design/design.dart';
 import '../services/read_only_rows_cache.dart';
+import '../services/perf.dart';
 
 /// Everything the goal rows render from — one evaluation over the
 /// current accounting week.
@@ -206,7 +207,9 @@ class GoalsScreenState extends State<GoalsScreen> {
     }
   }
 
-  Future<_GoalsData?> _compute() async {
+  Future<_GoalsData?> _compute() => Perf.span('goals.compute', _computeImpl);
+
+  Future<_GoalsData?> _computeImpl() async {
     final raw = await _guard(() async => widget.dashboards?.loadRaw());
     final byPhase = parseGoals(raw);
     if (byPhase == null) return null;

@@ -18,6 +18,7 @@ import 'weight_series.dart' show loadDailyWeighIns;
 import 'whoop_activity.dart';
 import 'program_week.dart' show dayOnly;
 import 'wilks.dart' show contemporaneousBodyweightLbs;
+import 'perf.dart';
 
 /// The synthesis plus the small tally the post-log notification reads. The
 /// synthesis text is what the card shows; the tally lets a notification
@@ -209,7 +210,10 @@ class DaySynthesisService {
 
   /// Assembles today's context. Public so the notification driver can read
   /// the tally without an LLM call.
-  Future<DaySynthesisContext> buildContext() async {
+  Future<DaySynthesisContext> buildContext() =>
+      Perf.span('day_synthesis.buildContext', _buildContext);
+
+  Future<DaySynthesisContext> _buildContext() async {
     final clock = now();
     final dayStart = DateTime(clock.year, clock.month, clock.day);
     final dayEnd = dayStart.add(const Duration(days: 1));

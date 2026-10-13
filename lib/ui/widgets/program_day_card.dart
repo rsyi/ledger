@@ -30,6 +30,7 @@ import '../../services/week_state_loader.dart';
 import '../../services/wm_tabs.dart' show WmSnapshot;
 import '../design/design.dart';
 import 'video_preview.dart';
+import '../../services/perf.dart';
 
 /// The program view for a day: the prescribed session as a CHECKLIST
 /// (every lift and accessory the routine names — squat, muscle-ups,
@@ -244,7 +245,9 @@ class ProgramDayCardState extends State<ProgramDayCard> {
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
-  Future<_DayData?> _load() async {
+  Future<_DayData?> _load() => Perf.span('program_day_card.load', _loadImpl);
+
+  Future<_DayData?> _loadImpl() async {
     final provider = widget.provider;
     if (provider == null) return null;
     final date = dayOnly(widget.date);

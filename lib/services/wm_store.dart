@@ -19,6 +19,7 @@ library;
 import 'package:googleapis/sheets/v4.dart' as sheets;
 
 import 'google_auth/sheets_auth.dart';
+import 'swr_cache.dart';
 
 import 'wm_tabs.dart';
 import 'working_max.dart' show defaultVariantByLift;
@@ -37,8 +38,8 @@ class WmStore {
   /// Short cache — prescriptions don't need to be fresher than this.
   static const cacheTtl = Duration(minutes: 3);
 
-  WmSnapshot? _cached;
-  DateTime? _cachedAt;
+  final SwrCache<WmSnapshot> _cache =
+      SwrCache(name: 'wm_store', ttl: cacheTtl);
 
   Future<T> _withApi<T>(
       Future<T> Function(sheets.SheetsApi api) fn) =>
@@ -46,19 +47,18 @@ class WmStore {
 
   /// Both tabs, parsed. Null only when the fetch fails AND nothing is
   /// cached; tabs that don't exist yet read as empty lists (the nightly
-  /// seeds them). Serves the cached copy inside [cacheTtl].
-  Future<WmSnapshot?> snapshot({bool force = false}) async {
-    final at = _cachedAt;
-    if (!force &&
-        _cached != null &&
-        at != null &&
-        DateTime.now().difference(at) < cacheTtl) {
-      return _cached;
-    }
-    try {
-      final snap = await _withApi((api) async {
-        final wmValues = await _tab(api, wmTabName);
-        final readingValues = await _tab(api, readingsTabName);
+  /// seeds them). STALE-WHILE-REVALIDATE (perf #8): inside [cacheTtl]
+  /// the cached copy; past it the last-good copy immediately + one
+  /// background refresh; [force] (and the first read after a write)
+  /// awaits fresh data. The two tabs are read in PARALLEL.
+  Future<WmSnapshot?> snapshot({bool force = false}) =>
+      _cache.get(_fetch, force: force);
+
+  Future<WmSnapshot> _fetch() => _withApi((api) async {
+        final tabs = await Future.wait(
+            [_tab(api, wmTabName), _tab(api, readingsTabName)]);
+        final wmValues = tabs[0];
+        final readingValues = tabs[1];
         final wmHead = _headerIndex(wmValues);
         final rdHead = _headerIndex(readingValues);
         return (
@@ -72,13 +72,6 @@ class WmStore {
           ],
         );
       });
-      _cached = snap;
-      _cachedAt = DateTime.now();
-      return snap;
-    } catch (_) {
-      return _cached; // stale-if-error; null before first success
-    }
-  }
 
   /// Confirms a pending seed by appending a duplicate row with
   /// `confirmed=true`. No-op when the lift has no current value.
@@ -152,7 +145,7 @@ class WmStore {
         valueInputOption: 'RAW',
       );
     });
-    _cachedAt = null; // next snapshot() refetches
+    _cache.invalidate(); // next snapshot() awaits a refetch
   }
 
   Future<List<List<Object?>>> _tab(

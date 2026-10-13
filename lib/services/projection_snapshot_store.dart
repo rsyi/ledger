@@ -11,6 +11,7 @@ library;
 import 'package:googleapis/sheets/v4.dart' as sheets;
 
 import 'google_auth/sheets_auth.dart';
+import 'swr_cache.dart';
 
 import 'projection_snapshot.dart';
 
@@ -38,36 +39,31 @@ class ProjectionSnapshotStore {
   /// Snapshots change at most once per block — a long cache is safe.
   static const cacheTtl = Duration(minutes: 30);
 
-  List<ProjectionSnapshot>? _cached;
-  DateTime? _cachedAt;
+  final SwrCache<List<ProjectionSnapshot>> _cache = SwrCache(
+    name: 'projection_store',
+    ttl: cacheTtl,
+  );
 
+  /// STALE-WHILE-REVALIDATE (perf #8): fresh → cached; stale → last-good
+  /// immediately + one background refresh; [force] awaits fresh. Every
+  /// failure degrades to the cached copy or null.
   Future<List<ProjectionSnapshot>?> load({bool force = false}) async {
     if (_fixed != null) return _fixed;
-    final at = _cachedAt;
-    if (!force &&
-        _cached != null &&
-        at != null &&
-        DateTime.now().difference(at) < cacheTtl) {
-      return _cached;
-    }
+    return _cache.get(_fetch, force: force);
+  }
+
+  Future<List<ProjectionSnapshot>> _fetch() async {
+    final client = await auth!.client(readOnly: true);
     try {
-      final client = await auth!.client(readOnly: true);
-      try {
-        final api = sheets.SheetsApi(client);
-        final resp = await api.spreadsheets.values.get(
-          spreadsheetId,
-          "'$projectionSnapshotsTabName'",
-        );
-        final out = parseProjectionSnapshots(resp.values ?? const []);
-        _cached = out;
-        _cachedAt = DateTime.now();
-        return out;
-      } finally {
-        client.close();
-      }
-    } catch (_) {
-      // Missing tab / offline: cached copy if any, else null.
-      return _cached;
+      final api = sheets.SheetsApi(client);
+      final resp = await api.spreadsheets.values.get(
+        spreadsheetId,
+        "'$projectionSnapshotsTabName'",
+      );
+      final out = parseProjectionSnapshots(resp.values ?? const []);
+      return out;
+    } finally {
+      client.close();
     }
   }
 }

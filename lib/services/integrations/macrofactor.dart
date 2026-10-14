@@ -163,7 +163,9 @@ double _round1(double v) => (v * 10).roundToDouble() / 10;
 // Pull-loop constants
 // ---------------------------------------------------------------------------
 
-const _kMinPullInterval = Duration(hours: 6);
+// Health Connect is an on-device read — cheap. 6 h (the web-API default)
+// meant food logged in Macrofactor took hours to reach Today.
+const _kMinPullInterval = Duration(minutes: 15);
 const _kFirstPullWindow = Duration(days: 90);
 const _kReconcileWindow = Duration(days: 14);
 

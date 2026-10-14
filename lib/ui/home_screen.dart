@@ -1463,6 +1463,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   // Gated sync (via the coach card) + a re-read of every
                   // per-day card for the selected day.
                   onRefresh: () async {
+                    // Pull-to-refresh fetches NEW data first: the quiet
+                    // on-device/API sources (Macrofactor via Health
+                    // Connect, Whoop, Withings) are force-pulled — the
+                    // background pull is rate-limited, so a refresh used
+                    // to just redraw stale meals (2026-10-13).
+                    try {
+                      await IntegrationRegistry.instance
+                          ?.pullNow(const ['macrofactor', 'whoop_api', 'withings']);
+                    } catch (_) {/* pulls contain their own failures */}
+                    SyncScheduler.instance?.maybeSync(manual: true);
                     _todayStatusKey.currentState?.refresh();
                     _recoveryKey.currentState?.reload();
                     _dailyProgressKey.currentState?.reload();

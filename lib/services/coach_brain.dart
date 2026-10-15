@@ -11,6 +11,7 @@ import 'program_provider.dart';
 import 'app_settings.dart' show AppSettings;
 import 'week_start.dart';
 import 'program_slice_text.dart';
+import 'video_ref.dart' show isBlobDim;
 import 'video_rpe.dart';
 import 'sheets_repository.dart' show Record;
 import 'warehouse_connector.dart';
@@ -708,9 +709,10 @@ in a desktop Claude session — you cannot edit files from here.''';
     required DateTime today,
     int maxRows = maxRowsPerView,
   }) {
+    // Synced base64 clip thumbnails (~10 KB each) never enter a prompt.
     final cols = [
       for (final d in view.dimensions)
-        if (d.name != 'id') d.name,
+        if (d.name != 'id' && !isBlobDim(d.name)) d.name,
     ];
     if (cols.isEmpty) return '(no columns)';
     final dateCol = view.dateField ?? (cols.contains('date') ? 'date' : null);

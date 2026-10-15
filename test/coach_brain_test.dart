@@ -95,6 +95,22 @@ void main() {
     expect(lines.last, contains('2026-09-15')); // future kept, sorted last
   });
 
+  test('renderTable keeps synced clip thumbnails out of the prompt', () {
+    final view = _view(
+        'strength', ['id', 'date', 'exercise', 'video_thumb', 'video_photos_url']);
+    final table = CoachBrain.renderTable(view, [
+      {
+        'id': 'a',
+        'date': today,
+        'exercise': 'Squat',
+        'video_thumb': 'data:image/jpeg;base64,${'A' * 5000}',
+        'video_photos_url': 'https://photos.google.com/lr/photo/X',
+      },
+    ], today: today);
+    expect(table.split('\n').first, '| date | exercise | video_photos_url |');
+    expect(table, isNot(contains('base64')));
+  });
+
   test('renderHistory sorts by ts and caps to the most recent 40', () {
     final rows = <Record>[
       for (var i = 0; i < 50; i++)

@@ -64,22 +64,27 @@ Future<void> playVideo(BuildContext context, String url, String? mediaId,
     case VideoPlayback.external:
       break;
   }
-  final launchUrl = target;
-  // Fallback: prefer the Google Photos APP (not the browser). Try
-  // launching straight into the package — canResolveActivity() is
-  // unreliable here (package-visibility false-negatives sent it to the
-  // browser), so we just attempt it and fall back only if it throws.
+  if (!context.mounted) return;
+  await openPhotosLink(context, target);
+}
+
+/// Opens a Google Photos (or other) link — prefer the Google Photos APP
+/// (not the browser). Launches straight into the package —
+/// canResolveActivity() is unreliable here (package-visibility
+/// false-negatives sent it to the browser), so we just attempt it and
+/// fall back only if it throws.
+Future<void> openPhotosLink(BuildContext context, String url) async {
   const photosPkg = 'com.google.android.apps.photos';
   try {
     await AndroidIntent(
       action: 'android.intent.action.VIEW',
-      data: launchUrl,
+      data: url,
       package: photosPkg,
     ).launch();
     return;
   } catch (_) {/* Photos not installed / can't handle it → default below */}
   try {
-    await AndroidIntent(action: 'android.intent.action.VIEW', data: launchUrl)
+    await AndroidIntent(action: 'android.intent.action.VIEW', data: url)
         .launch();
   } catch (e) {
     if (context.mounted) {

@@ -1139,10 +1139,14 @@ class _TimelineScreenState extends State<TimelineScreen> {
             tooltip: 'Rest timer',
           ),
         // Retroactive Google Photos linking of attached clips (durable
-        // links + thumbnails survive reinstall / deleting the clip).
+        // links + thumbnails survive reinstall / deleting the clip). Shown
+        // for ANY view with a video field — before the durable dims sync
+        // in, the screen explains what's missing instead of the icon
+        // silently not appearing (2026-10-14: it was gated on
+        // video_photos_url, so it vanished until the schema synced).
         if (!_readOnly &&
             !widget.kioskMode &&
-            PhotosLinkScreen.linkableVideoField(widget.view) != null)
+            PhotosLinkScreen.videoFieldOf(widget.view) != null)
           IconButton(
             icon: const Icon(Icons.add_link),
             tooltip: 'Link clips to Google Photos',
@@ -1151,7 +1155,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
                 builder: (_) => PhotosLinkScreen(
                   view: widget.view,
                   repository: widget.repository,
-                  videoField: PhotosLinkScreen.linkableVideoField(widget.view)!,
+                  videoField: PhotosLinkScreen.videoFieldOf(widget.view)!,
                 ),
               ));
               if (mounted) _reload();
@@ -2647,7 +2651,7 @@ class _ExpandedDetails extends StatelessWidget {
   bool _show(Dimension dim, Map<String, Object?> row) {
     if (dim.name == 'id') return false;
     // Synced base64 thumbnails are data, not something to read.
-    if (isBlobDim(dim.name)) return false;
+    if (isPromptExcludedDim(dim.name)) return false;
     if (dim.name.startsWith('__')) return false;
     final v = row[dim.name];
     if (v == null) return false;

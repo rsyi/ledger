@@ -804,6 +804,38 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   calibration section. That meta is DEVICE-LOCAL — the Mac nightly /
   weekly-review tabs do NOT see it (deliberate minimal shape; promote
   to a sheet tab if the coach needs it offline).
+- **Durable clips (2026-10-14)**: attach stays OFFLINE (local picker
+  unchanged) but also writes synced strength siblings (video_ref.dart
+  convention `<base>_*`, all editable:false + autofill:false):
+  `video_thumb` (mid-frame JPEG, long side ≤200 px, ≤10 KB, as a
+  `data:image/jpeg;base64,` URI — Sheets-safe under USER_ENTERED; ladder
+  200@70→200@55→160@50→120@40, video_durable.dart; measured 2.6-7.1 KB
+  at 200@70 on real camera frames), `video_taken_at` (datetime, local;
+  MediaStore DATE_TAKEN from the pick, else MediaMetadataRetriever
+  METADATA_KEY_DATE), `video_duration_ms`. MainActivity: pick returns
+  dateTaken/duration, frames take `maxSide`, probe returns `date`,
+  video_pick `canRead`. RETROACTIVE LINKING (online, user-initiated):
+  strength Log app-bar link icon → photos_link_screen.dart ("N clips not
+  linked" = distinct clips) → Photos PICKER API (gateway RESTORED,
+  integrations/photos_picker_gateway.dart, multi-select, `/autoclose`,
+  scope photospicker.mediaitems.readonly, client id =
+  AppConfig.googleServerClientId) → photos_link.dart matcher: tier 0
+  taken_at ±2 min (+ duration ±1 s when both known — the Picker API has
+  NO duration, so time decides), tier 1 (pre-metadata rows) same day +
+  start/end_time ±10 min, tier 2 same-day-only → review only; one-to-one
+  greedy, auto only when clearly best (margin 15 s / 2 min), metadata-
+  candidate items never fall to a looser tier; rest → review cards
+  (Link/Skip). Writes `video_photos_url` =
+  photos.google.com/lr/photo/<id> on every row of the clip + a
+  `baseUrl=w200-h200` thumb where the row has none. NEVER fetches `=dv`
+  video bytes. `video_media_id` keeps meaning device cache/RPE key.
+  Playback order (resolvePlayback): local clip (readable) → app copy →
+  Photos link (row link or legacy photos.google.com video_url) →
+  thumbnail-only dialog with the link hint. Blob dims (`*_thumb`) are
+  excluded from CoachBrain renderTable, tool/coach_dump.dart, the
+  timeline detail + history summaries, and ledger-mcp get_recent_data
+  (isDroppedColumn). Siblings are written only when the view declares
+  them (old schema → silent no-op; link icon hidden).
 - **Coach** (the big feature, v3 architecture):
   - `coach_chat` synced view rendered ONLY as chat: pinned tinted
     Coach row (unread accent via meta `coach_chat_last_read_ts`) +
@@ -1357,6 +1389,12 @@ after Today — the WEEK PLANNER bootstrap sync (run + queued rerun).
   (e.g. a Barbell Squat set filling "Bulgarian split squat"); aliases
   only expand one word cross-day (RDL/BSS); post-cut "4x4 run …" prose
   yields no item. Strain-based load modulation still not built.
+- Durable clips (2026-10-14): ORDER — install the APK, THEN push
+  airledger-fitness (strength gains video_thumb/video_taken_at/
+  video_duration_ms/video_photos_url). Linking needs the Photos Picker
+  API still enabled in GCP ryi-data-entry + the scope on the consent
+  screen (worked 2026-09-28). On-device verify wanted: DATE_TAKEN vs
+  Photos createTime agreement (±2 min window), first link session.
 - Video-attach (local picker, 2026-10-02): no GCP setup needed any
   more. On-device verify wanted: attach a Google-Photos-backed clip
   from the system picker, confirm the grant persists across a reboot

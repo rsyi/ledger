@@ -30,6 +30,8 @@ import 'settings_screen.dart';
 import '../services/heart_rate_service.dart';
 import '../services/integrations/gmail_gateway.dart';
 import '../services/integrations/kaya_gmail.dart';
+import '../services/integrations/photos_picker_gateway.dart';
+import '../services/photos_link.dart';
 import '../services/video_attach.dart';
 import '../services/video_file_store.dart';
 import '../services/video_rpe.dart';
@@ -645,6 +647,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       metaGet: engineRepo?.metaGet,
       metaSet: engineRepo?.metaSet,
     );
+    // Retroactive Google Photos linking of attached clips (photos_link
+    // .dart): online + user-initiated from the strength log. Needs the
+    // build's web OAuth client id (same one as the data sign-in / Kaya
+    // Gmail); absent → the link screen explains instead.
+    final photosClientId = assetConfig.googleServerClientId;
+    PhotosLinkService.instance = photosClientId == null
+        ? null
+        : PhotosLinkService(PhotosLinkFlow(
+            gateway:
+                GoogleSignInPhotosPickerGateway(serverClientId: photosClientId),
+          ));
     // Started the top of the bootstrap (perf #9) so it overlaps the
     // network awaits; by here it has normally already completed.
     final analytics = await analyticsF;

@@ -33,10 +33,12 @@ import '../services/week_planner.dart' show WeekPlanner;
 import 'chat_screen.dart';
 import 'design/design.dart';
 import 'form_screen.dart';
+import 'photos_link_screen.dart';
 import '../services/video_rpe.dart' show mediaIdFieldFor;
 import 'widgets/history_panel.dart';
 import 'widgets/rest_timer_sheet.dart';
 import 'widgets/video_preview.dart';
+import '../services/video_ref.dart';
 
 /// One row in the timeline. Three flavors:
 /// - `_Item.planned`  — from PlanStore, not in sheet yet
@@ -1055,6 +1057,8 @@ class _TimelineScreenState extends State<TimelineScreen> {
           url: url,
           mediaId: (mid == null || mid.isEmpty) ? null : mid,
           size: 28,
+          thumbData: values[thumbFieldFor(d.name)]?.toString(),
+          photosUrl: values[photosUrlFieldFor(d.name)]?.toString(),
         ),
       );
       break;
@@ -1133,6 +1137,25 @@ class _TimelineScreenState extends State<TimelineScreen> {
             icon: const Icon(Icons.timer_outlined),
             onPressed: () => showRestTimer(context),
             tooltip: 'Rest timer',
+          ),
+        // Retroactive Google Photos linking of attached clips (durable
+        // links + thumbnails survive reinstall / deleting the clip).
+        if (!_readOnly &&
+            !widget.kioskMode &&
+            PhotosLinkScreen.linkableVideoField(widget.view) != null)
+          IconButton(
+            icon: const Icon(Icons.add_link),
+            tooltip: 'Link clips to Google Photos',
+            onPressed: () async {
+              await Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => PhotosLinkScreen(
+                  view: widget.view,
+                  repository: widget.repository,
+                  videoField: PhotosLinkScreen.linkableVideoField(widget.view)!,
+                ),
+              ));
+              if (mounted) _reload();
+            },
           ),
         // "Update": push not-yet-pushed transactions to QuickBooks as
         // inventory changes. Only shown when this view is QBO-mapped.
@@ -2623,6 +2646,8 @@ class _ExpandedDetails extends StatelessWidget {
 
   bool _show(Dimension dim, Map<String, Object?> row) {
     if (dim.name == 'id') return false;
+    // Synced base64 thumbnails are data, not something to read.
+    if (isBlobDim(dim.name)) return false;
     if (dim.name.startsWith('__')) return false;
     final v = row[dim.name];
     if (v == null) return false;

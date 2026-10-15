@@ -819,13 +819,42 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   linked" = distinct clips) → Photos PICKER API (gateway RESTORED,
   integrations/photos_picker_gateway.dart, multi-select, `/autoclose`,
   scope photospicker.mediaitems.readonly, client id =
-  AppConfig.googleServerClientId) → photos_link.dart matcher: tier 0
-  taken_at ±2 min (+ duration ±1 s when both known — the Picker API has
-  NO duration, so time decides), tier 1 (pre-metadata rows) same day +
-  start/end_time ±10 min, tier 2 same-day-only → review only; one-to-one
-  greedy, auto only when clearly best (margin 15 s / 2 min), metadata-
-  candidate items never fall to a looser tier; rest → review cards
-  (Link/Skip). Writes `video_photos_url` =
+  AppConfig.googleServerClientId) → photos_link.dart matcher: ONLY the
+  clip's own recording time `video_taken_at` vs the item's createTime
+  ±2 min (+ duration ±1 s when both known — the Picker API has NO
+  duration). USER DIRECTIVE (2026-10-14): the set's logged start/end
+  time is NEVER evidence (the old ±10 min logged-time tier is GONE).
+  Pre-metadata clips get `video_taken_at` BACKFILLED on screen open from
+  the local file / app copy (probe: MediaStore DATE_TAKEN for content://
+  — MainActivity probe now returns `dateTaken` — else container date;
+  1904/1970 sentinels rejected); file gone → "no video timestamp" →
+  same-day review only, never automatic. One-to-one greedy, auto only
+  when clearly best (15 s margin); rest → review cards (Link/Skip).
+  AUTO-VERIFICATION (photos_verify.dart + image_hash.dart, pure Dart
+  over dart:ui decode, no `image` dep): inside the picker session the
+  item's `=w256-h256` thumbnail vs local frames at 0/10/50 % (maxSide
+  256) — masked 64-bit dHash (bits with |Δluma| < 2 ignored; < 16
+  confident bits = inconclusive), best distance, aspect check (±90°
+  rotation tried). verified ≤ 12 bits. Evidence: 18 real clips — same
+  clip max 10 (51/54 ≤ 2), different scene min 15 / median 29; SAME
+  tripod different clip 0–26 (indistinguishable — the time match does
+  that). Decision: time+image → link `verified:<bits>`; no local clip /
+  flat frames → link `unverified`; image mismatch / aspect → NOT linked,
+  `mismatch:<bits|->:<item id>` persisted + review card with both
+  images ("Link anyway" → `manual:<bits>`); manual review link →
+  `manual`. Stored in NEW strength dim `video_photos_check`
+  (editable:false, autofill:false; excluded from prompts via
+  isPromptExcludedDim). Cloud thumbs saved device-local
+  (PhotosThumbStore, appSupport/photos_thumbs/<id>.jpg — NOT synced).
+  "Linked clips" review screen (linked_clips_screen.dart, from the link
+  screen's app bar / "Review N linked clips"): card per clip (grouped
+  rows), local frame vs saved cloud thumb, status chip (verified green /
+  unverified amber incl. never-checked / manual blue / images-differ
+  red), Play local / Open in Google Photos / Unlink (clears url+check)
+  / Link anyway + Dismiss for mismatches; All / Needs review filter; ↻
+  "Re-check links" = picker again — re-picked LINKED items re-verified
+  by exact id (link kept, check updated). Device access behind
+  ClipMediaAccess (tests fake it). Writes `video_photos_url` =
   photos.google.com/lr/photo/<id> on every row of the clip + a
   `baseUrl=w200-h200` thumb where the row has none. NEVER fetches `=dv`
   video bytes. `video_media_id` keeps meaning device cache/RPE key.
@@ -835,7 +864,10 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   excluded from CoachBrain renderTable, tool/coach_dump.dart, the
   timeline detail + history summaries, and ledger-mcp get_recent_data
   (isDroppedColumn). Siblings are written only when the view declares
-  them (old schema → silent no-op; link icon hidden).
+  them (old schema → silent no-op). The link icon shows for ANY view
+  with a `widget: video` field (it used to hide until video_photos_url
+  synced — the user couldn't find it); without the dims the screen
+  explains the schema update is needed.
 - **Coach** (the big feature, v3 architecture):
   - `coach_chat` synced view rendered ONLY as chat: pinned tinted
     Coach row (unread accent via meta `coach_chat_last_read_ts`) +
@@ -1391,7 +1423,10 @@ after Today — the WEEK PLANNER bootstrap sync (run + queued rerun).
   yields no item. Strain-based load modulation still not built.
 - Durable clips (2026-10-14): ORDER — install the APK, THEN push
   airledger-fitness (strength gains video_thumb/video_taken_at/
-  video_duration_ms/video_photos_url). Linking needs the Photos Picker
+  video_duration_ms/video_photos_url, then video_photos_check — the
+  check commit is local-only until the verification APK is installed).
+  ledger-mcp isDroppedColumn does NOT drop `*_photos_check` yet (tiny
+  string; add if it shows up in get_recent_data noise). Linking needs the Photos Picker
   API still enabled in GCP ryi-data-entry + the scope on the consent
   screen (worked 2026-09-28). On-device verify wanted: DATE_TAKEN vs
   Photos createTime agreement (±2 min window), first link session.

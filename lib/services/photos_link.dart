@@ -4,29 +4,34 @@
 /// are auto-backed-up to Google Photos by the phone, so a row can gain a
 /// DURABLE link later: the user multi-selects clips in the Photos Picker
 /// (photos_picker_gateway.dart), and each picked item is matched to the
-/// row(s) it was attached to:
+/// row(s) it was attached to by TIMESTAMPS OF THE VIDEO ONLY (user,
+/// 2026-10-14: "use the timestamp of the google photos video and the
+/// timestamp of the logged set VIDEO" — the set's logged start/end time
+/// is NOT evidence and is never used):
 ///
-///   tier 0 METADATA — the row's `<base>_taken_at` within ±2 min of the
-///     item's createTime AND |duration − `<base>_duration_ms`| ≤ 1 s
-///     when both are known (the Picker API exposes no duration today,
-///     so in practice the time decides);
-///   tier 1 LOGGED TIME — rows without recording metadata (attached
-///     before 2026-10-14): same day as the row's date AND createTime
-///     within ±10 min of the set's start_time / end_time;
-///   tier 2 SAME DAY — no metadata and no logged time: same day only —
-///     never automatic, always offered for review.
+///   tier 0 METADATA — the row's `<base>_taken_at` (the clip's own
+///     recording time) within ±2 min of the item's createTime AND
+///     |duration − `<base>_duration_ms`| ≤ 1 s when both are known (the
+///     Picker API exposes no duration today, so in practice the time
+///     decides). Clips attached before recording metadata existed get
+///     `<base>_taken_at` BACKFILLED from the local file when the link
+///     screen opens ([probeClipMetadata] / [timestampBackfillRows]);
+///   NO TIMESTAMP — the clip's file is gone, so no recording time can
+///     be read: same logged DAY only, never automatic — offered for a
+///     manual Link/Skip review with the cloud thumbnail.
 ///
 /// Assignment is ONE-TO-ONE (an item links one clip, a clip one item),
-/// greedy by (tier, |Δt|). A pair is taken automatically only when it is
+/// greedy by |Δt|. A pair is taken automatically only when it is
 /// CLEARLY best: no other free candidate (for the item, or competing for
-/// the clip) within the tier's margin (15 s metadata / 2 min logged
-/// time). Everything else is returned as ambiguous (with candidates) or
-/// unmatched, for the review sheet.
+/// the clip) within 15 s. Everything else is returned as ambiguous (with
+/// candidates) or unmatched, for the review sheet. Time matches are then
+/// image-VERIFIED before linking (photos_verify.dart).
 ///
 /// Rows sharing one clip (same media id / ref) are ONE candidate; a link
 /// writes all of them. `video_media_id` keeps its meaning (the device
 /// cache key + RPE-estimate key); the durable identity lives in
-/// `<base>_photos_url` = `photos.google.com/lr/photo/<persistent item id>`.
+/// `<base>_photos_url` = `photos.google.com/lr/photo/<persistent item id>`
+/// and how it was checked in `<base>_photos_check`.
 library;
 
 import 'dart:async';
@@ -36,6 +41,9 @@ import 'package:android_intent_plus/android_intent.dart';
 import 'package:intl/intl.dart';
 
 import 'integrations/photos_picker_gateway.dart';
+import 'photos_verify.dart' show LinkCheck, LinkStatus;
+import 'video_durable.dart';
+import 'video_frames.dart';
 import 'video_ref.dart';
 
 // ------------------------------------------------------------ candidates
@@ -48,8 +56,8 @@ class ClipCandidate {
     this.takenAt,
     this.durationMs,
     this.date,
-    this.loggedTimes = const [],
     this.hasThumb = false,
+    this.check,
   });
 
   final String key;
@@ -62,26 +70,41 @@ class ClipCandidate {
   /// The logged day (date only).
   final DateTime? date;
 
-  /// start_time / end_time of the rows, on [date], local.
-  final List<DateTime> loggedTimes;
   final bool hasThumb;
 
-  /// "Barbell Squat 315×3 · Oct 12, 5:41 PM" — review-sheet label.
+  /// The stored `<base>_photos_check` (null = never checked).
+  final LinkCheck? check;
+
+  /// The first row's `<base>_media_id` (device cache key), if any.
+  String? mediaId(String videoField) {
+    for (final r in rows) {
+      final m = r['${videoFieldBase(videoField)}_media_id']?.toString().trim();
+      if (m != null && m.isNotEmpty) return m;
+    }
+    return null;
+  }
+
+  /// "Barbell Squat 315×3 · Oct 12, 5:41 PM" — review-sheet label
+  /// (recording time when known, else just the logged day).
   String get label {
     final r = rows.first;
     final ex = r['exercise']?.toString().trim() ?? '';
-    final w = r['weight']?.toString().trim() ?? '';
-    final reps = r['reps']?.toString().trim() ?? '';
+    final w = _num(r['weight']);
+    final reps = _num(r['reps']);
     final load = w.isNotEmpty && reps.isNotEmpty ? ' $w×$reps' : '';
-    final when = takenAt ??
-        (loggedTimes.isEmpty ? date : loggedTimes.first);
-    final whenStr = when == null
-        ? ''
-        : (takenAt != null || loggedTimes.isNotEmpty)
-            ? DateFormat('MMM d, h:mm a').format(when)
-            : DateFormat('MMM d').format(when);
-    final head = '${ex.isEmpty ? 'Clip' : ex}$load';
+    final sets = rows.length > 1 ? ' (${rows.length} sets)' : '';
+    final whenStr = takenAt != null
+        ? DateFormat('MMM d, h:mm a').format(takenAt!)
+        : date != null
+            ? DateFormat('MMM d').format(date!)
+            : '';
+    final head = '${ex.isEmpty ? 'Clip' : ex}$load$sets';
     return whenStr.isEmpty ? head : '$head · $whenStr';
+  }
+
+  static String _num(Object? v) {
+    if (v is double && v == v.roundToDouble()) return v.toInt().toString();
+    return v?.toString().trim() ?? '';
   }
 }
 
@@ -92,64 +115,74 @@ DateTime? _asDate(Object? v) {
   return DateTime.tryParse(s);
 }
 
-/// Time-of-day strings as the app writes them (`h:mm:ss a` from the
-/// now-button) or hand-typed 24 h forms → offset from midnight.
-Duration? parseTimeOfDay(Object? raw) {
-  final s = raw?.toString().trim() ?? '';
-  if (s.isEmpty) return null;
-  for (final fmt in const ['h:mm:ss a', 'h:mm a', 'H:mm:ss', 'H:mm']) {
-    try {
-      final t = DateFormat(fmt).parseStrict(s);
-      return Duration(hours: t.hour, minutes: t.minute, seconds: t.second);
-    } catch (_) {/* next */}
-  }
-  return null;
-}
-
 /// Builds the linkable candidates of [rows] for [videoField]: unlinked
-/// clips (video_ref.dart unlinkedClips), each with its metadata + logged
-/// times. [linkedItemIds] collects the Photos item ids already linked
-/// anywhere (so re-picking a linked clip is a no-op).
+/// clips (video_ref.dart unlinkedClips), each with its recording
+/// metadata.
 List<ClipCandidate> linkCandidates(
   Iterable<Map<String, Object?>> rows,
   String videoField, {
   String dateField = 'date',
+}) =>
+    [
+      for (final e in unlinkedClips(rows, videoField).entries)
+        _candidate(e.key, e.value, videoField, dateField),
+    ];
+
+ClipCandidate _candidate(String key, List<Map<String, Object?>> group,
+    String videoField, String dateField) {
+  DateTime? taken;
+  int? duration;
+  DateTime? date;
+  LinkCheck? check;
+  var hasThumb = false;
+  for (final r in group) {
+    taken ??= _asDate(r[takenAtFieldFor(videoField)]);
+    duration ??=
+        num.tryParse(r[durationFieldFor(videoField)]?.toString() ?? '')
+            ?.toInt();
+    final d = _asDate(r[dateField]);
+    if (d != null) date ??= DateTime(d.year, d.month, d.day);
+    check ??= LinkCheck.parse(r[photosCheckFieldFor(videoField)]);
+    hasThumb = hasThumb ||
+        (r[thumbFieldFor(videoField)]?.toString().trim().isNotEmpty ?? false);
+  }
+  return ClipCandidate(
+    key: key,
+    rows: group,
+    takenAt: taken,
+    durationMs: duration,
+    date: date,
+    hasThumb: hasThumb,
+    check: check,
+  );
+}
+
+/// LINKED clips keyed by their Photos item id (rows grouped per clip) —
+/// "Re-check links" re-verifies an item picked again by EXACT id, and
+/// the review screen lists them.
+Map<String, ClipCandidate> linkedClipsByItemId(
+  Iterable<Map<String, Object?>> rows,
+  String videoField, {
+  String dateField = 'date',
 }) {
-  final out = <ClipCandidate>[];
-  unlinkedClips(rows, videoField).forEach((key, group) {
-    DateTime? taken;
-    int? duration;
-    DateTime? date;
-    var hasThumb = false;
-    final times = <DateTime>[];
-    for (final r in group) {
-      taken ??= _asDate(r[takenAtFieldFor(videoField)]);
-      duration ??= num.tryParse(
-              r[durationFieldFor(videoField)]?.toString() ?? '')
-          ?.toInt();
-      final d = _asDate(r[dateField]);
-      if (d != null) date ??= DateTime(d.year, d.month, d.day);
-      hasThumb = hasThumb ||
-          (r[thumbFieldFor(videoField)]?.toString().trim().isNotEmpty ??
-              false);
-      if (d != null) {
-        for (final f in const ['start_time', 'end_time']) {
-          final tod = parseTimeOfDay(r[f]);
-          if (tod != null) times.add(DateTime(d.year, d.month, d.day).add(tod));
-        }
-      }
-    }
-    out.add(ClipCandidate(
-      key: key,
-      rows: group,
-      takenAt: taken,
-      durationMs: duration,
-      date: date,
-      loggedTimes: times,
-      hasThumb: hasThumb,
-    ));
-  });
-  return out;
+  final groups = <String, List<Map<String, Object?>>>{};
+  final ids = <String, String>{};
+  for (final r in rows) {
+    final ref = r[videoField]?.toString().trim() ?? '';
+    final url = effectivePhotosUrl(
+      ref: ref,
+      photosUrl: r[photosUrlFieldFor(videoField)]?.toString(),
+    );
+    final id = photosItemIdOf(url);
+    if (id == null) continue;
+    final key = ref.isEmpty ? 'photos:$id' : clipKeyOf(r, videoField);
+    groups.putIfAbsent(key, () => []).add(r);
+    ids.putIfAbsent(key, () => id);
+  }
+  return {
+    for (final e in groups.entries)
+      ids[e.key]!: _candidate(e.key, e.value, videoField, dateField),
+  };
 }
 
 /// Photos item ids already linked on any row (constructed deep links in
@@ -168,9 +201,74 @@ Set<String> linkedItemIds(
   return out;
 }
 
+// --------------------------------------------------------- review list
+
+/// One clip on the "Linked clips" review screen.
+class LinkReviewEntry {
+  const LinkReviewEntry({
+    required this.clip,
+    required this.itemId,
+    required this.linked,
+    this.legacy = false,
+  });
+
+  final ClipCandidate clip;
+
+  /// The Photos item (the link's id, or a mismatch's candidate).
+  final String itemId;
+
+  /// False = a persisted image MISMATCH on an unlinked clip.
+  final bool linked;
+
+  /// The link IS the row's `video_url` (2026-09-28..10-01 attach) — it
+  /// can't be unlinked (that link is the clip itself).
+  final bool legacy;
+
+  LinkCheck? get check => clip.check;
+
+  /// Unverified (incl. never checked) and mismatches need a look.
+  bool get needsReview => check == null || check!.needsReview;
+}
+
+/// Every linked clip + every persisted mismatch, newest first.
+List<LinkReviewEntry> linkReviewEntries(
+  Iterable<Map<String, Object?>> rows,
+  String videoField, {
+  String dateField = 'date',
+}) {
+  final out = <LinkReviewEntry>[
+    for (final e in linkedClipsByItemId(rows, videoField,
+            dateField: dateField)
+        .entries)
+      LinkReviewEntry(
+        clip: e.value,
+        itemId: e.key,
+        linked: true,
+        legacy: (e.value.rows.first[photosUrlFieldFor(videoField)]
+                    ?.toString()
+                    .trim() ??
+                '')
+            .isEmpty,
+      ),
+    for (final c in linkCandidates(rows, videoField, dateField: dateField))
+      if (c.check?.status == LinkStatus.mismatch && c.check?.itemId != null)
+        LinkReviewEntry(clip: c, itemId: c.check!.itemId!, linked: false),
+  ];
+  DateTime? when(LinkReviewEntry e) => e.clip.takenAt ?? e.clip.date;
+  out.sort((a, b) {
+    final x = when(a), y = when(b);
+    if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1;
+    return y.compareTo(x);
+  });
+  return out;
+}
+
 // --------------------------------------------------------------- matcher
 
-enum MatchBasis { metadata, loggedTime, sameDay }
+/// [metadata] = recording-time match (may auto-link); [noTimestamp] =
+/// the clip has no readable recording time — same logged day, REVIEW
+/// ONLY (never automatic).
+enum MatchBasis { metadata, noTimestamp }
 
 class ClipMatch {
   const ClipMatch(this.item, this.clip, this.basis, this.delta);
@@ -178,7 +276,7 @@ class ClipMatch {
   final ClipCandidate clip;
   final MatchBasis basis;
 
-  /// |createTime − key time| (null for [MatchBasis.sameDay]).
+  /// |createTime − recording time| (null for [MatchBasis.noTimestamp]).
   final Duration? delta;
 }
 
@@ -208,11 +306,8 @@ class LinkMatchResult {
 
 const kMetadataWindow = Duration(minutes: 2);
 const kDurationTolerance = Duration(seconds: 1);
-const kLoggedTimeWindow = Duration(minutes: 10);
-const _margins = {
-  MatchBasis.metadata: Duration(seconds: 15),
-  MatchBasis.loggedTime: Duration(minutes: 2),
-};
+/// A metadata pair auto-links only when no rival is within this.
+const kMetadataMargin = Duration(seconds: 15);
 
 bool _sameDay(DateTime a, DateTime b) =>
     a.year == b.year && a.month == b.month && a.day == b.day;
@@ -236,18 +331,11 @@ ClipMatch? scorePair(PickedMediaItem item, ClipCandidate clip,
     }
     return ClipMatch(item, clip, MatchBasis.metadata, d);
   }
+  // No recording time: the set's logged time is NOT evidence (user
+  // directive) — same day only, for manual review.
   final day = clip.date;
   if (day == null || !_sameDay(ct, day)) return null;
-  if (clip.loggedTimes.isEmpty) {
-    return ClipMatch(item, clip, MatchBasis.sameDay, null);
-  }
-  Duration? best;
-  for (final t in clip.loggedTimes) {
-    final d = ct.difference(t).abs();
-    if (best == null || d < best) best = d;
-  }
-  if (best! > kLoggedTimeWindow) return null;
-  return ClipMatch(item, clip, MatchBasis.loggedTime, best);
+  return ClipMatch(item, clip, MatchBasis.noTimestamp, null);
 }
 
 /// Matches picked [items] to [clips] one-to-one (see library doc).
@@ -288,34 +376,27 @@ LinkMatchResult matchPickedClips(
   final usedItems = <String>{};
   final usedClips = <String>{};
   final matched = <ClipMatch>[];
-  // An item with ANY metadata candidate is decided by metadata alone: if
-  // that was ambiguous it goes to review, never to a looser tier.
-  final metaItems = {
+  // Only recording-time pairs can auto-link; no-timestamp pairs are
+  // review candidates, never automatic.
+  final tier = [
     for (final p in pairs)
-      if (p.basis == MatchBasis.metadata) p.item.id,
-  };
-  for (final basis in const [MatchBasis.metadata, MatchBasis.loggedTime]) {
-    final margin = _margins[basis]!;
-    final tier = [for (final p in pairs) if (p.basis == basis) p];
-    for (final p in tier) {
-      if (usedItems.contains(p.item.id) || usedClips.contains(p.clip.key)) {
-        continue;
-      }
-      if (basis != MatchBasis.metadata && metaItems.contains(p.item.id)) {
-        continue;
-      }
-      // Competitors among still-free pairs of this tier.
-      final rival = tier.any((q) =>
-          !identical(q, p) &&
-          !usedItems.contains(q.item.id) &&
-          !usedClips.contains(q.clip.key) &&
-          (q.item.id == p.item.id || q.clip.key == p.clip.key) &&
-          q.delta! - p.delta! < margin);
-      if (rival) continue; // left for review
-      matched.add(p);
-      usedItems.add(p.item.id);
-      usedClips.add(p.clip.key);
+      if (p.basis == MatchBasis.metadata) p,
+  ];
+  for (final p in tier) {
+    if (usedItems.contains(p.item.id) || usedClips.contains(p.clip.key)) {
+      continue;
     }
+    // Competitors among still-free recording-time pairs.
+    final rival = tier.any((q) =>
+        !identical(q, p) &&
+        !usedItems.contains(q.item.id) &&
+        !usedClips.contains(q.clip.key) &&
+        (q.item.id == p.item.id || q.clip.key == p.clip.key) &&
+        q.delta! - p.delta! < kMetadataMargin);
+    if (rival) continue; // left for review
+    matched.add(p);
+    usedItems.add(p.item.id);
+    usedClips.add(p.clip.key);
   }
 
   final ambiguous = <AmbiguousPick>[];
@@ -353,18 +434,104 @@ List<Map<String, Object?>> linkedRows(
   String videoField, {
   required bool Function(String dim) hasDim,
   String? thumbDataUri,
+  LinkCheck? check,
 }) {
   final urlField = photosUrlFieldFor(videoField);
   final thumbField = thumbFieldFor(videoField);
+  final checkField = photosCheckFieldFor(videoField);
   return [
     for (final r in clip.rows)
       {
         ...r,
         if (hasDim(urlField)) urlField: photosProductUrl(item.id),
+        if (check != null && hasDim(checkField)) checkField: check.encode(),
         if (thumbDataUri != null &&
             hasDim(thumbField) &&
             (r[thumbField]?.toString().trim().isEmpty ?? true))
           thumbField: thumbDataUri,
+      },
+  ];
+}
+
+/// [clip]'s rows with only `<base>_photos_check` set to [check] (a
+/// re-check of a linked clip, or a persisted mismatch on an unlinked
+/// one). Empty when the view has no check dim. Pure.
+List<Map<String, Object?>> checkedRows(
+  ClipCandidate clip,
+  String videoField,
+  LinkCheck? check, {
+  required bool Function(String dim) hasDim,
+}) {
+  final f = photosCheckFieldFor(videoField);
+  if (!hasDim(f)) return const [];
+  return [
+    for (final r in clip.rows) {...r, f: check?.encode()},
+  ];
+}
+
+/// UNLINK: [clip]'s rows with `<base>_photos_url` + `<base>_photos_check`
+/// cleared (the clip is unlinked again and reappears in "N clips not
+/// linked"). The synced thumbnail stays — it describes the local clip.
+/// A legacy row whose `video_url` IS the Photos link is left alone (that
+/// link is the clip itself). Pure.
+List<Map<String, Object?>> unlinkedRows(
+  ClipCandidate clip,
+  String videoField, {
+  required bool Function(String dim) hasDim,
+}) {
+  final urlField = photosUrlFieldFor(videoField);
+  final checkField = photosCheckFieldFor(videoField);
+  return [
+    for (final r in clip.rows)
+      {
+        ...r,
+        if (hasDim(urlField)) urlField: null,
+        if (hasDim(checkField)) checkField: null,
+      },
+  ];
+}
+
+// ------------------------------------------------- timestamp backfill
+
+/// The recording metadata of a local clip [source] (content URI or app
+/// cache path): MediaStore DATE_TAKEN (`dateTaken`, content:// only)
+/// else the container creation date; 1904/1970 sentinels rejected
+/// (video_durable.dart clipMetadataFrom). Null when unreadable.
+Future<ClipMetadata?> probeClipMetadata(
+    FrameExtractor x, String source) async {
+  try {
+    final probe = await x.probe(source);
+    return clipMetadataFrom(
+      dateTakenMs: (probe['dateTaken'] as num?)?.toInt(),
+      probe: probe,
+    );
+  } catch (_) {
+    return null; // grant revoked / file gone
+  }
+}
+
+/// [clip]'s rows with `<base>_taken_at` (and `<base>_duration_ms` where
+/// blank) filled from [meta]; null when [meta] has no recording time or
+/// the view can't store it. Pure.
+List<Map<String, Object?>>? timestampBackfillRows(
+  ClipCandidate clip,
+  ClipMetadata? meta,
+  String videoField, {
+  required bool Function(String dim) hasDim,
+}) {
+  final taken = meta?.takenAt;
+  final tf = takenAtFieldFor(videoField);
+  if (taken == null || !hasDim(tf)) return null;
+  final df = durationFieldFor(videoField);
+  return [
+    for (final r in clip.rows)
+      {
+        ...r,
+        tf: taken,
+        if (meta!.durationMs != null &&
+            hasDim(df) &&
+            (r[df]?.toString().trim().isEmpty ?? true))
+          df: meta.durationMs,
       },
   ];
 }

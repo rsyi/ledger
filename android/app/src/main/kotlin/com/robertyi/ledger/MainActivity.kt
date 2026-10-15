@@ -102,7 +102,31 @@ class MainActivity : FlutterFragmentActivity() {
                                 val date = r.extractMetadata(
                                     MediaMetadataRetriever.METADATA_KEY_DATE,
                                 )
-                                mapOf("durationMs" to ms, "date" to date)
+                                // MediaStore DATE_TAKEN for content:// refs
+                                // (timestamp BACKFILL of clips attached before
+                                // recording metadata existed — the same column
+                                // the picker reads at attach).
+                                var dateTaken: Long? = null
+                                if (path.startsWith("content://")) {
+                                    try {
+                                        contentResolver.query(
+                                            Uri.parse(path), arrayOf("datetaken"),
+                                            null, null, null,
+                                        )?.use { c ->
+                                            if (c.moveToFirst()) {
+                                                val ti = c.getColumnIndex("datetaken")
+                                                if (ti >= 0 && !c.isNull(ti)) {
+                                                    dateTaken = c.getLong(ti)
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Exception) { /* container date fallback */ }
+                                }
+                                mapOf(
+                                    "durationMs" to ms,
+                                    "date" to date,
+                                    "dateTaken" to dateTaken,
+                                )
                             } finally {
                                 r.release()
                             }

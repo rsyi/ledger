@@ -23,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'llm_client.dart';
 import 'video_attach.dart';
+import 'video_durable.dart';
 import 'video_frames.dart';
 import 'video_thumb_store.dart';
 
@@ -465,6 +466,17 @@ class VideoRpeService extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  /// Offline durable extras for a fresh attach (synced thumbnail +
+  /// recording time + duration — video_durable.dart). Never throws.
+  Future<DurableClipExtras> captureDurable(VideoAttachResult video) =>
+      captureDurableExtras(
+        extractor: _extractor,
+        source: video.frameSource,
+        dateTakenMs: video.dateTakenMs,
+        pickerDurationMs: video.durationMs,
+        sizeBytes: video.sizeBytes,
+      );
 
   /// Caches a thumbnail without running the LLM estimate — used when the
   /// AI estimate is unavailable but we still want an in-app preview.

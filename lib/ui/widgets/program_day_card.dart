@@ -23,6 +23,7 @@ import '../../services/program_week.dart' show dayOnly;
 import '../../services/week_start.dart';
 import '../../services/routine_display.dart' show SessionLine;
 import '../../services/set_recommendation.dart';
+import '../../services/video_ref.dart' show photosUrlFieldFor, thumbFieldFor;
 import '../../services/video_rpe.dart' show mediaIdFieldFor;
 import '../../services/sync_scheduler.dart';
 import '../../services/warehouse_connector.dart';
@@ -357,6 +358,8 @@ class ProgramDayCardState extends State<ProgramDayCard> {
         mediaId: mid.isEmpty ? null : mid,
         exercise: r['exercise']?.toString().trim() ?? 'Clip',
         record: r,
+        thumbData: r[thumbFieldFor(field)]?.toString(),
+        photosUrl: r[photosUrlFieldFor(field)]?.toString(),
       ));
     }
     return out;
@@ -994,7 +997,13 @@ List<Widget> clipChips(
   final rest = clips.length - shown.length;
   return [
     for (final c in shown)
-      VideoThumb(url: c.url, mediaId: c.mediaId, title: title, size: 44),
+      VideoThumb(
+          url: c.url,
+          mediaId: c.mediaId,
+          title: title,
+          size: 44,
+          thumbData: c.thumbData,
+          photosUrl: c.photosUrl),
     if (rest > 0)
       _MoreClips(count: rest, clips: clips, title: title),
   ];
@@ -1024,7 +1033,12 @@ class _MoreClips extends StatelessWidget {
             runSpacing: 10,
             children: [
               for (final c in clips)
-                VideoThumb(url: c.url, mediaId: c.mediaId, title: title),
+                VideoThumb(
+                    url: c.url,
+                    mediaId: c.mediaId,
+                    title: title,
+                    thumbData: c.thumbData,
+                    photosUrl: c.photosUrl),
             ],
           ),
         ),

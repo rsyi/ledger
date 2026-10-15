@@ -77,27 +77,98 @@ void main() {
     });
   });
 
-  group('playbackTargetFor', () {
-    test('cached file always wins (legacy picker downloads + copies)', () {
-      expect(playbackTargetFor(ref: _photos, hasCachedFile: true),
-          VideoPlayback.cachedFile);
-      expect(playbackTargetFor(ref: _picker, hasCachedFile: true),
-          VideoPlayback.cachedFile);
-    });
+  group('resolvePlayback (fallback order)', () {
+    VideoPlayback r(String? ref,
+            {bool readable = false, bool cached = false, String? photos}) =>
+        resolvePlayback(
+            ref: ref,
+            localReadable: readable,
+            hasCachedFile: cached,
+            photosUrl: photos);
 
-    test('local refs play in-app straight from the URI', () {
-      expect(playbackTargetFor(ref: _picker, hasCachedFile: false),
+    test('1. the on-device clip wins while it still opens', () {
+      expect(r(_picker, readable: true, cached: true, photos: _photos),
           VideoPlayback.localUri);
     });
 
-    test('legacy Photos links open externally', () {
-      expect(playbackTargetFor(ref: _photos, hasCachedFile: false),
-          VideoPlayback.external);
+    test('2. then the app-storage copy', () {
+      expect(r(_picker, cached: true, photos: _photos),
+          VideoPlayback.cachedFile);
+      // Legacy Photos rows with a clip cached at attach time.
+      expect(r(_photos, cached: true), VideoPlayback.cachedFile);
     });
 
-    test('blank → none', () {
-      expect(playbackTargetFor(ref: '', hasCachedFile: false),
-          VideoPlayback.none);
+    test('3. then the Google Photos link (row link or legacy video_url)',
+        () {
+      expect(r(_picker, photos: _photos), VideoPlayback.photos);
+      expect(r(_photos), VideoPlayback.photos);
+    });
+
+    test('4. else thumbnail-only (gone from the phone, never linked)', () {
+      expect(r(_picker), VideoPlayback.thumbnailOnly);
+      expect(r(_picker, photos: '  '), VideoPlayback.thumbnailOnly);
+    });
+
+    test('other links open externally; blank → none', () {
+      expect(r('https://youtu.be/abc'), VideoPlayback.external);
+      expect(r(''), VideoPlayback.none);
+      expect(r(null), VideoPlayback.none);
+    });
+  });
+
+  group('durable siblings', () {
+    test('field names follow <base>_* off video_url', () {
+      expect(thumbFieldFor('video_url'), 'video_thumb');
+      expect(takenAtFieldFor('video_url'), 'video_taken_at');
+      expect(durationFieldFor('video_url'), 'video_duration_ms');
+      expect(photosUrlFieldFor('video_url'), 'video_photos_url');
+      expect(thumbFieldFor('clip'), 'clip_thumb');
+      expect(isBlobDim('video_thumb'), isTrue);
+      expect(isBlobDim('video_url'), isFalse);
+    });
+
+    test('thumb data URI round-trips and is Sheets-safe', () {
+      final bytes = List<int>.generate(300, (i) => (i * 37) & 0xff)
+        ..setAll(0, [0xff, 0xd8, 0xff]);
+      final cell = encodeThumbDataUri(bytes);
+      expect(cell, startsWith('data:image/jpeg;base64,'));
+      // USER_ENTERED never sees a formula / sign / number-shaped value.
+      expect(cell[0], isNot(anyOf('=', '+', '-', '@')));
+      expect(decodeThumbDataUri(cell), bytes);
+      // Bare base64 (hand-pasted) also decodes; garbage → null.
+      expect(decodeThumbDataUri(cell.split(',').last), bytes);
+      expect(decodeThumbDataUri('data:image/jpeg;base64,@@@'), isNull);
+      expect(decodeThumbDataUri(''), isNull);
+      expect(decodeThumbDataUri(null), isNull);
+    });
+
+    test('a full-budget thumb stays far under the 50k Sheets cell cap', () {
+      final cell = encodeThumbDataUri(List.filled(kThumbMaxBytes, 7));
+      expect(cell.length, lessThan(14000));
+      expect(cell.length, lessThan(50000));
+    });
+
+    test('linked = row photos link OR legacy Photos video_url', () {
+      expect(isClipLinked({'video_url': _picker}, 'video_url'), isFalse);
+      expect(
+          isClipLinked({'video_url': _picker, 'video_photos_url': _photos},
+              'video_url'),
+          isTrue);
+      expect(isClipLinked({'video_url': _photos}, 'video_url'), isTrue);
+    });
+
+    test('"N clips not linked" counts distinct clips, not rows', () {
+      final rows = [
+        {'video_url': _picker, 'video_media_id': 'a'},
+        {'video_url': _picker, 'video_media_id': 'a'}, // same clip
+        {'video_url': _docs, 'video_media_id': 'b'},
+        {'video_url': _docs, 'video_media_id': 'c', 'video_photos_url': _photos},
+        {'video_url': _photos}, // legacy, linked
+        {'video_url': ''},
+        {'exercise': 'Bench'},
+      ];
+      expect(unlinkedClipCount(rows, 'video_url'), 2);
+      expect(unlinkedClips(rows, 'video_url')['mid:a'], hasLength(2));
     });
   });
 

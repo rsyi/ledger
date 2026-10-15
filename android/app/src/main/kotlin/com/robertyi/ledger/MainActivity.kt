@@ -96,7 +96,13 @@ class MainActivity : FlutterFragmentActivity() {
                                 val ms = r.extractMetadata(
                                     MediaMetadataRetriever.METADATA_KEY_DURATION,
                                 )?.toLongOrNull() ?: 0L
-                                mapOf("durationMs" to ms)
+                                // Container creation time (e.g.
+                                // "20261014T153012.000Z") — durable-clip
+                                // fallback when MediaStore has no DATE_TAKEN.
+                                val date = r.extractMetadata(
+                                    MediaMetadataRetriever.METADATA_KEY_DATE,
+                                )
+                                mapOf("durationMs" to ms, "date" to date)
                             } finally {
                                 r.release()
                             }
@@ -107,6 +113,9 @@ class MainActivity : FlutterFragmentActivity() {
                     val path = call.argument<String>("path")
                     val timestamps = call.argument<List<Number>>("timestampsMs")
                     val maxWidth = call.argument<Int>("maxWidth") ?: 512
+                    // Optional LONG-side bound (durable thumbnails: portrait
+                    // clips must shrink too); overrides maxWidth when set.
+                    val maxSide = call.argument<Int>("maxSide")
                     val quality = call.argument<Int>("quality") ?: 70
                     if (path == null || timestamps == null) {
                         result.error("args", "frames needs path + timestampsMs", null)
@@ -124,7 +133,12 @@ class MainActivity : FlutterFragmentActivity() {
                                         ts.toLong() * 1000L,
                                         MediaMetadataRetriever.OPTION_CLOSEST,
                                     ) ?: continue
-                                    val scaled = if (bmp.width > maxWidth) {
+                                    val long = maxOf(bmp.width, bmp.height)
+                                    val scaled = if (maxSide != null && long > maxSide) {
+                                        val w = maxOf(1, bmp.width * maxSide / long)
+                                        val h = maxOf(1, bmp.height * maxSide / long)
+                                        Bitmap.createScaledBitmap(bmp, w, h, true)
+                                    } else if (maxSide == null && bmp.width > maxWidth) {
                                         val h = bmp.height * maxWidth / bmp.width
                                         Bitmap.createScaledBitmap(bmp, maxWidth, h, true)
                                     } else {
@@ -152,6 +166,23 @@ class MainActivity : FlutterFragmentActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "pick" -> startVideoPick(result)
+                // Does a stored local ref still open? (grant alive + clip
+                // not deleted) — playback fallback order, video_ref.dart.
+                "canRead" -> {
+                    val uri = call.argument<String>("uri")
+                    if (uri == null) {
+                        result.error("args", "canRead needs a uri", null)
+                    } else {
+                        runOffMain(result) {
+                            try {
+                                contentResolver.openFileDescriptor(Uri.parse(uri), "r")
+                                    ?.use { true } ?: false
+                            } catch (e: Exception) {
+                                false
+                            }
+                        }
+                    }
+                }
                 "copy" -> {
                     val uri = call.argument<String>("uri")
                     val dest = call.argument<String>("dest")
@@ -248,6 +279,27 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
         } catch (e: Exception) { /* metadata is best-effort */ }
+        // Recording time + duration (durable-clip keys for retroactive
+        // Google Photos linking). Separate query: document providers
+        // reject MediaStore-only columns, and that must not lose the
+        // name/size above. The system photo picker serves both.
+        var dateTaken: Long? = null
+        var duration: Long? = null
+        try {
+            contentResolver.query(
+                uri,
+                // MediaColumns.DATE_TAKEN / DURATION (API 29 constants; minSdk 26).
+                arrayOf("datetaken", "duration"),
+                null, null, null,
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val ti = c.getColumnIndex("datetaken")
+                    val di = c.getColumnIndex("duration")
+                    if (ti >= 0 && !c.isNull(ti)) dateTaken = c.getLong(ti)
+                    if (di >= 0 && !c.isNull(di)) duration = c.getLong(di)
+                }
+            }
+        } catch (e: Exception) { /* best-effort; retriever probe is the fallback */ }
         result.success(
             mapOf(
                 "uri" to uri.toString(),
@@ -255,6 +307,8 @@ class MainActivity : FlutterFragmentActivity() {
                 "mimeType" to contentResolver.getType(uri),
                 "name" to name,
                 "size" to size,
+                "dateTaken" to dateTaken,
+                "duration" to duration,
             ),
         )
     }

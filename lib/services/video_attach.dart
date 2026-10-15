@@ -46,6 +46,8 @@ class PickedLocalVideo {
     this.mimeType,
     this.name,
     this.sizeBytes,
+    this.dateTakenMs,
+    this.durationMs,
   });
 
   final String uri;
@@ -56,6 +58,11 @@ class PickedLocalVideo {
   final String? mimeType;
   final String? name;
   final int? sizeBytes;
+
+  /// MediaStore DATE_TAKEN (epoch ms) / DURATION (ms) when the provider
+  /// exposes them (the system photo picker does) — durable-clip keys.
+  final int? dateTakenMs;
+  final int? durationMs;
 
   static PickedLocalVideo fromChannel(Map<Object?, Object?> m) {
     final uri = m['uri'];
@@ -69,6 +76,8 @@ class PickedLocalVideo {
       mimeType: m['mimeType'] as String?,
       name: m['name'] as String?,
       sizeBytes: (m['size'] as num?)?.toInt(),
+      dateTakenMs: (m['dateTaken'] as num?)?.toInt(),
+      durationMs: (m['duration'] as num?)?.toInt(),
     );
   }
 }
@@ -95,6 +104,18 @@ class ChannelLocalVideoPicker implements LocalVideoPicker {
   @override
   Future<void> copyTo(String uri, String destPath) =>
       _channel.invokeMethod<void>('copy', {'uri': uri, 'dest': destPath});
+
+  /// True when [uri] still opens (grant alive, clip not deleted). False
+  /// on any failure — playback then falls back (video_ref
+  /// resolvePlayback).
+  static Future<bool> canRead(String uri) async {
+    try {
+      return await _channel.invokeMethod<bool>('canRead', {'uri': uri}) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 class VideoAttachResult {
@@ -104,6 +125,9 @@ class VideoAttachResult {
     this.cachedPath,
     this.mimeType,
     this.filename,
+    this.sizeBytes,
+    this.dateTakenMs,
+    this.durationMs,
   });
 
   /// Stable id derived from the URI (→ `video_media_id`; keys the
@@ -118,6 +142,12 @@ class VideoAttachResult {
 
   final String? mimeType;
   final String? filename;
+
+  /// Picker MediaStore columns (see [PickedLocalVideo]); feed
+  /// video_durable.dart captureDurableExtras.
+  final int? sizeBytes;
+  final int? dateTakenMs;
+  final int? durationMs;
 
   /// What the frame extractor / player should read.
   String get frameSource => frameSourceFor(ref: url, cachedPath: cachedPath)!;
@@ -174,6 +204,9 @@ class VideoAttachFlow {
       cachedPath: cached,
       mimeType: mime,
       filename: picked.name,
+      sizeBytes: picked.sizeBytes,
+      dateTakenMs: picked.dateTakenMs,
+      durationMs: picked.durationMs,
     );
   }
 }

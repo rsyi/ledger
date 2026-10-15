@@ -11,6 +11,7 @@ import '../services/display_names.dart';
 import '../services/sheets_repository.dart';
 import '../services/video_attach.dart';
 import '../services/video_draft_store.dart';
+import '../services/video_durable.dart';
 import '../services/video_file_store.dart';
 import '../services/video_rpe.dart';
 import '../services/warehouse_connector.dart';
@@ -226,6 +227,11 @@ class _FormScreenState extends State<FormScreen> {
           widget.view.dimensionByName(idf) != null) {
         _shared[idf] = draft.mediaId;
       }
+      for (final e in draft.extras.entries) {
+        if (e.value != null && widget.view.dimensionByName(e.key) != null) {
+          _shared[e.key] = e.value;
+        }
+      }
     });
   }
 
@@ -357,11 +363,21 @@ class _FormScreenState extends State<FormScreen> {
         if (widget.view.dimensionByName(idField) != null) {
           _shared[idField] = res.mediaId;
         }
+        // A replaced clip's old durable siblings (thumb / time / Photos
+        // link) would describe the WRONG footage.
+        for (final f in durableSiblingFields(dim.name)) {
+          _shared.remove(f);
+        }
       });
       // Auto-save the video immediately (it's expensive to re-attach) so
       // backing out of the form before saving doesn't lose it — restored
       // on the next open of this view's form.
       unawaited(VideoDraftStore.save(widget.view.name, res.url, res.mediaId));
+      // Durable extras, OFFLINE (video_durable.dart): a ≤10 KB synced
+      // thumbnail + recording time + duration, so the preview survives a
+      // reinstall and the clip can be linked to Google Photos later.
+      // Save awaits this briefly (_pendingVideoExtras).
+      _pendingVideoExtras = _captureVideoExtras(svc, dim, res);
       // A copy landed in app storage (grant not persistable) — keep the
       // clip cache bounded.
       if (res.cachedPath != null) unawaited(VideoFileStore.prune());
@@ -407,6 +423,24 @@ class _FormScreenState extends State<FormScreen> {
         ),
       );
     }
+  }
+
+  /// In-flight durable-extras capture for the last attach (awaited, with
+  /// a short cap, before save so the row carries its thumbnail).
+  Future<void>? _pendingVideoExtras;
+
+  Future<void> _captureVideoExtras(
+      VideoRpeService svc, Dimension dim, VideoAttachResult res) async {
+    final extras = await svc.captureDurable(res);
+    if (!mounted) return;
+    // The user may have removed / replaced the clip meanwhile.
+    if (_shared[dim.name] != res.url) return;
+    final fields = extras.fieldsFor(
+        dim.name, (f) => widget.view.dimensionByName(f) != null);
+    if (fields.isEmpty) return;
+    setState(() => _shared.addAll(fields));
+    unawaited(VideoDraftStore.save(widget.view.name, res.url, res.mediaId,
+        extras: fields));
   }
 
   /// Chip row under a `widget: video` field. Null when there's nothing
@@ -505,6 +539,9 @@ class _FormScreenState extends State<FormScreen> {
             if (dim.input?.widget == WidgetType.video && v == null) {
               _shared.remove(dim.name);
               _shared.remove(mediaIdFieldFor(dim.name));
+              for (final f in durableSiblingFields(dim.name)) {
+                _shared.remove(f);
+              }
               unawaited(VideoDraftStore.clear(widget.view.name));
             }
           }),
@@ -696,6 +733,15 @@ class _FormScreenState extends State<FormScreen> {
     setState(() => _missingRequired.clear());
 
     setState(() => _saving = true);
+    // Let a just-attached clip's durable extras land on the row (a
+    // sub-second frame grab; capped so a stuck probe never blocks save).
+    final pendingExtras = _pendingVideoExtras;
+    if (pendingExtras != null) {
+      try {
+        await pendingExtras.timeout(const Duration(seconds: 4));
+      } catch (_) {/* save without them */}
+      if (!mounted) return;
+    }
     try {
       // Plan mode: never touches the sheet. For repeat-group views we'd
       // need to encode N blocks into a single planned entry — out of

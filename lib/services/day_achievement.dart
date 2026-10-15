@@ -56,11 +56,18 @@ class DayClip {
   final String exercise;
   final Map<String, Object?> record;
 
+  /// Durable siblings (video_ref.dart): synced thumbnail data URI +
+  /// Google Photos link — preview/playback fallbacks.
+  final String? thumbData;
+  final String? photosUrl;
+
   const DayClip({
     required this.url,
     required this.mediaId,
     required this.exercise,
     required this.record,
+    this.thumbData,
+    this.photosUrl,
   });
 }
 

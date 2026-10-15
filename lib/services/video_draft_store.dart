@@ -16,7 +16,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 class VideoDraft {
   final String url;
   final String? mediaId;
-  const VideoDraft(this.url, this.mediaId);
+
+  /// Durable sibling values captured at attach (video_durable.dart):
+  /// field name → value (the taken-at DateTime is stored ISO and comes
+  /// back as a DateTime).
+  final Map<String, Object?> extras;
+  const VideoDraft(this.url, this.mediaId, {this.extras = const {}});
 }
 
 class VideoDraftStore {
@@ -24,10 +29,21 @@ class VideoDraftStore {
 
   static String _key(String view) => 'video_draft:$view';
 
-  static Future<void> save(String view, String url, String? mediaId) async {
+  static Future<void> save(String view, String url, String? mediaId,
+      {Map<String, Object?> extras = const {}}) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(
-        _key(view), jsonEncode({'url': url, 'mediaId': mediaId}));
+        _key(view),
+        jsonEncode({
+          'url': url,
+          'mediaId': mediaId,
+          'extras': {
+            for (final e in extras.entries)
+              e.key: e.value is DateTime
+                  ? {'dt': (e.value as DateTime).toIso8601String()}
+                  : e.value,
+          },
+        }));
   }
 
   static Future<VideoDraft?> load(String view) async {
@@ -38,7 +54,16 @@ class VideoDraftStore {
       final m = jsonDecode(s) as Map;
       final url = m['url'] as String?;
       if (url == null || url.isEmpty) return null;
-      return VideoDraft(url, m['mediaId'] as String?);
+      final raw = m['extras'];
+      final extras = <String, Object?>{};
+      if (raw is Map) {
+        raw.forEach((k, v) {
+          extras['$k'] = v is Map && v['dt'] is String
+              ? DateTime.tryParse(v['dt'] as String)
+              : v;
+        });
+      }
+      return VideoDraft(url, m['mediaId'] as String?, extras: extras);
     } catch (_) {
       return null;
     }

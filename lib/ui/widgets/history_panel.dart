@@ -4,7 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:jinja/jinja.dart' hide Template;
 
 import '../../models/view_schema.dart';
-import '../../services/video_ref.dart' show isBlobDim;
+import '../../services/video_ref.dart' show isPromptExcludedDim;
 import '../../services/list_display_render.dart';
 import '../../services/sheets_repository.dart';
 import '../../services/warehouse_connector.dart';
@@ -643,7 +643,7 @@ class _OtherFields extends StatelessWidget {
     for (final dim in view.dimensions) {
       if (skip.contains(dim.name)) continue;
       if (dim.name == 'id') continue;
-      if (isBlobDim(dim.name)) continue; // synced base64 thumbnails
+      if (isPromptExcludedDim(dim.name)) continue; // thumbs + link checks
       final v = record[dim.name];
       if (v == null) continue;
       final s = v.toString().trim();

@@ -97,7 +97,8 @@ void main() {
 
   test('renderTable keeps synced clip thumbnails out of the prompt', () {
     final view = _view(
-        'strength', ['id', 'date', 'exercise', 'video_thumb', 'video_photos_url']);
+        'strength', ['id', 'date', 'exercise', 'video_thumb', 'video_photos_url',
+        'video_photos_check']);
     final table = CoachBrain.renderTable(view, [
       {
         'id': 'a',
@@ -105,10 +106,12 @@ void main() {
         'exercise': 'Squat',
         'video_thumb': 'data:image/jpeg;base64,${'A' * 5000}',
         'video_photos_url': 'https://photos.google.com/lr/photo/X',
+        'video_photos_check': 'verified:4',
       },
     ], today: today);
     expect(table.split('\n').first, '| date | exercise | video_photos_url |');
     expect(table, isNot(contains('base64')));
+    expect(table, isNot(contains('verified:4')));
   });
 
   test('renderHistory sorts by ts and caps to the most recent 40', () {

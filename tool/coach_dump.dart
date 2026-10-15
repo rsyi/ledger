@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:airledger/models/view_schema.dart';
 import 'package:airledger/services/input_parser.dart';
 import 'package:airledger/services/schema_parser.dart';
-import 'package:airledger/services/video_ref.dart' show isBlobDim;
+import 'package:airledger/services/video_ref.dart' show isPromptExcludedDim;
 import 'package:googleapis/sheets/v4.dart' as gsheets;
 import 'package:googleapis_auth/auth_io.dart';
 import 'package:intl/intl.dart';
@@ -108,7 +108,7 @@ Future<void> main(List<String> args) async {
     // Columns = all view dimensions in schema order, except id.
     // ...and synced base64 clip thumbnails (~10 KB each — prompt bloat).
     final dims = view.dimensions
-        .where((d) => d.name != 'id' && !isBlobDim(d.name))
+        .where((d) => d.name != 'id' && !isPromptExcludedDim(d.name))
         .toList();
     final colIdx = [for (final d in dims) headers.indexOf(d.expr)];
 

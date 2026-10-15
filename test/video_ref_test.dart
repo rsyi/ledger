@@ -125,6 +125,12 @@ void main() {
       expect(thumbFieldFor('clip'), 'clip_thumb');
       expect(isBlobDim('video_thumb'), isTrue);
       expect(isBlobDim('video_url'), isFalse);
+      expect(photosCheckFieldFor('video_url'), 'video_photos_check');
+      // Machine-only dims stay out of LLM prompts: blobs + link checks.
+      expect(isPromptExcludedDim('video_thumb'), isTrue);
+      expect(isPromptExcludedDim('video_photos_check'), isTrue);
+      expect(isPromptExcludedDim('video_photos_url'), isFalse);
+      expect(isPromptExcludedDim('exercise'), isFalse);
     });
 
     test('thumb data URI round-trips and is Sheets-safe', () {

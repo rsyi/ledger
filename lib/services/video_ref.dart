@@ -129,6 +129,9 @@ VideoPlayback resolvePlayback({
 //   <base>_taken_at     clip recording time (local wall clock, datetime)
 //   <base>_duration_ms  clip duration in ms
 //   <base>_photos_url   durable Google Photos link (retroactive linking)
+//   <base>_photos_check how that link was verified (photos_verify.dart
+//                       LinkCheck: verified:<bits> | unverified |
+//                       manual[:<bits>] | mismatch:<bits>:<item id>)
 // All app-written (editable:false, autofill:false). A view without a
 // sibling simply doesn't persist that piece.
 
@@ -143,11 +146,19 @@ String durationFieldFor(String videoField) =>
     '${videoFieldBase(videoField)}_duration_ms';
 String photosUrlFieldFor(String videoField) =>
     '${videoFieldBase(videoField)}_photos_url';
+String photosCheckFieldFor(String videoField) =>
+    '${videoFieldBase(videoField)}_photos_check';
 
 /// Dims holding bulk blobs (the base64 thumbnail) — kept OUT of LLM
 /// prompt dumps, detail rows and history summaries (a ~10 KB cell per
 /// clip would swamp a coach context).
 bool isBlobDim(String name) => name.endsWith('_thumb');
+
+/// Dims that never enter an LLM prompt / coach dump: the blobs above
+/// plus app-internal link-verification bookkeeping (`<base>_photos_check`
+/// — "verified:4" means nothing to the coach).
+bool isPromptExcludedDim(String name) =>
+    isBlobDim(name) || name.endsWith('_photos_check');
 
 /// Per-clip thumbnail budget: ≤ 10 KB of JPEG → ≤ ~13.7k base64 chars,
 /// far under the 50k-char Sheets cell limit.

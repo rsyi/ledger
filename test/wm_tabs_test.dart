@@ -328,9 +328,12 @@ void main() {
       final wm = res.newWorkingMaxRows.single;
       expect(wm.lift, 'bench');
       expect(wm.valueLb, 235);
-      expect(wm.source, 'rule');
+      // HITL gating (2026-10-16): a PENDING proposal, not an applied
+      // change — the accepted TM stays 240.
+      expect(wm.source, 'auto');
       expect(wm.readingId, '2026-09-22|bench');
-      expect(wm.confirmed, isNull);
+      expect(wm.confirmed, isFalse);
+      expect(currentWorkingMax([...seeds, wm], 'bench')!.valueLb, 240);
 
       // Re-run with the appended rows in the snapshot: nothing new.
       final rerun = runWmChain(
@@ -536,7 +539,7 @@ void main() {
       );
       expect(reset.newReadings.single.decision, 'reset');
       expect(reset.newWorkingMaxRows.single.valueLb, 260); // 240/0.922 ↓5
-      expect(reset.newWorkingMaxRows.single.source, 'test');
+      expect(reset.newWorkingMaxRows.single.source, 'auto'); // gated
     });
 
     test('NO_READING flags a lift after two readingless weeks', () {

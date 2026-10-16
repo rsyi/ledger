@@ -400,9 +400,10 @@ void main() {
       expect(chain.newWorkingMaxRows, hasLength(1));
       final row = chain.newWorkingMaxRows.single;
       expect(row.valueLb, 310); // median [308.3] → 310
-      expect(row.source, 'rule');
-      expect(row.reason, contains('slow loop nightly recompute'));
-      expect(row.reason, contains('median implied 308.3'));
+      // HITL gating: a pending proposal with plain evidence.
+      expect(row.source, 'auto');
+      expect(row.confirmed, isFalse);
+      expect(row.reason, 'from 275×2 @ RPE 8 (est 308, median of 1 set)');
     });
 
     test('idempotent: a second run over the reconciled tab is a no-op', () {
@@ -474,7 +475,7 @@ void main() {
       expect(chain.newReadings.last.wmAfter, 320);
       final valueRows = [
         for (final r in chain.newWorkingMaxRows)
-          if (r.source == 'rule') r,
+          if (r.source == 'auto') r, // HITL: proposed, not applied
       ];
       expect(valueRows, hasLength(1));
       expect(valueRows.single.valueLb, 320);

@@ -22,6 +22,12 @@
 ///   - pain-cap state is carried by explicit marker rows: a `source=
 ///     pain_cap` row activates the cap for its lift; a later row whose
 ///     reason starts with [painCapLiftedReasonPrefix] clears it.
+///   - HUMAN-IN-THE-LOOP (2026-10-16): automatic TM changes land as
+///     PENDING PROPOSALS (`source=auto`, `confirmed=false`) that never
+///     price anything until the user accepts them in-app (see the
+///     "Human-in-the-loop TM gating" section). A readings row's
+///     `wm_after` is the controller's COMPUTED TM — a proposal under the
+///     gate; the value in force lives in working_max.
 library;
 
 import 'program_metrics.dart' show StrengthRow, mainLiftByExercise;
@@ -307,25 +313,443 @@ List<WorkingMaxRow> seedWorkingMaxRows() {
 // Tab-state helpers
 // ---------------------------------------------------------------------------
 
-/// The lift's current row = the LAST tab row for it (tabs are append-only,
-/// so tab order is chronological; markers carry the unchanged value).
+/// The lift's current ACCEPTED row = the LAST tab row for it that is not
+/// a pending HITL proposal ([isTmProposal]) — tabs are append-only, so
+/// tab order is chronological; markers / decision rows carry the
+/// unchanged value. Every pricing / planner / MCP consumer reads the TM
+/// through this (or [workingMaxAsOf] / [currentWorkingMaxesByLift]), so
+/// a proposal never prices anything until the user accepts it.
 WorkingMaxRow? currentWorkingMax(List<WorkingMaxRow> rows, String lift) {
   WorkingMaxRow? last;
   for (final r in rows) {
-    if (r.lift == lift) last = r;
+    if (r.lift == lift && !isTmProposal(r)) last = r;
   }
   return last;
 }
 
 /// True while the lift's newest confirm-bearing row says `false` — i.e. a
 /// pending seed with no confirmation (or manual override) appended yet.
-/// Marker/controller rows (confirmed == null) are skipped.
+/// Marker/controller rows (confirmed == null) and HITL proposals (their
+/// `false` means "awaiting review", not "unconfirmed seed") are skipped.
 bool needsConfirmation(List<WorkingMaxRow> rows, String lift) {
   bool? latest;
   for (final r in rows) {
-    if (r.lift == lift && r.confirmed != null) latest = r.confirmed;
+    if (r.lift == lift && r.confirmed != null && !isTmProposal(r)) {
+      latest = r.confirmed;
+    }
   }
   return latest == false;
+}
+
+// ---------------------------------------------------------------------------
+// Human-in-the-loop TM gating (2026-10-16)
+// ---------------------------------------------------------------------------
+//
+// Automatic TM changes (slow-loop raises/lowers, the nightly recompute,
+// fast-loop grinder/missed drops, MCP log_rows) are appended as PENDING
+// PROPOSALS — never applied. Row shapes (all append-only):
+//
+//   proposal   source=auto, confirmed=false, value=proposed TM,
+//              reason=evidence ("from 295×5 @ RPE 8.5 (est 358, median
+//              of 3 sets)"; fast-loop drops prefixed [tmRecommendedPrefix]),
+//              reading_id=the driving reading ('' for recomputes).
+//   accept     source=auto_accepted, confirmed=true, value=proposed,
+//              reading_id=[tmProposalIdOf] the proposal.
+//   decline    source=declined, confirmed=true, value=accepted TM (kept),
+//              reading_id=[tmProposalIdOf] — carries the declined value.
+//   withdrawn  source=withdrawn, confirmed=null, value=accepted — the
+//              estimate came back to the accepted TM while pending.
+//   revert     source=revert_to_pending, confirmed=true — restores the
+//              accepted value when an already-applied auto change is
+//              converted to a proposal (tool/wm_hitl_convert.dart).
+//
+// A newer proposal for the same lift supersedes older pending ones; any
+// accepted-value row (manual / accept / decline / revert / seed) resolves
+// the pending one. Pain-cap markers are NOT gated.
+
+/// `source` of a pending proposal row.
+const tmProposalSource = 'auto';
+
+/// `source` of the row appended when the user accepts a proposal.
+const tmAcceptedSource = 'auto_accepted';
+
+/// `source` of the row appended when the user keeps the current TM.
+const tmDeclinedSource = 'declined';
+
+/// `source` of the nightly row that withdraws a stale proposal.
+const tmWithdrawnSource = 'withdrawn';
+
+/// `source` of the conversion row restoring the accepted value.
+const tmRevertSource = 'revert_to_pending';
+
+/// A declined proposal is re-proposed only when the new estimate moves
+/// at least this far from it (or the direction flips).
+const tmReproposeMinDiffLb = 5.0;
+
+/// Reason prefix of fast-loop (grinder / missed) drop proposals — the
+/// UI labels them "recommended".
+const tmRecommendedPrefix = 'recommended: ';
+
+/// True for a pending-or-historical proposal row (source=auto,
+/// confirmed=false).
+bool isTmProposal(WorkingMaxRow r) =>
+    r.source == tmProposalSource && r.confirmed == false;
+
+/// Fast-loop drop proposals are flagged "recommended".
+bool isTmRecommended(WorkingMaxRow r) =>
+    r.reason.startsWith(tmRecommendedPrefix);
+
+/// The proposal's evidence without the recommended prefix.
+String tmProposalEvidence(WorkingMaxRow r) => isTmRecommended(r)
+    ? r.reason.substring(tmRecommendedPrefix.length)
+    : r.reason;
+
+/// Stable id of a proposal (decision rows carry it in `reading_id`):
+/// `tm:<lift>:<effective_from>:<value>`.
+String tmProposalIdOf(WorkingMaxRow p) =>
+    'tm:${p.lift}:${_ymd(p.effectiveFrom)}:${_fmtNum(p.valueLb)}';
+
+/// The proposed value encoded in a [tmProposalIdOf] id; null otherwise.
+double? tmProposalValueOfId(String id) {
+  if (!id.startsWith('tm:')) return null;
+  return double.tryParse(id.split(':').last);
+}
+
+/// Rows that neither change nor resolve a TM: pain-cap activations and
+/// the controller's pain-cap-lifted markers.
+bool _isTmMarker(WorkingMaxRow r) =>
+    r.source == 'pain_cap' ||
+    (r.source == 'rule' && r.reason.startsWith(painCapLiftedReasonPrefix));
+
+/// The lift's PENDING proposal: the newest proposal row not followed by
+/// any resolving row (accept / decline / withdraw / manual / revert /
+/// seed / legacy rule change). Older proposals are superseded by it.
+WorkingMaxRow? pendingTmProposal(List<WorkingMaxRow> rows, String lift) {
+  WorkingMaxRow? p;
+  for (final r in rows) {
+    if (r.lift != lift) continue;
+    if (isTmProposal(r)) {
+      p = r;
+    } else if (!_isTmMarker(r)) {
+      p = null;
+    }
+  }
+  return p;
+}
+
+/// Pending proposals for every lift (lift order of
+/// [defaultVariantByLift]).
+List<WorkingMaxRow> pendingTmProposals(List<WorkingMaxRow> rows) => [
+  for (final lift in defaultVariantByLift.keys) ?pendingTmProposal(rows, lift),
+];
+
+/// The value of the lift's declined proposal still in force — the last
+/// decline not followed by an accepted-value change (manual / accept /
+/// revert / seed / legacy rule). Proposals, withdrawals and markers keep
+/// it. Null when nothing is declined.
+double? declinedTmValue(List<WorkingMaxRow> rows, String lift) {
+  double? v;
+  for (final r in rows) {
+    if (r.lift != lift) continue;
+    if (r.source == tmDeclinedSource) {
+      v = tmProposalValueOfId(r.readingId);
+    } else if (isTmProposal(r) ||
+        _isTmMarker(r) ||
+        r.source == tmWithdrawnSource) {
+      continue;
+    } else {
+      v = null;
+    }
+  }
+  return v;
+}
+
+/// The row appended when the user ACCEPTS [proposal] on [day].
+WorkingMaxRow tmAcceptRow(WorkingMaxRow proposal, DateTime day) =>
+    WorkingMaxRow(
+      lift: proposal.lift,
+      variant: proposal.variant,
+      valueLb: proposal.valueLb,
+      effectiveFrom: _dayUtc(day),
+      source: tmAcceptedSource,
+      reason: 'accepted ${_ymd(day)} — ${tmProposalEvidence(proposal)}',
+      readingId: tmProposalIdOf(proposal),
+      confirmed: true,
+    );
+
+/// The row appended when the user KEEPS the current TM ([acceptedLb])
+/// instead of [proposal] on [day]. Its `reading_id` carries the declined
+/// value so the nightly doesn't re-propose it ([declinedTmValue]).
+WorkingMaxRow tmDeclineRow(
+  WorkingMaxRow proposal,
+  double acceptedLb,
+  DateTime day,
+) => WorkingMaxRow(
+  lift: proposal.lift,
+  variant: proposal.variant,
+  valueLb: acceptedLb,
+  effectiveFrom: _dayUtc(day),
+  source: tmDeclinedSource,
+  reason:
+      'kept ${_fmtNum(acceptedLb)} ${_ymd(day)} — declined '
+      '${_fmtNum(proposal.valueLb)} (${tmProposalEvidence(proposal)})',
+  readingId: tmProposalIdOf(proposal),
+  confirmed: true,
+);
+
+/// What the gate does with an automatic TM candidate.
+enum TmGateAction {
+  /// Nothing to append.
+  none,
+
+  /// Append a new pending proposal (superseding any pending one).
+  propose,
+
+  /// Append a withdrawn row: the estimate is back at the accepted TM.
+  withdraw,
+}
+
+/// The HITL gate (pure; mirrored by ledger-mcp `gateTmCandidate`, pinned
+/// by coach/fixtures/tm_gate_cases.yaml).
+///
+/// [candidate] is the controller's TM (null = no information this run —
+/// keep whatever is pending). Equal to [accepted] → withdraw a pending
+/// proposal, else nothing. Equal to [pending] → nothing (idempotent
+/// nightly). Same direction as a [declined] proposal and within
+/// [minDiffLb] of it → suppressed. Otherwise → propose.
+TmGateAction gateTmCandidate({
+  required double accepted,
+  required double? candidate,
+  double? pending,
+  double? declined,
+  double minDiffLb = tmReproposeMinDiffLb,
+}) {
+  if (candidate == null) return TmGateAction.none;
+  if (candidate == accepted) {
+    return pending != null ? TmGateAction.withdraw : TmGateAction.none;
+  }
+  if (pending != null && candidate == pending) return TmGateAction.none;
+  if (declined != null) {
+    final sameDirection =
+        (candidate - accepted).sign == (declined - accepted).sign;
+    if (sameDirection && (candidate - declined).abs() < minDiffLb) {
+      return TmGateAction.none;
+    }
+  }
+  return TmGateAction.propose;
+}
+
+/// Evidence line for a proposal (shared format with the TS twin):
+///   slow loop  `from 295×5 @ RPE 8.5 (est 358, median of 3 sets)`
+///   guarded    `from 295×5 @ RPE 8.5 (implied 358)`
+///   fast loop  `recommended: grinder on 295×5 @ RPE 9.5 (implied 345)`
+String tmEvidence({
+  required double weightLb,
+  required int reps,
+  required double rpe,
+  required double impliedMax,
+  double? estMedian,
+  int? estSets,
+  bool grinder = false,
+  bool missed = false,
+}) {
+  final top = '${_fmtNum(weightLb)}×$reps @ RPE ${_fmtNum(rpe)}';
+  if (grinder || missed) {
+    return '$tmRecommendedPrefix${grinder ? 'grinder' : 'missed reps'} on '
+        '$top (implied ${impliedMax.toStringAsFixed(0)})';
+  }
+  if (estMedian != null && estSets != null) {
+    return 'from $top (est ${estMedian.toStringAsFixed(0)}, median of '
+        '$estSets ${estSets == 1 ? 'set' : 'sets'})';
+  }
+  return 'from $top (implied ${impliedMax.toStringAsFixed(0)})';
+}
+
+/// One row of the human-readable TM change log (Progress + Lift pages).
+class TmHistoryEvent {
+  final DateTime date;
+  final String lift;
+
+  /// Accepted TM before the event (null for the first value).
+  final double? fromLb;
+
+  /// The value the event is about (new TM, or the declined/withdrawn
+  /// proposal's value).
+  final double toLb;
+
+  /// starting value | set by you | accepted | kept (declined) | auto |
+  /// withdrawn | reverted to proposal | pain cap | pain cap lifted |
+  /// confirmed.
+  final String outcome;
+
+  /// Evidence / reason text (proposal evidence for decisions).
+  final String evidence;
+
+  /// Fast-loop drop ([tmRecommendedPrefix]).
+  final bool recommended;
+
+  /// True when the TM in force changed.
+  final bool changed;
+
+  const TmHistoryEvent({
+    required this.date,
+    required this.lift,
+    required this.fromLb,
+    required this.toLb,
+    required this.outcome,
+    required this.evidence,
+    this.recommended = false,
+    this.changed = false,
+  });
+}
+
+/// The dated change log, NEWEST FIRST, optionally for one [lift].
+/// Pending/superseded proposals are not events (pending ones render as
+/// review cards); their evidence surfaces on the decision row.
+List<TmHistoryEvent> tmChangeHistory(List<WorkingMaxRow> rows, {String? lift}) {
+  final out = <TmHistoryEvent>[];
+  final accepted = <String, double>{};
+  final proposals = <String, WorkingMaxRow>{};
+  for (final r in rows) {
+    if (lift != null && r.lift != lift) continue;
+    final before = accepted[r.lift];
+    if (isTmProposal(r)) {
+      proposals[tmProposalIdOf(r)] = r;
+      continue;
+    }
+    final prop = proposals[r.readingId];
+    String outcome;
+    var to = r.valueLb;
+    var evidence = r.reason;
+    var recommended = false;
+    switch (r.source) {
+      case 'seed':
+        outcome = r.confirmed == true && before == r.valueLb
+            ? 'confirmed'
+            : 'starting value';
+      case 'manual':
+        outcome = 'set by you';
+      case tmAcceptedSource:
+        outcome = 'accepted';
+        if (prop != null) {
+          evidence = tmProposalEvidence(prop);
+          recommended = isTmRecommended(prop);
+        }
+      case tmDeclinedSource:
+        outcome = 'kept (declined)';
+        to = tmProposalValueOfId(r.readingId) ?? r.valueLb;
+        if (prop != null) {
+          evidence = tmProposalEvidence(prop);
+          recommended = isTmRecommended(prop);
+        }
+      case tmWithdrawnSource:
+        outcome = 'withdrawn';
+        to = tmProposalValueOfId(r.readingId) ?? r.valueLb;
+      case tmRevertSource:
+        outcome = 'reverted to proposal';
+      case 'pain_cap':
+        outcome = 'pain cap';
+      default:
+        outcome = r.reason.startsWith(painCapLiftedReasonPrefix)
+            ? 'pain cap lifted'
+            : 'auto';
+    }
+    final valueRow =
+        r.source != tmDeclinedSource &&
+        r.source != tmWithdrawnSource &&
+        r.source != 'pain_cap' &&
+        !(r.source == 'rule' && r.reason.startsWith(painCapLiftedReasonPrefix));
+    if (valueRow) accepted[r.lift] = r.valueLb;
+    out.add(
+      TmHistoryEvent(
+        date: r.effectiveFrom,
+        lift: r.lift,
+        fromLb: before,
+        toLb: to,
+        outcome: outcome,
+        evidence: evidence.trim(),
+        recommended: recommended,
+        changed: valueRow && before != r.valueLb,
+      ),
+    );
+  }
+  return out.reversed.toList();
+}
+
+/// The conversion of already-APPLIED automatic changes into pending
+/// proposals (HITL rollout, tool/wm_hitl_convert.dart). For each lift
+/// whose newest value row is an auto-applied `rule`/`test` change dated
+/// on/after [since]: a [tmRevertSource] row restoring the previously
+/// accepted value (same effective date, confirmed=true) + a pending
+/// proposal of the applied value (evidence rebuilt from the driving
+/// reading). Idempotent: once converted, the newest value row is the
+/// revert, so a re-run returns nothing.
+List<WorkingMaxRow> hitlConversionRows(
+  WmSnapshot snap, {
+  required DateTime since,
+}) {
+  final out = <WorkingMaxRow>[];
+  final sinceDay = _dayUtc(since);
+  for (final lift in defaultVariantByLift.keys) {
+    final liftRows = [
+      for (final r in snap.workingMax)
+        if (r.lift == lift && !isTmProposal(r) && !_isTmMarker(r)) r,
+    ];
+    if (liftRows.length < 2) continue;
+    final last = liftRows.last;
+    if (last.source != 'rule' && last.source != 'test') continue;
+    if (last.confirmed != null) continue;
+    if (_dayUtc(last.effectiveFrom).isBefore(sinceDay)) continue;
+    final prior = liftRows[liftRows.length - 2].valueLb;
+    if (prior == last.valueLb) continue;
+    ReadingRow? reading;
+    for (final rd in snap.readings) {
+      if (rd.id == last.readingId) reading = rd;
+    }
+    final m = RegExp(
+      r'median implied ([\d.]+) over (\d+) top sets',
+    ).firstMatch(last.reason);
+    final evidence = reading == null
+        ? 'converted auto change: ${last.reason}'
+        : tmEvidence(
+            weightLb: reading.weightLb,
+            reps: reading.reps,
+            rpe: reading.rpe,
+            impliedMax: reading.impliedMax,
+            estMedian: m == null ? null : double.parse(m.group(1)!),
+            estSets: m == null ? null : int.parse(m.group(2)!),
+            grinder: reading.grinder && last.valueLb < prior,
+            missed: reading.missed && last.valueLb < prior,
+          );
+    out.add(
+      WorkingMaxRow(
+        lift: lift,
+        variant: last.variant,
+        valueLb: prior,
+        effectiveFrom: last.effectiveFrom,
+        source: tmRevertSource,
+        reason:
+            'converted to proposal under HITL gating (auto change → '
+            '${_fmtNum(last.valueLb)} on ${_ymd(last.effectiveFrom)} was '
+            'applied without review)',
+        readingId: last.readingId,
+        confirmed: true,
+      ),
+    );
+    out.add(
+      WorkingMaxRow(
+        lift: lift,
+        variant: last.variant,
+        valueLb: last.valueLb,
+        effectiveFrom: last.effectiveFrom,
+        source: tmProposalSource,
+        reason: evidence,
+        readingId: last.readingId,
+        confirmed: false,
+      ),
+    );
+  }
+  return out;
 }
 
 /// True when the lift's most recent pain-cap event row is an activation
@@ -355,13 +779,16 @@ DateTime? _lastPainEventDate(List<WorkingMaxRow> rows, String lift) {
   return last;
 }
 
-/// Working max in force for [lift] on [day] (last row with effective_from
-/// on or before it). Null before the controller started.
+/// Working max in force for [lift] on [day] (last ACCEPTED row — pending
+/// proposals excluded — with effective_from on or before it). Null before
+/// the controller started.
 double? workingMaxAsOf(List<WorkingMaxRow> rows, String lift, DateTime day) {
   final d = _dayUtc(day);
   double? value;
   for (final r in rows) {
-    if (r.lift == lift && !_dayUtc(r.effectiveFrom).isAfter(d)) {
+    if (r.lift == lift &&
+        !isTmProposal(r) &&
+        !_dayUtc(r.effectiveFrom).isAfter(d)) {
       value = r.valueLb;
     }
   }
@@ -533,7 +960,15 @@ WmChainResult runWmChain({
     if (wmRows.isEmpty) continue; // controller not seeded for this lift
     final startDate = _dayUtc(wmRows.first.effectiveFrom);
     final todayDay = today == null ? null : _dayUtc(today);
-    var wm = wmRows.last.valueLb;
+    // HITL gating (2026-10-16): every reading evaluates against the
+    // ACCEPTED TM (the value in force — proposals never price or
+    // evaluate anything); controller changes become a single candidate
+    // that the gate turns into (at most) one proposal row per run.
+    final accepted = currentWorkingMax(wmRows, lift)!.valueLb;
+    final wm = accepted;
+    final pendingAtStart = pendingTmProposal(wmRows, lift);
+    final declined = declinedTmValue(wmRows, lift);
+    ({double value, String reason, String readingId})? cand;
     var painCap = painCapActive(wmRows, lift);
     final lastPainEvent = _lastPainEventDate(wmRows, lift);
 
@@ -713,15 +1148,21 @@ WmChainResult runWmChain({
         wmAfter: d.wmAfter,
       ));
       if (d.wmAfter != wm) {
-        newWm.add(WorkingMaxRow(
-          lift: lift,
-          variant: defaultVariantByLift[lift]!,
-          valueLb: d.wmAfter,
-          effectiveFrom: _dayUtc(r.date),
-          source: d.source,
-          reason: d.reason,
+        // Gated: a candidate, not an applied change.
+        cand = (
+          value: d.wmAfter,
+          reason: tmEvidence(
+            weightLb: r.rawWeightLb,
+            reps: r.reps,
+            rpe: r.rpe,
+            impliedMax: reading.impliedMax,
+            estMedian: slowTm?.median,
+            estSets: slowTm?.sampleCount,
+            grinder: d.action == 'drop' && r.grinder,
+            missed: d.action == 'drop' && r.missed,
+          ),
           readingId: id,
-        ));
+        );
       }
       if (d.flags.contains('PAIN_CAP_LIFTED')) {
         painCap = false;
@@ -740,7 +1181,6 @@ WmChainResult runWmChain({
         (flagsByLift[lift] ??= []).addAll(d.flags);
       }
       capActive = d.action == 'drop' && d.capNextTopSetRpe != null;
-      wm = d.wmAfter;
       prior = d;
       lastReadingDate = _dayUtc(r.date);
     }
@@ -748,47 +1188,107 @@ WmChainResult runWmChain({
     if (todayDay != null) applyNotesThrough(todayDay);
 
     // v13 slow-loop NIGHTLY RECOMPUTE: the TM is a pure function of the
-    // recent history, so reconcile the stored value against the current
-    // estimate even when no NEW reading arrived (rule/mode changes,
-    // edited history, a manual pin getting outvoted). Writes a row ONLY
-    // when the value changes. Guards: pain caps freeze; a still-pinned
-    // manual value holds; a freshest-qualifying grinder/miss never gets
-    // raised past (its per-reading drop stands until clean data). The
-    // ≤3 iterations run the min_top_fraction gate (which reads the
-    // current TM) to its fixed point, so one nightly lands the final
-    // value and the next run is a no-op.
+    // recent history, so reconcile against the current estimate even
+    // when no NEW reading arrived (rule/mode changes, edited history, a
+    // manual pin getting outvoted). Guards: pain caps freeze; a
+    // still-pinned manual value holds; a freshest-qualifying grinder/miss
+    // never gets raised past (its drop stands until clean data). The ≤3
+    // iterations run the min_top_fraction gate (which reads the current
+    // TM) to its fixed point. HITL: it runs on a VIRTUAL TM — this run's
+    // candidate, else the pending proposal, else the accepted value (the
+    // old as-if-applied semantics) — and only yields a candidate; the
+    // gate below decides what (if anything) to append.
     if (slowLoop && todayDay != null && !painCap) {
+      var tm = cand?.value ?? pendingAtStart?.valueLb ?? accepted;
+      var reached = false;
+      Reading? newest;
+      SlowTmEstimate? lastEst;
       for (var i = 0; i < 3; i++) {
-        final qual = qualifyingTmSamples(samples, wm, tmRule!,
-            asOf: todayDay, notBefore: manualSince);
+        final qual = qualifyingTmSamples(
+          samples,
+          tm,
+          tmRule!,
+          asOf: todayDay,
+          notBefore: manualSince,
+        );
         if (qual.isEmpty) break;
         if (manualSince != null && qual.length < tmRule.manualOutvoteSets) {
           break; // manual pin still in force
         }
         final est = slowTmEstimate(
           samples: samples,
-          currentTm: wm,
+          currentTm: tm,
           rule: tmRule,
           asOf: todayDay,
           notBefore: manualSince,
         );
-        if (est == null || est.value == wm) break;
+        if (est == null) break;
         final last = qual.last;
-        if ((last.grinder || last.missed) && est.value > wm) break;
-        newWm.add(WorkingMaxRow(
-          lift: lift,
-          variant: defaultVariantByLift[lift]!,
-          valueLb: est.value,
-          effectiveFrom: todayDay,
-          source: 'rule',
-          reason: 'slow loop nightly recompute: median implied '
-              '${est.median.toStringAsFixed(1)} over ${est.sampleCount} '
-              'top sets (${_ymd(est.from)}..${_ymd(est.to)}, '
-              '${tmRule.windowDays}d ∨ ${tmRule.minSets}-set window) → '
-              '${_fmtNum(est.value)} (was ${_fmtNum(wm)})',
-        ));
-        wm = est.value;
+        if ((last.grinder || last.missed) && est.value > tm) break;
+        reached = true;
+        newest = last;
+        lastEst = est;
+        if (est.value == tm) break;
+        tm = est.value;
       }
+      if (reached && tm != cand?.value) {
+        cand = (
+          value: tm,
+          reason: tmEvidence(
+            weightLb: newest!.rawWeightLb,
+            reps: newest.reps,
+            rpe: newest.rpe,
+            impliedMax: newest.impliedMax,
+            estMedian: lastEst!.median,
+            estSets: lastEst.sampleCount,
+          ),
+          readingId: '',
+        );
+      }
+    }
+
+    // The HITL gate: at most one proposal (or withdrawal) per lift per
+    // run. Pain caps freeze the TM — no candidate is produced under one.
+    final candValue = cand?.value;
+    switch (gateTmCandidate(
+      accepted: accepted,
+      candidate: candValue,
+      pending: pendingAtStart?.valueLb,
+      declined: declined,
+    )) {
+      case TmGateAction.propose:
+        newWm.add(
+          WorkingMaxRow(
+            lift: lift,
+            variant: defaultVariantByLift[lift]!,
+            valueLb: candValue!,
+            effectiveFrom:
+                todayDay ??
+                (cand!.readingId.isEmpty
+                    ? startDate
+                    : _parseDay(cand.readingId.split('|').first)!),
+            source: tmProposalSource,
+            reason: cand!.reason,
+            readingId: cand.readingId,
+            confirmed: false,
+          ),
+        );
+      case TmGateAction.withdraw:
+        newWm.add(
+          WorkingMaxRow(
+            lift: lift,
+            variant: defaultVariantByLift[lift]!,
+            valueLb: accepted,
+            effectiveFrom: todayDay ?? lastReadingDate ?? startDate,
+            source: tmWithdrawnSource,
+            reason:
+                'estimate back at ${_fmtNum(accepted)} — proposal '
+                '${_fmtNum(pendingAtStart!.valueLb)} withdrawn',
+            readingId: tmProposalIdOf(pendingAtStart),
+          ),
+        );
+      case TmGateAction.none:
+        break;
     }
 
     // NO_READING: two consecutive readingless weeks (spec §2/§7.6).

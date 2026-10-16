@@ -14,7 +14,13 @@ import 'package:intl/intl.dart';
 import 'bodyweight_cache.dart' show isBodyweightExercise;
 import 'program_current.dart' show CutWaveWeekSpec;
 import 'program_metrics.dart' show mainLiftByExercise;
-import 'wm_tabs.dart' show WorkingMaxRow;
+import 'wm_tabs.dart'
+    show
+        WorkingMaxRow,
+        isTmProposal,
+        tmAcceptedSource,
+        tmDeclinedSource,
+        tmWithdrawnSource;
 
 /// One display row: [sets] identical planned sets of an exercise.
 /// [repsHi] is the top of a rep range (accessory double progression);
@@ -312,7 +318,16 @@ WorkingMaxRow? _inForceAt(
     List<WorkingMaxRow> rows, String lift, DateTime day) {
   WorkingMaxRow? last;
   for (final r in rows) {
-    if (r.lift == lift && !r.effectiveFrom.isAfter(day)) last = r;
+    // HITL (2026-10-16): pending proposals never count as in force;
+    // decline/withdraw rows only restate the kept value (the TM didn't
+    // change on their date).
+    if (r.lift == lift &&
+        !isTmProposal(r) &&
+        r.source != tmDeclinedSource &&
+        r.source != tmWithdrawnSource &&
+        !r.effectiveFrom.isAfter(day)) {
+      last = r;
+    }
   }
   return last;
 }
@@ -353,6 +368,7 @@ String tmSignalSuffix(TmSignal s) {
   final tag = switch (s.source) {
     'manual' => ' · manual',
     'rule' => ' · auto',
+    tmAcceptedSource => ' · accepted',
     _ => '',
   };
   if (s.previous == null || s.previous == s.current) {
@@ -371,7 +387,7 @@ List<({DateTime day, double value})> tmHistoryPoints(
 ) {
   final points = <({DateTime day, double value})>[];
   for (final r in rows) {
-    if (r.lift != lift) continue;
+    if (r.lift != lift || isTmProposal(r)) continue;
     final day = DateTime.utc(
         r.effectiveFrom.year, r.effectiveFrom.month, r.effectiveFrom.day);
     if (points.isNotEmpty && points.last.day == day) {

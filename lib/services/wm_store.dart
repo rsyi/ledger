@@ -12,6 +12,9 @@
 ///    in history; readers take the LAST confirm-bearing row per lift).
 ///  - [setWorkingMax] appends a `source=manual` row (spec §2 MANUAL:
 ///    applies immediately — the nightly picks it up as the current wm).
+///  - [acceptProposal] / [declineProposal] resolve a pending automatic
+///    TM proposal (HITL gating 2026-10-16 — automatic changes never
+///    apply on their own).
 /// Rows are written at an explicit computed range (never `values.append`
 /// at A1 — that eats the header row when A1 is empty).
 library;
@@ -94,6 +97,42 @@ class WmStore {
       reason: 'user confirmed seed (${_fmt(current.valueLb)} lb) in app',
       confirmed: true,
     ));
+  }
+
+  /// Accepts the lift's PENDING proposal (HITL gating, 2026-10-16):
+  /// appends a confirmed `auto_accepted` row with the proposed value —
+  /// from then on it prices the program. [expectedId] (the card's
+  /// [tmProposalIdOf]) guards against a proposal superseded since the
+  /// card rendered. Returns false (nothing appended) when no matching
+  /// proposal is pending.
+  Future<bool> acceptProposal(String lift, {String? expectedId}) async {
+    final snap = await snapshot(force: true);
+    final p = snap == null ? null : pendingTmProposal(snap.workingMax, lift);
+    if (p == null ||
+        (expectedId != null && tmProposalIdOf(p) != expectedId)) {
+      return false;
+    }
+    await _appendWorkingMax(tmAcceptRow(p, DateTime.now()));
+    return true;
+  }
+
+  /// Keeps the current TM instead of the lift's pending proposal:
+  /// appends a confirmed `declined` row (value = the accepted TM,
+  /// reading_id = the proposal key) so the nightly doesn't re-propose
+  /// the same number. Returns false when no matching proposal is
+  /// pending.
+  Future<bool> declineProposal(String lift, {String? expectedId}) async {
+    final snap = await snapshot(force: true);
+    final p = snap == null ? null : pendingTmProposal(snap.workingMax, lift);
+    final current =
+        snap == null ? null : currentWorkingMax(snap.workingMax, lift);
+    if (p == null ||
+        current == null ||
+        (expectedId != null && tmProposalIdOf(p) != expectedId)) {
+      return false;
+    }
+    await _appendWorkingMax(tmDeclineRow(p, current.valueLb, DateTime.now()));
+    return true;
   }
 
   /// Manual override (spec §2 MANUAL — applies immediately).

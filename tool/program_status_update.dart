@@ -39,7 +39,10 @@ import 'package:yaml/yaml.dart';
 ///   • working_max + readings tabs — APPEND-ONLY (never rewritten): new
 ///     §1.2 readings since the last run are evaluated chronologically
 ///     through the WM-1 controller (lib/services/working_max.dart via
-///     runWmChain) and appended together with any working-max changes.
+///     runWmChain) and appended together with any working-max rows.
+///     HITL (2026-10-16): automatic TM changes are appended as PENDING
+///     proposals (source=auto, confirmed=false) — never applied; the
+///     app's Progress → Training maxes section accepts / keeps them.
 ///     When the working_max tab is empty/missing, the §5 seed rows land
 ///     first (source=seed, confirmed=false — the app's "Working maxes"
 ///     card confirms them; the deadlift seed carries its pain_cap marker).
@@ -664,12 +667,21 @@ Future<void> main(List<String> args) async {
   for (final e in chain.flagsByLift.entries) {
     print('  flags ${e.key}: ${e.value.toSet().join(',')}');
   }
-  // v13 slow-loop nightly recomputes (working_max rows not tied to a
-  // new reading — rule-change reconciles, outvoted manual pins).
+  // HITL gating (2026-10-16): automatic TM changes are PROPOSALS
+  // (source=auto, confirmed=false) the user accepts/keeps in the app;
+  // the accepted value keeps pricing everything until then.
   for (final w in chain.newWorkingMaxRows) {
-    if (w.readingId.isEmpty && w.source == 'rule') {
-      print('  slow-loop ${w.lift} → ${w.valueLb} (${w.reason})');
+    if (isTmProposal(w)) {
+      print('  PROPOSED ${w.lift}: '
+          '${currentWorkingMax(allWmRows, w.lift)?.valueLb} → ${w.valueLb} '
+          '(${w.reason}) — pending in-app review');
+    } else if (w.source == tmWithdrawnSource) {
+      print('  withdrawn ${w.lift}: ${w.reason}');
     }
+  }
+  for (final p in pendingTmProposals(allWmRows)) {
+    print('  pending ${p.lift}: ${currentWorkingMax(allWmRows, p.lift)?.valueLb}'
+        ' → ${p.valueLb} since ${ymd(p.effectiveFrom)}');
   }
 
   // -------------------------------------------------------------------------

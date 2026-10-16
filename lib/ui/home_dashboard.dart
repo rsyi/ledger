@@ -172,6 +172,7 @@ import '../services/goals_service.dart' show liftDisplayName;
 import 'app_text.dart';
 import 'lift_screen.dart' show LiftSummary;
 import 'widgets/plan_sections.dart' show BlockTimeline;
+import 'widgets/training_max_section.dart' show TrainingMaxSection;
 import 'design/design.dart' hide AppText;
 import 'design/tokens.dart' as ds show AppText;
 import 'widgets/skeleton.dart';
@@ -455,6 +456,27 @@ class HomeDashboardState extends State<HomeDashboard> {
   // Base futures — each swallows its own errors into null so one dead
   // source never poisons another card. Reassigned by [reload].
   late Future<WmSnapshot?> _wm;
+
+  /// Anchor of the TRAINING MAXES section (Today's review pill).
+  final _trainingMaxesKey = GlobalKey();
+
+  /// Scrolls the Progress list to the TRAINING MAXES section (Today's
+  /// "N training-max updates to review ›" pill). Retries once after the
+  /// section's first frame when the tab was just built.
+  Future<void> revealTrainingMaxes() async {
+    for (var i = 0; i < 3; i++) {
+      final ctx = _trainingMaxesKey.currentContext;
+      if (ctx != null && ctx.mounted) {
+        await Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut,
+        );
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+  }
   late Future<IntentDocs?> _docs;
   late Future<PhaseProjections?> _projections;
   late Future<WeightSeriesResult?> _weights;
@@ -1405,6 +1427,23 @@ class HomeDashboardState extends State<HomeDashboard> {
           ),
         _progressPhase(context),
         _progressLifts(context),
+        // HITL training maxes (2026-10-16): pending automatic TM
+        // proposals (Accept / Keep) + the dated change log. Today's
+        // review pill scrolls here ([revealTrainingMaxes]).
+        if (widget.wmStore != null)
+          KeyedSubtree(
+            key: _trainingMaxesKey,
+            child: TrainingMaxSection(
+              snapshot: _wm,
+              onAccept: (lift, id) =>
+                  widget.wmStore!.acceptProposal(lift, expectedId: id),
+              onDecline: (lift, id) =>
+                  widget.wmStore!.declineProposal(lift, expectedId: id),
+              onDecided: () => setState(() {
+                _wm = _guard(() async => widget.wmStore?.snapshot(force: true));
+              }),
+            ),
+          ),
         const SizedBox(height: 16),
       ],
     );

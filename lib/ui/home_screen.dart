@@ -21,6 +21,9 @@ import '../services/engine_schema_adapter.dart';
 import 'widgets/lazy_indexed_stack.dart';
 import 'widgets/sync_status_button.dart';
 import 'widgets/today_status_card.dart';
+import 'widgets/training_max_section.dart'
+    show TmProposalPill, TmProposalPillState;
+import '../services/tm_proposal_notifier.dart';
 import 'widgets/log_list_row.dart';
 import 'design/components.dart' show RowGroupCard, SectionHeader;
 import 'design/tokens.dart' show AppSpace;
@@ -223,6 +226,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _tab = i;
     });
     if (i == _tabToday) {
+      _tmPillKey.currentState?.reload();
       _todayStatusKey.currentState?.refresh();
       _recoveryKey.currentState?.reload();
       _dailyProgressKey.currentState?.reload();
@@ -257,6 +261,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// didUpdateWidget).
   final _todayProgramKey = GlobalKey<ProgramDayCardState>();
   final _recoveryKey = GlobalKey<RecoveryCardState>();
+
+  /// Today's training-max review pill (HITL, 2026-10-16).
+  final _tmPillKey = GlobalKey<TmProposalPillState>();
+
+  /// Pill tap → Progress tab, scrolled to TRAINING MAXES.
+  void _openTrainingMaxes() {
+    _selectTab(_tabProgress);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _dashboardKey.currentState?.revealTrainingMaxes(),
+    );
+  }
 
   /// The day the Today tab is showing (date-only). The top-of-tab day
   /// navigator shifts it; every card on the tab reflects it.
@@ -337,9 +352,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _runCarryoverCheck();
+      _runTmNotify();
       final replan = _replan;
       if (replan != null) unawaited(replan().catchError((Object _) {}));
     }
+  }
+
+  /// The WM store the TM-proposal notifier reads (set by bootstrap).
+  WmStore? _tmNotifyStore;
+
+  /// Notifies once per NEW pending training-max proposal (HITL gating,
+  /// 2026-10-16) — bootstrap, resume and poller tick; throttled inside.
+  void _runTmNotify() {
+    final store = _tmNotifyStore;
+    if (store == null || Platform.environment.containsKey('FLUTTER_TEST')) {
+      return;
+    }
+    unawaited(TmProposalNotifier.check(store));
   }
 
   void _runCarryoverCheck() {
@@ -387,6 +416,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // Kiosk mode never resumes: the poller tick is the carryover
           // check's other trigger (same gates + 10-min throttle).
           _runCarryoverCheck();
+          _runTmNotify();
         },
       );
     }
@@ -1123,6 +1153,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         },
                       );
                     };
+              if (_tmNotifyStore == null && data.wmStore != null) {
+                _tmNotifyStore = data.wmStore;
+                WidgetsBinding.instance
+                    .addPostFrameCallback((_) => _runTmNotify());
+              }
               if (!_carryoverKicked && _carryoverCheck != null) {
                 _carryoverKicked = true;
                 WidgetsBinding.instance
@@ -1301,6 +1336,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         summary: summary,
                         sources: planSources,
                         wmSnapshot: data.wmStore?.snapshot,
+                        onAcceptProposal: data.wmStore == null
+                            ? null
+                            : (l, id) => data.wmStore!
+                                .acceptProposal(l, expectedId: id),
+                        onDeclineProposal: data.wmStore == null
+                            ? null
+                            : (l, id) => data.wmStore!
+                                .declineProposal(l, expectedId: id),
                       ),
                     ),
                   );
@@ -1490,6 +1533,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     _recoveryKey.currentState?.reload();
                     _dailyProgressKey.currentState?.reload();
                     _todayProgramKey.currentState?.reload();
+                    _tmPillKey.currentState?.reload();
                   },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -1598,6 +1642,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             : data.registry.forView(weightView),
                         date: _dayViewDate,
                       ),
+                      // HITL training maxes (2026-10-16): a compact
+                      // pill while automatic TM updates await review →
+                      // Progress' TRAINING MAXES section.
+                      if (_dayViewIsToday && data.wmStore != null)
+                        TmProposalPill(
+                          key: _tmPillKey,
+                          load: data.wmStore!.snapshot,
+                          onOpen: _openTrainingMaxes,
+                        ),
                       // 4. The PROGRAM for the selected day — the ONE
                       // training surface: each item ticks green with what
                       // was achieved + its clips inline; unmatched work

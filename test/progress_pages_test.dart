@@ -372,6 +372,51 @@ void main() {
           findRichText: true), findsOneWidget);
       expect(find.byIcon(Icons.info_outline), findsNothing);
     });
+
+    testWidgets('HITL: a pending proposal shows as a review card; the TM '
+        'line stays the accepted value', (tester) async {
+      _tall(tester);
+      final calls = <String>[];
+      final pendingWm = (
+        workingMax: [
+          ...wm.workingMax,
+          WorkingMaxRow(
+            lift: 'squat',
+            variant: 'belted',
+            valueLb: 330,
+            effectiveFrom: DateTime(2026, 10, 16),
+            source: 'auto',
+            reason: 'from 285×5 @ RPE 8 (est 332, median of 5 sets)',
+            confirmed: false,
+          ),
+        ],
+        readings: const <ReadingRow>[],
+      );
+      await tester.pumpWidget(MaterialApp(
+        home: LiftScreen(
+          lift: 'squat',
+          summary: LiftSummary(
+            recent: (value: 310, date: DateTime(2026, 9, 21), wilks: 95.2),
+            lastBulk: (value: 315, date: DateTime(2025, 6, 10), wilks: 86.0),
+            best: (value: 315, date: DateTime(2025, 6, 10), wilks: 86.0),
+            bulkWindow: null,
+            currentBwLbs: 162.1,
+          ),
+          wmSnapshot: () async => pendingWm,
+          onAcceptProposal: (lift, id) async {
+            calls.add('$lift $id');
+            return true;
+          },
+          today: _today,
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Now 315 lb'), findsOneWidget);
+      expect(find.text('Squat: 315 → 330'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('tm-accept-squat')));
+      await tester.pumpAndSettle();
+      expect(calls, ['squat tm:squat:2026-10-16:330']);
+    });
   });
 
   group('lift helpers', () {

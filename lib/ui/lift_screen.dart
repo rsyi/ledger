@@ -34,7 +34,15 @@ import '../services/program_metrics.dart'
 import '../services/program_provider.dart';
 import '../services/projection_snapshot.dart' show ProjectionMetric;
 import '../services/sim2_harness.dart' show Sim2WeekPoint, sim2CurrentBlockN;
-import '../services/wm_tabs.dart' show WmSnapshot, WorkingMaxRow;
+import '../services/wm_tabs.dart'
+    show
+        WmSnapshot,
+        WorkingMaxRow,
+        currentWorkingMax,
+        pendingTmProposal,
+        tmChangeHistory;
+import 'widgets/training_max_section.dart'
+    show TmDecide, TmHistoryRows, TmProposalCard;
 import 'design/design.dart';
 import 'home_dashboard.dart'
     show fmtAgoWords, fmtLbDelta, liftDeltaStatus, liftTitle;
@@ -159,6 +167,12 @@ class LiftScreen extends StatefulWidget {
   /// Training-max tabs (WmStore.snapshot). Null → no TM section data.
   final Future<WmSnapshot?> Function()? wmSnapshot;
 
+  /// HITL training maxes: accept / keep this lift's pending proposal
+  /// (WmStore.acceptProposal / declineProposal). Null → the card shows
+  /// without actions.
+  final TmDecide? onAcceptProposal;
+  final TmDecide? onDeclineProposal;
+
   /// Injectable clock for tests; defaults to DateTime.now().
   final DateTime? today;
 
@@ -168,6 +182,8 @@ class LiftScreen extends StatefulWidget {
     required this.summary,
     this.sources,
     this.wmSnapshot,
+    this.onAcceptProposal,
+    this.onDeclineProposal,
     this.today,
   });
 
@@ -209,7 +225,9 @@ class _LiftScreenState extends State<LiftScreen> {
   Future<void> _refresh() async {
     ProgramProvider.clearCache();
     final next = _fetch();
-    setState(() => _load = next);
+    setState(() {
+      _load = next;
+    });
     await next;
   }
 
@@ -350,17 +368,12 @@ class _LiftScreenState extends State<LiftScreen> {
         ),
       ];
     }
-    // Append-only tab: chronological order; newest first here.
-    final history = rows.reversed.take(10).toList();
-    final current = rows.last;
-    String source(String s) => switch (s) {
-      'rule' => 'auto',
-      'manual' => 'set by you',
-      'seed' => 'starting value',
-      'test' => 'test',
-      'pain_cap' => 'pain cap',
-      _ => s,
-    };
+    // HITL (2026-10-16): the value in force is the last ACCEPTED row; a
+    // pending proposal renders as a review card, and the history is the
+    // shared change log (wm_tabs.tmChangeHistory), newest first.
+    final current = currentWorkingMax(rows, widget.lift) ?? rows.last;
+    final pending = pendingTmProposal(rows, widget.lift);
+    final history = tmChangeHistory(rows, lift: widget.lift).take(10).toList();
     return [
       header,
       Padding(
@@ -378,21 +391,18 @@ class _LiftScreenState extends State<LiftScreen> {
           style: AppText.meta(context),
         ),
       ),
-      RowGroupCard(
+      if (pending != null)
+        TmProposalCard(
+          proposal: pending,
+          acceptedLb: current.valueLb,
+          onAccept: widget.onAcceptProposal,
+          onDecline: widget.onDeclineProposal,
+          onDecided: _refresh,
+        ),
+      TmHistoryRows(
         key: const ValueKey('lift-tm-history'),
-        rows: [
-          for (final r in history)
-            ExerciseRow(
-              name: '${fmtLb(r.valueLb)} lb',
-              meta:
-                  '${DateFormat('MMM d, yyyy').format(r.effectiveFrom)}'
-                  ' · ${source(r.source)}',
-              status: identical(r, current)
-                  ? ItemStatus.done
-                  : ItemStatus.muted,
-              subtitle: r.reason.trim().isEmpty ? null : Text(r.reason.trim()),
-            ),
-        ],
+        events: history,
+        showLift: false,
       ),
     ];
   }

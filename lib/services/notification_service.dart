@@ -27,6 +27,7 @@ class NotificationService {
   // (a stream of logs shouldn't stack up a wall of stale nudges).
   static const _coachNotifId = 1001;
   static const _timerNotifId = 1002;
+  static const _tmNotifId = 1003;
 
   /// Initialises the plugin + channels. Idempotent. Safe to call on any
   /// platform — construction failures are swallowed so the app never
@@ -85,6 +86,21 @@ class NotificationService {
     if (body.trim().isEmpty) return;
     await _show(
       _coachNotifId,
+      _coachChannelId,
+      'Coach updates',
+      title,
+      body,
+      high: false,
+    );
+  }
+
+  /// Posts the "training max update to review" alert (HITL TM gating,
+  /// 2026-10-16) on the coach channel; its own id so it doesn't replace
+  /// a post-log nudge.
+  Future<void> showTmProposal(String title, String body) async {
+    if (body.trim().isEmpty) return;
+    await _show(
+      _tmNotifId,
       _coachChannelId,
       'Coach updates',
       title,

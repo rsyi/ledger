@@ -485,6 +485,55 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
     loop, 5 sets 08-08..09-26 median 145.6); squat 320 confirmed by
     the median; bench 245 + deadlift 340 manual-pinned (0 of 3
     post-manual sets). tool/wm_replay's §7.1 note is mode-aware.
+- **HITL training maxes (2026-10-16, user: "I'd like to know that
+  training maxes have been updated, rather than it happening
+  automatically" + "these changes are logged … in Progress")**:
+  automatic TM changes are PROPOSALS, never applied. ROWS (working_max,
+  append-only): proposal `source=auto, confirmed=false`, reason = plain
+  evidence (`from 295×5 @ RPE 8.5 (est 358, median of 3 sets)`; fast-loop
+  grinder/missed drops prefixed `recommended: `), reading_id = driving
+  reading ('' for recomputes); accept `auto_accepted, confirmed=true`;
+  keep `declined, confirmed=true, value=kept TM`; both carry
+  reading_id `tm:<lift>:<date>:<value>` (the proposal key — the decline
+  row encodes the declined number); `withdrawn` (estimate back at the
+  accepted TM); `revert_to_pending` (conversion). RULES (wm_tabs.dart
+  "Human-in-the-loop TM gating" section, pure): currentWorkingMax /
+  ByLift / AsOf + routine_display signals SKIP proposals → every
+  pricing/planner/MCP consumer uses the accepted value; readings
+  evaluate against the ACCEPTED TM; runWmChain emits ≤1 proposal per
+  lift per run via `gateTmCandidate` (candidate = accepted → withdraw a
+  pending one; = pending → nothing; same direction as a still-in-force
+  decline and < 5 lb from it → nothing; else propose — newer
+  supersedes); the nightly recompute runs on a VIRTUAL TM (run
+  candidate ?? pending ?? accepted — the old as-if-applied semantics, so
+  a pending grinder drop isn't withdrawn by the median). Any
+  accepted-value row (manual/accept/revert/seed) resolves pending + resets
+  declines; pain caps are NOT gated; manual pins + outvote unchanged
+  (outvote → proposal). readings.wm_after = the controller's COMPUTED TM
+  (a proposal). MCP twin (working_max.ts + tools.ts log_rows, DEPLOYED
+  2026-10-16): log_rows appends a proposal instead of a change, JSON
+  line gains working_max_in_force / proposed_working_max /
+  pending_review, prescriptions priced off the accepted TM;
+  get_coach_context working_maxes gains `pending_proposal`. Shared
+  fixtures: airledger-fitness coach/fixtures/tm_gate_cases.yaml (gate /
+  state / evidence; test/tm_gate_fixture_test.dart + ledger-mcp
+  test/tm_gate.test.ts). UI (widgets/training_max_section.dart): Progress
+  → TRAINING MAXES section (after Lifts): review cards "Deadlift: 340 →
+  360" + evidence + Accept 360 / Keep 340 (WmStore.acceptProposal /
+  declineProposal, guarded by the proposal id), the TM in force, the
+  dated change log (tmChangeHistory: accepted / kept (declined) / set by
+  you / starting value / pain cap / auto / withdrawn / reverted to
+  proposal) with a lift filter; Lift pages reuse card + log; Today pill
+  "N training-max updates to review ›" above the program card →
+  Progress, scrolled (HomeDashboardState.revealTrainingMaxes); local
+  notification once per proposal (tm_proposal_notifier.dart, seen ids in
+  shared_preferences; bootstrap/resume/poller tick). CONVERSION: the
+  2026-10-15 nightly raise deadlift 340→360 had been APPLIED —
+  `tool/wm_hitl_convert.dart [--since=YYYY-MM-DD] [--confirm]` (dry-run
+  default, idempotent) appended rows 14-15 on 2026-10-16: revert 340 +
+  pending 360 (accepted deadlift = 340 until the user decides). The
+  2026-10-16 nightly will add a recommended press drop 145→135 (120×4 @
+  9.5 grinder).
 - **Plan-tab forecast rework — SINGLE TRAJECTORY, nutrition is the
   lever (2026-09-28, user directive verbatim: "remove this whole
   lever-based computation… stick with this program long-term… the only

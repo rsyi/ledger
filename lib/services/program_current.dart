@@ -180,7 +180,10 @@ class CutWaveWeekSpec {
 /// `strength_wave_cut`). Unlike the post-cut `strength_wave` (block-
 /// anchored), the cut wave is CALENDAR-anchored: wave week = ((whole
 /// weeks between `anchor_monday` and the day's Monday) mod cycle) + 1.
-/// Null when the version declares no cut wave, [blockN] is outside
+/// v18 `restarts: [Monday, ...]` restart the cycle at wk1: the count
+/// runs from the latest restart <= the day's Monday (else the anchor),
+/// so earlier weeks never get reclassified. Twin: ledger-mcp
+/// src/program.ts strengthWaveCutFor. Null when the version declares no cut wave, [blockN] is outside
 /// `applies_to_blocks`, the day's Monday precedes the anchor, or the
 /// declared week entry is malformed — callers must skip the top set
 /// rather than invent one.
@@ -202,10 +205,31 @@ CutWaveWeekSpec? strengthWaveCutFor(
   } catch (_) {
     return null;
   }
-  final d = DateTime.utc(day.year, day.month, day.day);
-  final monday = d.subtract(Duration(days: d.weekday - 1));
+  DateTime mondayOf(DateTime x) {
+    final d = DateTime.utc(x.year, x.month, x.day);
+    return d.subtract(Duration(days: d.weekday - 1));
+  }
+
+  final monday = mondayOf(day);
   if (monday.isBefore(anchor)) return null;
-  final week = (monday.difference(anchor).inDays ~/ 7) % weeks.length + 1;
+  // v18 `restarts`: Mondays where the cycle restarts at wk1. The cycle
+  // counts from the LATEST restart <= the day's Monday (else the
+  // anchor), so weeks before a restart keep their interpretation.
+  var origin = anchor;
+  final restarts = wave['restarts'];
+  if (restarts is List) {
+    for (final raw in restarts) {
+      if (raw == null) continue;
+      final DateTime r;
+      try {
+        r = mondayOf(_parseDay(raw));
+      } catch (_) {
+        continue;
+      }
+      if (r.isAfter(origin) && !r.isAfter(monday)) origin = r;
+    }
+  }
+  final week = (monday.difference(origin).inDays ~/ 7) % weeks.length + 1;
   final entry = weeks['$week'] ?? weeks[week];
   if (entry is! Map) return null;
   final reps = entry['reps'];

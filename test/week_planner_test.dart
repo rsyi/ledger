@@ -192,12 +192,21 @@ void main() {
           buildWeekPlannedEntries(program, DateTime.utc(2026, 10, 12)),
           DateTime.utc(2026, 10, 12));
       expect(rows(w3).first, 'Barbell Squat -x3');
-      // Week 4 (Oct 19): deload — top 5 stays, every non-top set count
-      // is halved (min 1): BSS 3→2, bench 4→2, laterals 3→2,
-      // triceps 2→1.
-      final w4 = onDay(
+      // v18 restart: Oct 19 is wave week 1 again (was the calendar
+      // deload) — top 5 + FULL back-offs, nothing halved.
+      final r1 = onDay(
           buildWeekPlannedEntries(program, DateTime.utc(2026, 10, 19)),
           DateTime.utc(2026, 10, 19));
+      expect(rows(r1).take(3),
+          ['Barbell Squat -x5', 'Barbell Squat -x5', 'Barbell Squat -x5']);
+      expect(rows(r1).where((r) => r == 'Flat Barbell Bench Press -x8'),
+          hasLength(4));
+      // Week 4 (Nov 9, the v18 travel deload): top 5 stays, every
+      // non-top set count is halved (min 1): BSS 3→2, bench 4→2,
+      // laterals 3→2, triceps 2→1.
+      final w4 = onDay(
+          buildWeekPlannedEntries(program, DateTime.utc(2026, 11, 9)),
+          DateTime.utc(2026, 11, 9));
       expect(rows(w4), [
         'Barbell Squat -x5',
         'Barbell Squat -x5', // v17 back-offs 2 → 1
@@ -318,9 +327,10 @@ void main() {
       ]);
       // Sat Dec 12 still belongs to block 0 — since v11 the CUT
       // template's Saturday (OHP day) plans there, on the cut wave's
-      // clock (Dec 12's Monday is Dec 7 → cut wave week 3, top x3).
+      // clock (Dec 12's Monday is Dec 7 → v18: wave week 4 counted from
+      // the Oct 19 restart — the deload, top x5).
       final sat0 = onDay(entries, DateTime.utc(2026, 12, 12));
-      expect(rows(sat0).first, 'Overhead Press -x3');
+      expect(rows(sat0).first, 'Overhead Press -x5');
       expect(sat0.first['top'], isTrue);
       // Thu (4x4) / Sun (rest) plan nothing.
       for (final offset in [3, 6]) {
@@ -657,8 +667,10 @@ void main() {
       expect(topWeight(DateTime.utc(2026, 10, 5)), 270);
       // wk3 (Oct 12): 320 × 0.863 = 276.2 → 275 (x3).
       expect(topWeight(DateTime.utc(2026, 10, 12)), 275);
-      // deload (Oct 19): 320 × 0.70 = 224 → 225 (x5).
-      expect(topWeight(DateTime.utc(2026, 10, 19)), 225);
+      // v18 restart (Oct 19): wk1 again — 320 × 0.811 = 259.5 → 260 (x5).
+      expect(topWeight(DateTime.utc(2026, 10, 19)), 260);
+      // deload (Nov 9, v18 travel week): 320 × 0.70 = 224 → 225 (x5).
+      expect(topWeight(DateTime.utc(2026, 11, 9)), 225);
     });
 
     test('an active RPE cap undercuts the wave pct (pain-capped '
@@ -677,13 +689,13 @@ void main() {
 
     test('cut_late (Nov 16+) RPE-7 cap softens the wave top the same '
         'way', () {
-      // Nov 23 is wave week 1 again (8 whole weeks since the anchor);
-      // cut_late's target/cap 7 → min(0.811, 0.786) → 320 × 0.786 =
-      // 251.5 → 250.
+      // Nov 16 is wave week 1 again (4 whole weeks since the v18
+      // restart Oct 19); cut_late's target/cap 7 → min(0.811, 0.786) →
+      // 320 × 0.786 = 251.5 → 250.
       final mon = onDay(
-          buildWeekPlannedEntries(program, DateTime.utc(2026, 11, 23),
+          buildWeekPlannedEntries(program, DateTime.utc(2026, 11, 16),
               references: refs, workingMaxes: wms),
-          DateTime.utc(2026, 11, 23));
+          DateTime.utc(2026, 11, 16));
       expect(
           mon.firstWhere((e) => e['top'] == true)['weight'], 250);
     });

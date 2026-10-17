@@ -624,10 +624,10 @@ void main() {
       // Deload top 5@70%: 170×5@7 — implied 216 must NOT drop the TM.
       final res = runWmChain(
         snapshot: snap(seeds),
-        strengthRows: [bench('2026-10-19', 170, 5, 7)],
+        strengthRows: [bench('2026-11-09', 170, 5, 7)],
         policyFor: (_) => v12CutEarly,
         weekTypeOf: (_) => 'deload',
-        today: _d('2026-10-19'),
+        today: _d('2026-11-09'), // v18 travel deload week
         tmRule: rule,
       );
       expect(res.newReadings.single.kind, 'deload');

@@ -56,7 +56,7 @@ void main() {
     final v = currentVersion(program);
     expect(v, isNotNull);
     expect(v!['id'], 'bulk-2026-27');
-    expect(v['version'], 17);
+    expect(v['version'], 18);
     // A trailing pending entry must be skipped.
     final withPending = {
       'versions': [
@@ -64,7 +64,7 @@ void main() {
         {'version': 99, 'pending': true, 'id': 'draft'},
       ],
     };
-    expect(currentVersion(withPending)!['version'], 17);
+    expect(currentVersion(withPending)!['version'], 18);
   });
 
   for (final c in cases) {
@@ -104,6 +104,25 @@ void main() {
       // Check version when the fixture specifies it.
       if (exp.containsKey('version')) {
         expect(slice.version, exp['version'], reason: '$name version');
+      }
+
+      // v18: the cut-wave week when the fixture specifies it (null = no
+      // cut wave for the date).
+      if (exp.containsKey('cut_wave')) {
+        final cw = strengthWaveCutFor(currentVersion(program),
+            blockN: slice.block['number'] as int?, day: date);
+        final want = exp['cut_wave'] as Map?;
+        expect(
+            cw == null
+                ? null
+                : {
+                    'week': cw.week,
+                    'reps': cw.reps,
+                    'pct': cw.pct,
+                    'deload': cw.deload,
+                  },
+            want == null ? isNull : Map<String, Object?>.from(want),
+            reason: '$name cut_wave');
       }
 
       final expTargets = exp['targets'] as Map;
@@ -188,14 +207,79 @@ void main() {
       expect((w2.reps, w2.pct), (4, 0.837)); // chart[8][4]
       final w3 = at('2026-10-12')!;
       expect((w3.reps, w3.pct), (3, 0.863)); // chart[8][3]
-      final w4 = at('2026-10-19')!;
-      expect((w4.reps, w4.pct, w4.deload), (5, 0.70, true));
-      // Cycle repeats.
-      expect(at('2026-10-26')!.week, 1);
+      // v18 restart (user travel Nov 9): Oct 19 restarts at wk1 instead
+      // of the calendar deload; past weeks keep their interpretation.
+      final r1 = at('2026-10-19')!;
+      expect((r1.week, r1.reps, r1.pct, r1.deload), (1, 5, 0.811, false));
+      expect(at('2026-10-26')!.week, 2);
+      expect(at('2026-11-02')!.week, 3);
+      final w4 = at('2026-11-09')!;
+      expect((w4.week, w4.reps, w4.pct, w4.deload), (4, 5, 0.70, true));
+      // Cycle repeats from the restart.
+      expect(at('2026-11-16')!.week, 1);
+      expect(at('2026-12-07')!.deload, isTrue);
       // Sat Oct 3 belongs to the week of Sep 28 (its Monday) → week 1,
       // even though the ACCOUNTING window starting Sat Oct 3 mostly
       // holds wave week 2 — the wave keys off each day's Monday.
       expect(at('2026-10-03')!.week, 1);
+    });
+
+    group('restarts (v18 strength_wave_cut.restarts)', () {
+      Map<Object?, Object?> wave({Object? restarts}) => {
+            'strength_wave_cut': {
+              'applies_to_blocks': [0],
+              'anchor_monday': '2026-09-28',
+              'restarts': ?restarts,
+              'weeks': {
+                '1': {'reps': 5, 'pct': 0.811},
+                '2': {'reps': 4, 'pct': 0.837},
+                '3': {'reps': 3, 'pct': 0.863},
+                '4': {'reps': 5, 'pct': 0.70, 'deload': true},
+              },
+            },
+          };
+      int? wk(Map<Object?, Object?> v, String d) =>
+          strengthWaveCutFor(v, blockN: 0, day: DateTime.parse(d))?.week;
+
+      test('weeks before the restart keep the anchor interpretation', () {
+        final v = wave(restarts: ['2026-10-19']);
+        expect(wk(v, '2026-09-28'), 1);
+        expect(wk(v, '2026-10-05'), 2);
+        expect(wk(v, '2026-10-12'), 3);
+        expect(wk(v, '2026-10-18'), 3); // Sun before the restart
+      });
+
+      test('restart Monday = wk1; cycle counts from it', () {
+        final v = wave(restarts: ['2026-10-19']);
+        expect(wk(v, '2026-10-19'), 1);
+        expect(wk(v, '2026-10-22'), 1);
+        expect(wk(v, '2026-10-26'), 2);
+        expect(wk(v, '2026-11-02'), 3);
+        expect(wk(v, '2026-11-09'), 4);
+        expect(
+            strengthWaveCutFor(v, blockN: 0, day: DateTime.parse('2026-11-09'))!
+                .deload,
+            isTrue);
+        expect(wk(v, '2026-11-16'), 1);
+      });
+
+      test('pre-anchor dates stay null; latest restart <= date wins', () {
+        final v = wave(restarts: ['2026-11-16', '2026-10-19']); // unsorted
+        expect(wk(v, '2026-09-21'), isNull);
+        expect(wk(v, '2026-11-09'), 4);
+        expect(wk(v, '2026-11-16'), 1);
+        expect(wk(v, '2026-11-23'), 2);
+      });
+
+      test('no restarts / malformed entries → anchor-only behaviour', () {
+        expect(wk(wave(), '2026-10-19'), 4);
+        expect(wk(wave(restarts: 'nope'), '2026-10-19'), 4);
+        expect(wk(wave(restarts: ['garbage', null]), '2026-10-19'), 4);
+        // A restart that is not a Monday snaps to its week's Monday.
+        expect(wk(wave(restarts: ['2026-10-21']), '2026-10-19'), 1);
+        // A restart before the anchor never rescues pre-anchor dates.
+        expect(wk(wave(restarts: ['2026-09-14']), '2026-09-21'), isNull);
+      });
     });
 
     test('pre-anchor days, non-cut blocks and null block → null', () {

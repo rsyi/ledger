@@ -368,28 +368,32 @@ void main() {
         of: find.byKey(ValueKey('routine-day-$ymd')), matching: f);
     Finder rich(String t) => find.text(t, findRichText: true);
 
-    // Mon Oct 26 → cut wave week 1: top 5 @ 81% + 2 back-offs @ 75%.
+    // Mon Oct 19 → v18 RESTART: cut wave week 1 (was the calendar
+    // deload): top 5 @ 81% + 2 FULL back-offs @ 75% (not halved).
     await pump(tester, _FakeWmStore(_seedRows(confirmed: true)),
-        today: DateTime(2026, 10, 26));
-    expect(inDay('2026-10-26', rich('Squat 1×5 · 260 lb (81%)')),
+        today: DateTime(2026, 10, 19));
+    expect(inDay('2026-10-19', rich('Squat 1×5 · 260 lb (81%)')),
         findsOneWidget);
-    expect(inDay('2026-10-26', rich('Squat 2×5 · 240 lb (75%)')),
+    expect(inDay('2026-10-19', rich('Squat 2×5 · 240 lb (75%)')),
         findsOneWidget);
     // Wednesday's squat volume is unchanged (3×8 @ 65% → 210).
-    expect(inDay('2026-10-28', rich('Squat 3×8 · 210 lb (65%)')),
+    expect(inDay('2026-10-21', rich('Squat 3×8 · 210 lb (65%)')),
         findsOneWidget);
 
   });
 
-  testWidgets('v17 Monday squat back-offs halve to 1×5 on the Oct 19 '
-      'cut-wave deload', (tester) async {
+  testWidgets('v17 Monday squat back-offs halve to 1×5 on the Nov 9 '
+      '(v18 travel) cut-wave deload', (tester) async {
     Finder inDay(String ymd, Finder f) => find.descendant(
         of: find.byKey(ValueKey('routine-day-$ymd')), matching: f);
     Finder rich(String t) => find.text(t, findRichText: true);
-    // Mon Oct 19 → wave week 4 (deload): non-top sets halve (min 1).
+    // Mon Nov 9 → wave week 4 counted from the Oct 19 restart (deload):
+    // top 5 @ 70%, non-top sets halve (min 1).
     await pump(tester, _FakeWmStore(_seedRows(confirmed: true)),
-        today: DateTime(2026, 10, 19));
-    expect(inDay('2026-10-19', rich('Squat 1×5 · 240 lb (75%)')),
+        today: DateTime(2026, 11, 9));
+    expect(inDay('2026-11-09', rich('Squat 1×5 · 240 lb (75%)')),
+        findsOneWidget);
+    expect(inDay('2026-11-09', rich('Squat 1×5 · 225 lb (70%)')),
         findsOneWidget);
   });
 

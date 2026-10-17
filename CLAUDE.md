@@ -780,6 +780,24 @@ round-trip tests) and Dart mirrors (`lib/models/view_schema.dart`,
   suggester (in-gym RPE-reactive backoff weights), double-progression
   prompts for accessories, wave-aware MCP prescriptions (TS §4 still
   prints 1/2/3-rep chart options).
+- **v18 cut-wave RESTART (2026-10-16, user: traveling Nov 9 → deload
+  that week, "go straight into my 5 week next week")**: program.yaml
+  v18 = verbatim v17 + `strength_wave_cut.restarts: ["2026-10-19"]` —
+  Mondays where the cycle restarts at wk1; a date resolves against the
+  LATEST restart <= its Monday, else anchor_monday (anchor NOT moved —
+  that would have reclassified 10/12 as deload and dropped its TM
+  readings). Calendar: 9/28 wk1, 10/5 wk2, 10/12 wk3 (unchanged), 10/19
+  wk1, 10/26 wk2, 11/2 wk3, 11/9 wk4 DELOAD, 11/16 wk1, 12/7 deload;
+  post-cut wave untouched. Six consecutive loading weeks 9/28–11/8 —
+  watch top-set RPE drift. Implemented ONLY in the shared resolvers
+  (program_current.dart strengthWaveCutFor + ledger-mcp program.ts
+  twin; malformed / non-Monday restarts tolerated — non-Monday snaps to
+  its Monday, garbage ignored); every consumer (planner pricing +
+  deload halving, Program screen/day card, nightly WM weekTypeAt,
+  MCP next_prescriptions + log_rows weekType) already routes through
+  it. Shared fixtures gained an optional `cut_wave` expect key checked
+  by BOTH runners (8 restart cases). Add future restarts by appending
+  a Monday to the list in a new program version.
 - **Post-cut recomp program (v9, 2026-09-27, superseded by v10 above)**:
   coach/program.yaml v9
   integrates the user's `coach/post-cut-recomp-spec.md` (user-authored;

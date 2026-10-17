@@ -103,7 +103,7 @@ void main() {
       ];
 
   test('v17 Mon squat back-offs: 2x5 @ 75% TM (240 lb off TM 320)', () {
-    final rows = squatRows(DateTime.utc(2026, 10, 26)); // wave wk1
+    final rows = squatRows(DateTime.utc(2026, 10, 26)); // v18 wave wk2
     final backoffs = [
       for (final r in rows)
         if (r['warmup'] != true && r['top'] != true) r,
@@ -118,8 +118,20 @@ void main() {
         reason: 'one warm-up ramp for the day — back-offs add none');
   });
 
-  test('v17 Mon squat back-offs halve on the cut-wave deload (Oct 19)', () {
-    final rows = squatRows(DateTime.utc(2026, 10, 19)); // wave wk4
+  test('v18 restart: Oct 19 is wave wk1 — back-offs at FULL sets', () {
+    final rows = squatRows(DateTime.utc(2026, 10, 19)); // restart wk1
+    final top = rows.singleWhere((r) => r['top'] == true);
+    expect((top['reps'], top['pct'], top['weight']), (5, 0.811, 260));
+    final backoffs = [
+      for (final r in rows)
+        if (r['warmup'] != true && r['top'] != true) r,
+    ];
+    expect(backoffs, hasLength(2));
+    expect(backoffs.map((r) => r['weight']), [240, 240]);
+  });
+
+  test('v17 Mon squat back-offs halve on the cut-wave deload (Nov 9)', () {
+    final rows = squatRows(DateTime.utc(2026, 11, 9)); // v18 wave wk4
     final top = rows.singleWhere((r) => r['top'] == true);
     expect(top['pct'], 0.70);
     final backoffs = [

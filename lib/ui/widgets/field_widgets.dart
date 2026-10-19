@@ -57,6 +57,9 @@ Widget buildFieldWidget({
   /// timer writes into (ladder targets + stop_target). Used to detect
   /// "restart with state" and prompt the user before clearing.
   Map<String, Object?>? timerLinkedValues,
+  /// For `widget: number` fields — rendered inside the field on the
+  /// right (the strength form's previous-record hint on weight).
+  Widget? trailing,
 }) {
   final widget = dim.input?.widget ?? _widgetForType(dim.type);
   final historyEnabled = (dim.input?.history ?? false) &&
@@ -92,6 +95,7 @@ Widget buildFieldWidget({
         onChanged: onChanged,
         onShowHistory: history,
         isTimerLinked: isTimerLinked,
+        trailing: trailing,
       );
     case WidgetType.date:
       return _DateFieldWidget(
@@ -291,6 +295,7 @@ class _NumberFieldWidget extends StatefulWidget {
   final ValueChanged<Object?> onChanged;
   final VoidCallback? onShowHistory;
   final bool isTimerLinked;
+  final Widget? trailing;
 
   const _NumberFieldWidget({
     super.key,
@@ -299,6 +304,7 @@ class _NumberFieldWidget extends StatefulWidget {
     required this.onChanged,
     this.onShowHistory,
     this.isTimerLinked = false,
+    this.trailing,
   });
 
   @override
@@ -338,6 +344,7 @@ class _NumberFieldWidgetState extends State<_NumberFieldWidget> {
   Widget build(BuildContext context) {
     final input = widget.dim.input;
     final history = widget.onShowHistory;
+    final trailing = widget.trailing;
     final scheme = Theme.of(context).colorScheme;
     final field = TextField(
       controller: _controller,
@@ -353,13 +360,27 @@ class _NumberFieldWidgetState extends State<_NumberFieldWidget> {
         prefixIcon: widget.isTimerLinked
             ? Icon(Icons.timer_outlined, size: 18, color: scheme.primary)
             : null,
-        suffixIcon: history == null
+        suffixIcon: history == null && trailing == null
             ? null
-            : IconButton(
-                icon: const Icon(Icons.history),
-                tooltip: 'History',
-                onPressed: history,
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (trailing != null)
+                    Padding(
+                      padding: EdgeInsets.only(right: history == null ? 10 : 0),
+                      child: trailing,
+                    ),
+                  if (history != null)
+                    IconButton(
+                      icon: const Icon(Icons.history),
+                      tooltip: 'History',
+                      onPressed: history,
+                    ),
+                ],
               ),
+        suffixIconConstraints: trailing == null
+            ? null
+            : const BoxConstraints(minWidth: 0, minHeight: 0),
       ),
       onChanged: (s) {
         if (s.isEmpty) {

@@ -8,6 +8,7 @@ import '../services/autocomplete_cache.dart';
 import '../services/bodyweight_cache.dart';
 import '../services/derive.dart';
 import '../services/display_names.dart';
+import '../services/previous_record.dart';
 import '../services/sheets_repository.dart';
 import '../services/video_attach.dart';
 import '../services/video_draft_store.dart';
@@ -17,7 +18,9 @@ import '../services/video_rpe.dart';
 import '../services/warehouse_connector.dart';
 import 'design/design.dart';
 import 'widgets/field_widgets.dart';
+import 'timeline_screen.dart';
 import 'widgets/history_panel.dart';
+import 'widgets/previous_record_hint.dart';
 
 /// Auto-generated entry form. Renders one input per editable dimension.
 ///
@@ -196,12 +199,13 @@ class _FormScreenState extends State<FormScreen> {
     final autocompleteDims = widget.view.editableDimensions
         .where((d) => d.input?.widget == WidgetType.autocomplete)
         .toList();
-    if (autocompleteDims.isNotEmpty) {
+    if (autocompleteDims.isNotEmpty || _isStrengthShaped) {
       // Perf #15: the full-table list (strength: every row) waits for
       // the push transition to finish so it never competes with it.
+      // Also feeds the previous-record hint.
       _afterRouteTransition(_loadRecentRows);
-      _loadAdHocCache(autocompleteDims);
     }
+    if (autocompleteDims.isNotEmpty) _loadAdHocCache(autocompleteDims);
     unawaited(_restoreVideoDraft());
   }
 
@@ -273,9 +277,78 @@ class _FormScreenState extends State<FormScreen> {
       final rows = await widget.repository.list(widget.view);
       if (!mounted) return;
       _recentRows = rows;
+      if (_isStrengthShaped) {
+        // Built once from the already-loaded list; lookups memoize per
+        // exercise + flags, so toggles/keystrokes never rescan.
+        setState(() => _recordIndex = PreviousRecordIndex(
+              rows,
+              dateField: widget.view.dateField ?? 'date',
+            ));
+      }
     } catch (_) {
       _recentRows = const [];
     }
+  }
+
+  /// Previous-record hint source (strength-shaped views only). Null
+  /// until the deferred list resolves.
+  PreviousRecordIndex? _recordIndex;
+
+  bool get _isStrengthShaped =>
+      _rg == null &&
+      widget.view.dimensionByName('exercise') != null &&
+      widget.view.dimensionByName('weight') != null &&
+      widget.view.dimensionByName('reps') != null;
+
+  /// A tri-state flag as the record filter sees it: the form's explicit
+  /// true/false, or null (= any) when blank / hidden for this exercise.
+  bool? _flagFilter(String name) {
+    final dim = widget.view.dimensionByName(name);
+    if (dim == null || !dim.isVisibleGiven(_shared, widget.view.groups)) {
+      return null;
+    }
+    final v = _shared[name];
+    return v is bool ? v : null;
+  }
+
+  /// The weight field's trailing previous-record hint, or null.
+  Widget? _recordHint() {
+    final index = _recordIndex;
+    final ex = _shared['exercise']?.toString().trim() ?? '';
+    if (index == null || ex.isEmpty) return null;
+    final dateRaw = _shared[widget.view.dateField ?? 'date'];
+    final rec = index.lookup(
+      ex,
+      paused: _flagFilter('paused'),
+      belted: _flagFilter('belted'),
+      before: dateRaw is DateTime ? dateRaw : DateTime.now(),
+    );
+    if (rec.best == null) return null;
+    return PreviousRecordHint(
+      record: rec,
+      onOpen: _openRecordDay,
+      onFillWeight: (s) {
+        FocusManager.instance.primaryFocus?.unfocus();
+        setState(() {
+          _shared['weight'] = s.weight == s.weight.roundToDouble()
+              ? s.weight.toInt()
+              : s.weight;
+          _missingRequired.remove('weight');
+        });
+      },
+    );
+  }
+
+  /// Opens the recorded set's day in the timeline, that set expanded.
+  void _openRecordDay(RecordSet s) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => TimelineScreen(
+        view: widget.view,
+        repository: widget.repository,
+        initialDate: s.date,
+        highlightKeys: {?s.id},
+      ),
+    ));
   }
 
   /// Autocomplete autofill — find the most recent row matching the new
@@ -523,6 +596,9 @@ class _FormScreenState extends State<FormScreen> {
             value: _shared[dim.name],
             repository: widget.repository,
           ),
+          trailing: dim.name == 'weight' && _isStrengthShaped
+              ? _recordHint()
+              : null,
           onAttachVideo: dim.input?.widget == WidgetType.video &&
                   VideoRpeService.instance != null
               ? () => _attachVideo(dim)

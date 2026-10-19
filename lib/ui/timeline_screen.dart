@@ -235,7 +235,9 @@ class _TimelineScreenState extends State<TimelineScreen> {
   /// expanded view shows the row's full field values plus an Edit
   /// button. Kept on the state (not the section widget) so it survives
   /// timeline rebuilds (LLM cache update, etc.).
-  final Set<String> _expandedLoggedKeys = {};
+  /// Seeded with [TimelineScreen.highlightKeys] so an arriving logged
+  /// row id (the form's previous-record tap) opens expanded.
+  late final Set<String> _expandedLoggedKeys = {...widget.highlightKeys};
 
   /// Undo-logging mappings for this view: logged rowId → the planned
   /// entry it was promoted from (see [PlanStore.undoMappings]). Drives

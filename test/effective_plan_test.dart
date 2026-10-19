@@ -49,9 +49,9 @@ void main() {
               '${e['moved_from'] == null ? '' : ' <${weekdayShort(e['moved_from'] as DateTime)}'}',
       ];
 
-  test('fixture mirrors the oracle: 11 moves + 16 skips', () {
+  test('fixture mirrors the oracle: 11 moves + 17 skips', () {
     expect(moves.length, 11);
-    expect(skips.length, 16);
+    expect(skips.length, 17);
   });
 
   test('no moves/skips → entries pass through untouched', () {

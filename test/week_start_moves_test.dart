@@ -167,7 +167,7 @@ void main() {
       // Skips: this week's by date; the Sat 10/10 ones are next week's.
       final skips = activeSkips(all, d(5), weekStartDay: sat);
       expect(skips.keys.any((k) => k.startsWith('2026-10-10')), isFalse);
-      expect(skips.keys.where((k) => k.startsWith('2026-10-08')), hasLength(7));
+      expect(skips.keys.where((k) => k.startsWith('2026-10-08')), hasLength(8));
       final nextSkips = activeSkips(all, d(10), weekStartDay: sat);
       expect(nextSkips.keys.map((k) => k.split('|').last).toSet(), {
         'pull-ups',

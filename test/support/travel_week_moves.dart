@@ -1,6 +1,10 @@
 // The live `program_moves` rows for the week of Mon 2026-10-05 (travel
 // Wed–Sat, packed into Mon/Tue) — 11 moves + 16 skips, mirrored from
-// `dart run tool/missed_work.dart --date 2026-10-05` on 2026-10-02.
+// `dart run tool/missed_work.dart --date 2026-10-05` on 2026-10-02,
+// + ONE synthetic skip (17 total): program.yaml v19 (2026-10-19) adds a
+// Thursday "Seated cable row" and currentVersion is not date-gated, so
+// the live program retroactively gives Thu 10/8 a row the travel
+// skip-everything-Thursday would have covered.
 import 'package:airledger/services/program_moves.dart';
 
 DateTime _d(int day) => DateTime(2026, 10, day);
@@ -52,6 +56,7 @@ List<ProgramMove> travelWeekMoves() {
     skip('Hanging leg raise', 8),
     skip('Dips', 8),
     skip('EZ curls', 8),
+    skip('Seated cable row', 8), // v19 retro row (see header)
     skip('Bench volume', 9, 'bench covered Mon'),
     skip('Climb — LIGHT session', 9),
     skip('Pull-ups', 10, 'pull-ups done Mon'),

@@ -450,6 +450,58 @@ void main() {
       expect([for (final i in out) i.loggedSets], [2, 2]);
     });
 
+    // v19 (2026-10-19): Thursday owns a "Seated cable row" AND the
+    // live program_moves rows move Saturday's "Seated cable row" onto
+    // Thursday (weeks of Oct 17/24) → two same-named items on one day.
+    group('duplicate names: own Thu row + Sat row moved in', () {
+      Map<DateTime, List<EffectiveItem>> week() => effectiveWeek({
+            d(3): [it('Seated cable row', scheme: '3x8-12', sets: 3)],
+            d(5): [it('Seated cable row', scheme: '3x8-12', sets: 3)],
+          }, activeMoves([mv('Seated cable row', d(5), d(3))], mon));
+      List<PrescribedItem> thu() =>
+          [for (final e in week()[d(3)]!) if (!e.isGhost) e.item];
+
+      test('Thu lists own row first, then the moved-in one', () {
+        final t = week()[d(3)]!;
+        expect(t.map((e) => e.item.name),
+            ['Seated cable row', 'Seated cable row']);
+        expect(t[0].movedFrom, isNull);
+        expect(t[1].movedFrom, d(5));
+      });
+
+      test('3 row sets fill the own item first; the moved-in one stays '
+          'short (and is reported missed after Thu)', () {
+        final out = allocateDay(thu(), List.filled(3, 'Seated Cable Row'));
+        expect([for (final i in out) i.loggedSets], [3, 0]);
+        final mw = detectMissedWork(
+          week: week(),
+          strengthRows: sets(d(3), 'Seated Cable Row', 3),
+          climbDays: const {},
+          cardio4x4Days: const {},
+          today: d(4),
+        );
+        expect(mw.missed.map((m) => (m.item.name, m.day)),
+            [('Seated cable row', d(3))]);
+      });
+
+      test('6 row sets complete both', () {
+        final out = allocateDay(thu(), List.filled(6, 'Seated Cable Row'));
+        expect([for (final i in out) i.loggedSets], [3, 3]);
+      });
+
+      test('a Thu skip keyed by name hides BOTH items (name-keyed skip)', () {
+        final mw = detectMissedWork(
+          week: week(),
+          strengthRows: const [],
+          climbDays: const {},
+          cardio4x4Days: const {},
+          today: d(4),
+          skipped: {skipKey(d(3), 'Seated cable row')},
+        );
+        expect(mw.isEmpty, isTrue);
+      });
+    });
+
     test('session items are left untouched', () {
       final out = allocateDay([
         it('Hard climb', period: 'PM'),

@@ -138,6 +138,9 @@ void main() {
         'EZ-Bar Preacher Curl -x8',
         'EZ-Bar Preacher Curl -x8',
         'EZ-Bar Preacher Curl -x8',
+        'Seated Cable Row -x8', // v19 Thu row 3x8-12
+        'Seated Cable Row -x8',
+        'Seated Cable Row -x8',
       ]);
       final fri = onDay(entries, w1Monday.add(const Duration(days: 4)));
       expect(rows(fri), [

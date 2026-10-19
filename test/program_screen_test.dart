@@ -263,8 +263,14 @@ void main() {
     expect(find.text('Press 1×5 · 115 lb (81%)'), findsOneWidget);
     // Back-offs 3×6-8 @ 72%: 140 × 0.72 = 100.8 → 100.
     expect(find.text('Press 3×6 · 100 lb (72%)'), findsOneWidget);
-    // The approved Saturday movements, verbatim.
-    expect(find.text('Seated Cable Row 3×8-12'), findsOneWidget);
+    // The approved Saturday movements, verbatim. (v19: Thursday also
+    // rows — scope the row to Saturday's tile.)
+    expect(
+        find.descendant(
+            of: find.byKey(const ValueKey('routine-day-2026-10-03')),
+            matching: find.text('Seated Cable Row 3×8-12')),
+        findsOneWidget);
+    expect(find.text('Seated Cable Row 3×8-12'), findsNWidgets(2));
     expect(find.text('Cable Face Pull 2×12-20'), findsOneWidget);
     expect(find.text('Cable External Rotation 2×12-20'), findsOneWidget);
     // Exactly one rest day on screen: Sunday.
@@ -455,7 +461,7 @@ void main() {
         findsOneWidget);
     expect(inDay('2026-10-07', find.text('Skipped: Squat volume, OHP volume')),
         findsOneWidget);
-    expect(inDay('2026-10-08', find.text('7 skipped')), findsOneWidget);
+    expect(inDay('2026-10-08', find.text('8 skipped')), findsOneWidget);
 
     // Sunday: the moved 4x4.
     expect(inDay('2026-10-11', find.text('4x4')), findsOneWidget);

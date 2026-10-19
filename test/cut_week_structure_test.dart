@@ -17,7 +17,8 @@
 //      Tue  4x4 + hard climb (no barbell rows)
 //      Wed  bench heavy + squat volume + press volume + pull-ups
 //      Thu  calisthenics (muscle-ups main + handstand/front-lever skill
-//           + hanging leg raise) + dips + EZ-bar preacher curls
+//           + hanging leg raise) + dips + EZ-bar preacher curls +
+//           seated cable row (v19 — upper back under-dosed)
 //      Fri  deadlift heavy + bench volume + light climb
 //      Sat  press heavy + OHP back-offs + seated cable row + pull-ups +
 //           laterals + face pulls + external rotations
@@ -163,7 +164,7 @@ void main() {
   });
 
   test('Thu: muscle-ups main + skill (handstand/front-lever) + HLR + '
-      'dips + EZ-bar preacher curls', () {
+      'dips + EZ-bar preacher curls + seated cable row (v19)', () {
     expect(dayRows(3), [
       ('Muscle Up', 6, 1), // 6 unassisted singles/doubles (progression)
       ('Muscle Up Green Band', 2, 3), // + banded volume
@@ -172,6 +173,7 @@ void main() {
       ('Hanging Leg Raise', 3, 8), // v14 restored core work
       ('Parallel Bar Triceps Dip', 3, 8),
       ('EZ-Bar Preacher Curl', 3, 8),
+      ('Seated Cable Row', 3, 8), // v19: 3x8-12, after the skill work
     ]);
   });
 

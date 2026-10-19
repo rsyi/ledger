@@ -83,6 +83,33 @@ void main() {
       expect(backoffs.targetSets, 2);
     });
 
+    test('v19 Thu prose: seated cable row parses as its own 3-set item',
+        () {
+      // Verbatim from airledger-fitness coach/program.yaml v19
+      // routine.week.thu.morning.
+      const thu =
+          'Muscle-ups 6 sets of 1-2 unassisted (quality — stop on form '
+          'loss), then banded muscle-ups 2x3-5 to build volume. Then '
+          'handstand practice ~10 min (wall or free, quality holds); '
+          'front-lever up-downs 2x5 (straight-arm, short of failure); '
+          'hanging leg raise 3x8-15. Then dips 3x8-12; EZ curls 3x8-12; '
+          'seated cable row 3x8-12; optional triceps 2x10-15.';
+      final items = parsePrescribedProse(thu, null);
+      expect([for (final i in items) i.name], [
+        'Muscle-ups',
+        'Banded muscle-ups',
+        'Handstand practice',
+        'Front-lever up-downs',
+        'Hanging leg raise',
+        'Dips',
+        'EZ curls',
+        'Seated cable row',
+      ]);
+      final row = items.last;
+      expect(row.scheme, '3x8-12');
+      expect(row.targetSets, 3);
+    });
+
     test('skips non-exercise clauses', () {
       final items = parsePrescribedProse(
           'Bench top set, then back-offs 3x5-8; No squat or deadlift today; '

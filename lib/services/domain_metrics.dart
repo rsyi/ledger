@@ -116,21 +116,23 @@ class MetricUnavailable extends MetricData {
 // Strength built-ins
 // ---------------------------------------------------------------------------
 
-/// Powerlifting-style total: sum of the four main lifts' given values
-/// (the `pl_total` metric feeds the CURRENT RPE-adjusted estimates
-/// since 2026-10-12 — wilks.dart [estimatedMaxesAsOf]). Returns the sum over the lifts that HAVE
+/// Powerlifting total: sum of the SBD lifts' given values ([wilksLifts]
+/// — squat + bench + deadlift ONLY; press/OHP is never part of a
+/// powerlifting total, user 2026-10-23). The `pl_total` metric feeds
+/// the CURRENT RPE-adjusted estimates (wilks.dart
+/// [currentStrengthTotal]). Returns the sum over the lifts that HAVE
 /// history plus the list of missing lifts, so the UI can label an
 /// incomplete total honestly. Null total when no lift has history.
 ({double total, List<String> missing})? plTotal(
   Map<String, double> bestE1rms,
 ) {
   final missing = [
-    for (final lift in synthesisLifts)
+    for (final lift in wilksLifts)
       if (!bestE1rms.containsKey(lift)) lift,
   ];
-  if (missing.length == synthesisLifts.length) return null;
+  if (missing.length == wilksLifts.length) return null;
   var total = 0.0;
-  for (final lift in synthesisLifts) {
+  for (final lift in wilksLifts) {
     total += bestE1rms[lift] ?? 0;
   }
   return (total: total, missing: missing);
@@ -395,6 +397,17 @@ class DomainMetricInputs {
   });
 }
 
+/// THE strength header breakdown for [inputs] (wilks.dart
+/// [currentStrengthTotal]): the `pl_total` + `wilks` chips and the
+/// header's breakdown sheet all read this, so they cannot diverge.
+StrengthTotalBreakdown strengthTotalOf(DomainMetricInputs inputs) =>
+    currentStrengthTotal(
+      inputs.strengthRows,
+      inputs.weightDaily,
+      inputs.today,
+      weekStartDay: inputs.weekStartDay,
+    );
+
 /// One metric config → display data. Total function: unknown ids and
 /// empty inputs yield [MetricUnavailable].
 MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
@@ -409,23 +422,16 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       if (inputs.strengthRows.isEmpty) {
         return const MetricUnavailable('no strength history');
       }
-      // EST. TOTAL (2026-10-12): the CURRENT RPE-adjusted e1RM per lift
-      // (S+B+D+P) — the latest trained accounting week's best, warm-ups
-      // excluded — on the SAME basis + numbers as the Wilks stat beside
-      // it in the strength header (wilks.dart estimatedMaxesAsOf), so
-      // "Wilks · est. total" read off one set of per-lift values. Was
-      // the all-time best plain-Epley total.
-      final est = estimatedMaxesAsOf(
-        inputs.strengthRows,
-        inputs.today,
-        weekStartDay: inputs.weekStartDay,
-        lifts: synthesisLifts,
-      );
-      final t = plTotal({for (final e in est.entries) e.key: e.value.value});
+      // EST. TOTAL: the CURRENT RPE-adjusted e1RM per SBD lift (press
+      // excluded, 2026-10-23) — read off the SAME breakdown as the Wilks
+      // chip beside it + the header's breakdown sheet
+      // ([strengthTotalOf] → wilks.dart currentStrengthTotal).
+      final b = strengthTotalOf(inputs);
+      final t = b.totalLbs;
       if (t == null) return const MetricUnavailable('no main-lift sets yet');
       return MetricStats(
-        [MetricStat(label: 'est. total', value: withUnit(t.total))],
-        note: t.missing.isEmpty ? null : 'missing: ${t.missing.join(', ')}',
+        [MetricStat(label: 'est. total', value: withUnit(t))],
+        note: b.missing.isEmpty ? null : 'missing: ${b.missing.join(', ')}',
       );
 
     case 'e1rm_reference':
@@ -472,8 +478,8 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
 
     case 'wilks':
       // WILKS-2020 SBD score (squat+bench+deadlift only — NOT the
-      // 4-lift pl_total). The stat stays WEEKLY-current, on the
-      // RPE-ADJUSTED e1RM basis (2026-10-12; was actual-max from
+      // press; same SBD sum as pl_total). The stat stays WEEKLY-current,
+      // on the RPE-ADJUSTED e1RM basis (2026-10-12; was actual-max from
       // 2026-09-22): per lift the week's best Lifts-row estimate over
       // non-warm-up sets (carried forward when untrained) at that
       // week's 7-day-avg bodyweight. All semantics + verified
@@ -484,28 +490,25 @@ MetricData computeMetric(MetricConfig m, DomainMetricInputs inputs) {
       if (inputs.weightDaily.isEmpty) {
         return const MetricUnavailable('no weigh-ins for bodyweight');
       }
-      final weeks = weeklyWilksSeries(
-        inputs.strengthRows,
-        inputs.weightDaily,
-        through: inputs.today,
-        weekStartDay: inputs.weekStartDay,
-      );
-      if (weeks.isEmpty) {
+      // The current week's point — [strengthTotalOf], the one breakdown
+      // the est. total chip + header sheet also read (== the weekly
+      // series' last point through today).
+      final b = strengthTotalOf(inputs);
+      final w = b.wilks;
+      if (w == null) {
         return const MetricUnavailable(
           'no squat/bench/deadlift working sets yet',
         );
       }
-      final last = weeks.last;
+      final carried = [
+        for (final l in b.lifts)
+          if (l.carried) l.lift,
+      ];
       return MetricStats(
-        [
-          MetricStat(
-            label: 'Wilks (SBD)',
-            value: last.wilks.toStringAsFixed(1),
-          ),
-        ],
-        note: 'total ${fmtLb(last.totalLbs.roundToDouble())} lb @ '
-            '${last.bodyweightLbs.toStringAsFixed(1)} lb bw'
-            '${last.carried.isEmpty ? '' : ' · carried: ${last.carried.join(', ')}'}',
+        [MetricStat(label: 'Wilks (SBD)', value: w.toStringAsFixed(1))],
+        note: 'total ${fmtLb(b.totalLbs!.roundToDouble())} lb @ '
+            '${b.bodyweightLbs!.toStringAsFixed(1)} lb bw'
+            '${carried.isEmpty ? '' : ' · carried: ${carried.join(', ')}'}',
       );
 
     case 'wilks_series':

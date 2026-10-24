@@ -1,10 +1,11 @@
 /// Wilks (SBD) strength score — WILKS-2020 male coefficients.
 ///
 /// Classic 3-lift Wilks: total = squat + bench + deadlift ONLY. The
-/// app's `pl_total` is a 4-lift sum (it includes press), so it is NOT
-/// comparable to powerlifting references — this metric is, and the UI
-/// labels it "Wilks (SBD, actual lifts)" to make the distinction
-/// explicit.
+/// app's `pl_total` ("est. total") is the same SBD sum since 2026-10-23
+/// (user: "wilks and powerlifting total should be based on squat bench
+/// deadlift only, not ohp" — it was a 4-lift sum incl. press before).
+/// The strength header's two numbers + their breakdown sheet all read
+/// ONE function, [currentStrengthTotal].
 ///
 /// THREE BASES ([WilksBasis]), one shared engine:
 ///
@@ -178,10 +179,29 @@ Map<String, ({double value, DateTime date})> estimatedMaxesAsOf(
   int weekStartDay = DateTime.monday,
   List<String> lifts = wilksLifts,
   WilksBasis basis = defaultWilksBasis,
+}) => {
+  for (final e in _estimatesAsOf(
+    strengthRows,
+    today,
+    weekStartDay: weekStartDay,
+    lifts: lifts,
+    basis: basis,
+  ).entries)
+    e.key: (value: e.value.value, date: e.value.date),
+};
+
+/// [estimatedMaxesAsOf] plus the index (into the input list) of the set
+/// each value comes from — ties keep the earlier set.
+Map<String, ({double value, DateTime date, int index})> _estimatesAsOf(
+  List<StrengthRow> strengthRows,
+  DateTime today, {
+  required int weekStartDay,
+  required List<String> lifts,
+  required WilksBasis basis,
 }) {
   final end = DateTime(today.year, today.month, today.day + 1);
   final warm = _warmups(strengthRows, basis);
-  final out = <String, ({double value, DateTime date})>{};
+  final out = <String, ({double value, DateTime date, int index})>{};
   for (var i = 0; i < strengthRows.length; i++) {
     final r = strengthRows[i];
     final lift = mainLiftByExercise[r.exercise];
@@ -194,10 +214,179 @@ Map<String, ({double value, DateTime date})> estimatedMaxesAsOf(
     if (cur == null ||
         wk.isAfter(cur.date) ||
         (wk == cur.date && v > cur.value)) {
-      out[lift] = (value: v, date: wk);
+      out[lift] = (value: v, date: wk, index: i);
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// The strength header's "Wilks · est. total" (2026-10-23)
+// ---------------------------------------------------------------------------
+
+/// One SBD lift's CURRENT estimate inside [StrengthTotalBreakdown].
+class LiftEstimate {
+  /// squat | bench | deadlift.
+  final String lift;
+
+  /// The estimated 1RM (lbs) on the breakdown's basis — RPE-adjusted
+  /// e1RM by default.
+  final double e1rmLbs;
+
+  /// The set the estimate comes from (its [StrengthRow.id] opens it in
+  /// the timeline).
+  final StrengthRow source;
+
+  /// The lookback window: the accounting week the source set sits in —
+  /// the most recent week (≤ today) with a qualifying set for this lift.
+  final DateTime windowStart;
+  final DateTime windowEnd; // inclusive
+
+  /// True when [windowStart] is not the current accounting week (the
+  /// lift wasn't trained yet this week; its value carries).
+  final bool carried;
+
+  const LiftEstimate({
+    required this.lift,
+    required this.e1rmLbs,
+    required this.source,
+    required this.windowStart,
+    required this.windowEnd,
+    required this.carried,
+  });
+}
+
+/// Everything behind the strength header's "Wilks · est. total" — the
+/// header chips AND their breakdown sheet both render THIS object, so
+/// they can never diverge.
+class StrengthTotalBreakdown {
+  /// Present SBD lifts, in [wilksLifts] order.
+  final List<LiftEstimate> lifts;
+
+  /// SBD lifts with no qualifying set yet.
+  final List<String> missing;
+
+  /// Sum of the present lifts' estimates; null when none is present.
+  final double? totalLbs;
+
+  /// The bodyweight the coefficient uses: mean of the weigh-ins in the
+  /// most recent accounting week (≤ today) that has any — the weekly
+  /// Wilks series' 7-day average. Null without weigh-ins.
+  final double? bodyweightLbs;
+
+  /// That week ([bwWeekStart]) + the weigh-ins averaged: count and the
+  /// first/last weigh-in dates.
+  final DateTime? bwWeekStart;
+  final int bwCount;
+  final DateTime? bwFirst;
+  final DateTime? bwLast;
+
+  /// True when [bwWeekStart] is not the current week (carried).
+  final bool bwCarried;
+
+  /// WILKS-2020 male coefficient at [bodyweightLbs]; null without bw.
+  final double? coeff;
+
+  /// total_kg × coeff — null unless all three lifts AND a bodyweight.
+  final double? wilks;
+
+  const StrengthTotalBreakdown({
+    required this.lifts,
+    required this.missing,
+    required this.totalLbs,
+    this.bodyweightLbs,
+    this.bwWeekStart,
+    this.bwCount = 0,
+    this.bwFirst,
+    this.bwLast,
+    this.bwCarried = false,
+    this.coeff,
+    this.wilks,
+  });
+}
+
+/// THE strength-header computation: per SBD lift the current estimate
+/// (= [estimatedMaxesAsOf]), their sum, the week's bodyweight
+/// ([weeklyWilksSeries]' rule: the most recent week's weigh-in mean,
+/// carried) and the Wilks. Rows/weigh-ins dated after [today] are
+/// ignored. Matches `weeklyWilksSeries(..., through: today).last` on
+/// histories without future-dated rows.
+StrengthTotalBreakdown currentStrengthTotal(
+  List<StrengthRow> strengthRows,
+  List<WeightRow> weighIns,
+  DateTime today, {
+  int weekStartDay = DateTime.monday,
+  WilksBasis basis = defaultWilksBasis,
+}) {
+  final thisWeek = weekStartOf(
+    DateTime(today.year, today.month, today.day),
+    weekStartDay,
+  );
+  final est = _estimatesAsOf(
+    strengthRows,
+    today,
+    weekStartDay: weekStartDay,
+    lifts: wilksLifts,
+    basis: basis,
+  );
+  final lifts = [
+    for (final l in wilksLifts)
+      if (est[l] case final e?)
+        LiftEstimate(
+          lift: l,
+          e1rmLbs: e.value,
+          source: strengthRows[e.index],
+          windowStart: e.date,
+          windowEnd: DateTime(e.date.year, e.date.month, e.date.day + 6),
+          carried: e.date != thisWeek,
+        ),
+  ];
+  final total = lifts.isEmpty
+      ? null
+      : lifts.fold<double>(0, (s, l) => s + l.e1rmLbs);
+
+  // Bodyweight: the latest week (≤ this week) with weigh-ins.
+  final end = DateTime(today.year, today.month, today.day + 1);
+  DateTime? bwWeek;
+  for (final w in weighIns) {
+    if (!w.date.isBefore(end)) continue;
+    final k = weekStartOf(w.date, weekStartDay);
+    if (bwWeek == null || k.isAfter(bwWeek)) bwWeek = k;
+  }
+  double? bw;
+  var n = 0;
+  DateTime? first, last;
+  if (bwWeek != null) {
+    var sum = 0.0;
+    for (final w in weighIns) {
+      if (!w.date.isBefore(end)) continue;
+      if (weekStartOf(w.date, weekStartDay) != bwWeek) continue;
+      sum += w.weightLbs;
+      n++;
+      if (first == null || w.date.isBefore(first)) first = w.date;
+      if (last == null || w.date.isAfter(last)) last = w.date;
+    }
+    bw = sum / n;
+  }
+  final coeff = bw == null ? null : wilks2020MaleCoeff(bw * kgPerLb);
+  return StrengthTotalBreakdown(
+    lifts: lifts,
+    missing: [
+      for (final l in wilksLifts)
+        if (!est.containsKey(l)) l,
+    ],
+    totalLbs: total,
+    bodyweightLbs: bw,
+    bwWeekStart: bwWeek,
+    bwCount: n,
+    bwFirst: first,
+    bwLast: last,
+    bwCarried: bwWeek != null && bwWeek != thisWeek,
+    coeff: coeff,
+    wilks: coeff == null || lifts.length < wilksLifts.length
+        ? null
+        : total! * kgPerLb * coeff,
+  );
 }
 
 /// WILKS-2020 male coefficient at [bodyweightKg] (see library docs for

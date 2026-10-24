@@ -37,6 +37,11 @@ class StrengthRow {
   /// (working_sets.dart) where a consumer excludes warm-ups (Wilks).
   final String? setType;
 
+  /// The ledger row id when mapped from a record (null for synthetic
+  /// rows) — lets a derived number point back at the set it came from
+  /// (the strength header's Wilks / est. total breakdown, 2026-10-23).
+  final String? id;
+
   const StrengthRow({
     required this.date,
     required this.exercise,
@@ -47,6 +52,7 @@ class StrengthRow {
     this.paused,
     this.belted,
     this.setType,
+    this.id,
   });
 }
 

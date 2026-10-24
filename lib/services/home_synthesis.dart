@@ -119,6 +119,7 @@ StrengthRow? strengthRowFromRecord(Map<String, Object?> r) {
       null || '' => null,
       final t => t,
     },
+    id: r['id']?.toString(),
   );
 }
 

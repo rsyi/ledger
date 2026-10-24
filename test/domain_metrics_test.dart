@@ -20,25 +20,27 @@ double e1rm(double w, int reps) => w * (1 + (reps > 12 ? 12 : reps) / 30);
 
 void main() {
   group('plTotal', () {
-    test('sums the four lifts and reports none missing', () {
+    test('sums squat/bench/deadlift ONLY (press ignored), none missing',
+        () {
       final t = plTotal({
         'squat': 300,
         'bench': 200,
         'deadlift': 400,
         'press': 100,
       })!;
-      expect(t.total, 1000);
+      expect(t.total, 900);
       expect(t.missing, isEmpty);
     });
 
-    test('partial history sums what exists and lists the gaps', () {
+    test('partial history sums what exists and lists the SBD gaps', () {
       final t = plTotal({'squat': 300, 'bench': 200})!;
       expect(t.total, 500);
-      expect(t.missing, ['deadlift', 'press']);
+      expect(t.missing, ['deadlift']);
     });
 
-    test('no lifts at all → null', () {
+    test('no lifts at all (or press only) → null', () {
       expect(plTotal({}), isNull);
+      expect(plTotal({'press': 135}), isNull);
     });
   });
 
@@ -254,13 +256,41 @@ void main() {
               as MetricStats;
       // No RPE logged → plain capped Epley; latest trained week per
       // lift, so the old 2024 squat PR no longer counts.
-      final expected = e1rm(315, 3) +
-          e1rm(225, 5) +
-          e1rm(405, 2) +
-          e1rm(125, 6);
+      // SBD ONLY (2026-10-23): the logged press never enters the
+      // powerlifting total.
+      final expected = e1rm(315, 3) + e1rm(225, 5) + e1rm(405, 2);
       expect(d.stats.single.label, 'est. total');
       expect(d.stats.single.value, '${expected.round()} lb');
       expect(d.note, isNull);
+    });
+
+    test('pl_total + Wilks are squat/bench/deadlift only — press-only '
+        'history is not a powerlifting total', () {
+      final pressOnly = DomainMetricInputs(
+        strengthRows: [row('Overhead Press', 155, 3, '2026-09-08')],
+        weightDaily: [WeightRow(date: DateTime(2026, 9, 8), weightLbs: 160)],
+        today: today,
+      );
+      expect(
+        computeMetric(const MetricConfig(id: 'pl_total'), pressOnly),
+        isA<MetricUnavailable>(),
+      );
+      expect(
+        computeMetric(const MetricConfig(id: 'wilks'), pressOnly),
+        isA<MetricUnavailable>(),
+      );
+      // A missing SBD lift is named; press is never "missing".
+      final noDl = computeMetric(
+        const MetricConfig(id: 'pl_total'),
+        DomainMetricInputs(
+          strengthRows: [
+            row('Barbell Squat', 315, 3, '2026-09-01'),
+            row('Flat Barbell Bench Press', 225, 5, '2026-09-10'),
+          ],
+          today: today,
+        ),
+      ) as MetricStats;
+      expect(noDl.note, 'missing: deadlift');
     });
 
     test('e1rm_reference is per-lift, 42-day windowed (old PR excluded)', () {

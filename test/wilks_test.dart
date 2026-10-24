@@ -524,6 +524,59 @@ void main() {
       expect(m['press']!.value, rpeAdjustedE1rm(135, 5, 8));
       expect(m['press']!.date, DateTime(2026, 10, 3));
     });
+
+    test('currentStrengthTotal: SBD only, source sets, == the weekly series',
+        () {
+      final rows = [
+        // A heavy press must never enter the total or the Wilks.
+        _set('2026-10-11', 'Overhead Press', 185, 3, rpe: 8),
+        ...week(),
+      ];
+      final today = DateTime(2026, 10, 12);
+      final b = currentStrengthTotal(rows, weighIns, today,
+          weekStartDay: DateTime.saturday);
+      expect(b.lifts.map((l) => l.lift), wilksLifts);
+      expect(b.missing, isEmpty);
+      final w = weeklyWilksSeries(rows, weighIns,
+              weekStartDay: DateTime.saturday, through: today)
+          .last;
+      expect(b.totalLbs, closeTo(w.totalLbs, 1e-9));
+      expect(b.wilks, closeTo(w.wilks, 1e-9));
+      expect(b.bodyweightLbs, w.bodyweightLbs);
+      expect(
+        b.totalLbs,
+        closeTo(
+          rpeAdjustedE1rm(275, 5, 8.5) +
+              rpeAdjustedE1rm(185, 4, 8) +
+              rpeAdjustedE1rm(285, 3, 7),
+          1e-9,
+        ),
+      );
+      // Source = the working set (the 135 warm-up is excluded).
+      final squat = b.lifts.first;
+      expect(squat.source.weight, 275);
+      expect(squat.source.reps, 5);
+      expect(squat.source.rpe, 8.5);
+      expect(squat.windowStart, DateTime(2026, 10, 10));
+      expect(squat.windowEnd, DateTime(2026, 10, 16));
+      expect(squat.carried, isFalse);
+      expect(b.bwCount, 1);
+      expect(b.bwFirst, DateTime(2026, 10, 10));
+      expect(b.coeff, wilks2020MaleCoeff(161.3 * kgPerLb));
+    });
+
+    test('currentStrengthTotal: missing lift → total of the rest, no Wilks',
+        () {
+      final b = currentStrengthTotal(
+        [_set('2026-10-10', 'Barbell Squat', 275, 5, rpe: 8.5)],
+        weighIns,
+        DateTime(2026, 10, 12),
+        weekStartDay: DateTime.saturday,
+      );
+      expect(b.missing, ['bench', 'deadlift']);
+      expect(b.totalLbs, rpeAdjustedE1rm(275, 5, 8.5));
+      expect(b.wilks, isNull);
+    });
   });
 
   group('wilksBenchmark', () {

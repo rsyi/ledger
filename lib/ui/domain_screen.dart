@@ -50,6 +50,7 @@ import 'app_text.dart';
 import 'form_screen.dart';
 import 'timeline_screen.dart';
 import 'widgets/metric_chart.dart';
+import 'widgets/strength_total_sheet.dart';
 
 /// Metric ids that need mapped strength rows.
 const _strengthMetricIds = {
@@ -269,7 +270,44 @@ class _DomainScreenState extends State<DomainScreen> {
     mode: _mode,
     recordsLabel: _integration ? 'Records' : 'Log',
     onMode: (m) => setState(() => _mode = m),
+    onStatsTap: _hasStrengthTotal ? _openStrengthTotal : null,
   );
+
+  /// The headline carries the Wilks / est. total chips → the strip is
+  /// tappable into their breakdown (2026-10-23).
+  bool get _hasStrengthTotal => headlineConfigs(
+    widget.domain,
+  ).any((m) => m.id == 'pl_total' || m.id == 'wilks');
+
+  /// Opens the "Wilks · est. total" breakdown — built by the SAME
+  /// [strengthTotalOf] call the header chips read, off the same inputs.
+  Future<void> _openStrengthTotal() async {
+    final DomainMetricInputs inputs;
+    try {
+      inputs = await _inputs;
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    await showStrengthTotalSheet(
+      context,
+      breakdown: strengthTotalOf(inputs),
+      recordsById: {
+        for (final r in inputs.records)
+          if (r['id'] != null) r['id'].toString(): r,
+      },
+      onOpenSet: (l) {
+        if (!mounted) return;
+        openLoggedRowInTimeline(
+          context,
+          view: widget.view,
+          repository: widget.repository,
+          date: l.source.date,
+          rowId: l.source.id,
+        );
+      },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -287,12 +325,16 @@ class _ModeBar extends StatelessWidget {
   final String recordsLabel;
   final ValueChanged<int> onMode;
 
+  /// Tap on the headline numbers (the strength breakdown); null = inert.
+  final VoidCallback? onStatsTap;
+
   const _ModeBar({
     required this.domain,
     required this.inputs,
     required this.mode,
     required this.recordsLabel,
     required this.onMode,
+    this.onStatsTap,
   });
 
   @override
@@ -322,7 +364,8 @@ class _ModeBar extends StatelessWidget {
                 }
                 // Labels at the tag scale, values at the 16sp value
                 // scale; two lines of reflow before any ellipsis.
-                return Text.rich(
+                final strip = Text.rich(
+                  key: const ValueKey('domain-headline'),
                   TextSpan(
                     children: [
                       for (final (i, s) in stats.indexed) ...[
@@ -342,6 +385,15 @@ class _ModeBar extends StatelessWidget {
                   style: AppText.tag(context),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
+                );
+                if (onStatsTap == null) return strip;
+                return InkWell(
+                  onTap: onStatsTap,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: strip,
+                  ),
                 );
               },
             ),

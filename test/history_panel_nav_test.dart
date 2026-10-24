@@ -21,11 +21,9 @@ class _Repo implements WarehouseConnector {
   Future<void> ensureTable(ViewSchema view) async {}
   @override
   Future<List<Record>> list(ViewSchema view, {DateTime? onDate}) async => [
-        for (final r in rows)
-          if (onDate == null ||
-              (r['date'] as DateTime).isAtSameMomentAs(onDate))
-            r,
-      ];
+    for (final r in rows)
+      if (onDate == null || (r['date'] as DateTime).isAtSameMomentAs(onDate)) r,
+  ];
   @override
   Future<Record> create(ViewSchema view, Record record) async => record;
   @override
@@ -66,13 +64,13 @@ final _view = ViewSchema(
 );
 
 Record _row(String id, DateTime d, num w, int reps) => {
-      'id': id,
-      'date': d,
-      'exercise': 'Flat Barbell Bench Press',
-      'weight': w,
-      'reps': reps,
-      'rpe': 8,
-    };
+  'id': id,
+  'date': d,
+  'exercise': 'Flat Barbell Bench Press',
+  'weight': w,
+  'reps': reps,
+  'rpe': 8,
+};
 
 final _rows = [
   _row('a1', DateTime(2026, 10, 1), 225, 5),
@@ -87,26 +85,28 @@ void main() {
     tester,
   ) async {
     const scheme = ColorScheme.light();
-    await tester.pumpWidget(MaterialApp(
-      theme: ThemeData(
-        colorScheme: scheme,
-        extensions: const [StatusColors.light],
-      ),
-      home: Builder(
-        builder: (context) => Scaffold(
-          body: TextButton(
-            onPressed: () => showHistorySheet(
-              context: context,
-              view: _view,
-              dim: _view.dimensionByName('exercise')!,
-              value: 'Flat Barbell Bench Press',
-              repository: _Repo(_rows),
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(
+          colorScheme: scheme,
+          extensions: const [StatusColors.light],
+        ),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showHistorySheet(
+                context: context,
+                view: _view,
+                dim: _view.dimensionByName('exercise')!,
+                value: 'Flat Barbell Bench Press',
+                repository: _Repo(_rows),
+              ),
+              child: const Text('open'),
             ),
-            child: const Text('open'),
           ),
         ),
       ),
-    ));
+    );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('235 × 3'));

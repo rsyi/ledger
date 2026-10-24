@@ -1425,6 +1425,19 @@ after Today — the WEEK PLANNER bootstrap sync (run + queued rerun).
   weight (~90 rows), WM from disk; network revalidations + the planner
   (ranged) run after first paint.
 
+- **Strength header breakdown + history tap-through (2026-10-23)**:
+  `pl_total` ("est. total") is SBD ONLY now (it summed press too — the
+  sole press leak; Wilks/series/projection strength_total were already
+  SBD). wilks.dart `currentStrengthTotal` (→ domain_metrics
+  `strengthTotalOf`) is THE computation behind both header chips AND
+  the tap-to-open "Wilks · est. total" sheet
+  (widgets/strength_total_sheet.dart: per-lift e1RM + source set +
+  week window, bodyweight week + coefficient). History-sheet tiles,
+  the previous-record hint and the sheet's lift rows all open
+  `openLoggedRowInTimeline` (timeline_screen.dart) — day + row expanded
+  + `loggedRowHighlight` tint that fades with the highlight timer.
+  StrengthRow gained `id` (mapped in strengthRowFromRecord).
+
 ## Dev gotchas (hard-won)
 
 - `import 'package:jinja/jinja.dart' hide Template;` (name clash);

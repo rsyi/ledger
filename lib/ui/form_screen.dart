@@ -341,14 +341,13 @@ class _FormScreenState extends State<FormScreen> {
 
   /// Opens the recorded set's day in the timeline, that set expanded.
   void _openRecordDay(RecordSet s) {
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => TimelineScreen(
-        view: widget.view,
-        repository: widget.repository,
-        initialDate: s.date,
-        highlightKeys: {?s.id},
-      ),
-    ));
+    openLoggedRowInTimeline(
+      context,
+      view: widget.view,
+      repository: widget.repository,
+      date: s.date,
+      rowId: s.id,
+    );
   }
 
   /// Autocomplete autofill — find the most recent row matching the new

@@ -101,6 +101,31 @@ class _Item {
   }
 }
 
+/// The arrival tint on a logged row (same accent as a planned
+/// [ExerciseRow]'s `highlighted`): strong enough to read as "this one",
+/// faded out by the timeline's one-shot highlight timer.
+Color loggedRowHighlight(ColorScheme scheme) =>
+    scheme.tertiaryContainer.withValues(alpha: 0.55);
+
+/// Opens [view]'s timeline on [date]'s day with the logged row [rowId]
+/// expanded + tinted — the shared hand-off for every "show me that set"
+/// tap (history panel, previous-record hint, strength header breakdown).
+Future<void> openLoggedRowInTimeline(
+  BuildContext context, {
+  required ViewSchema view,
+  required WarehouseConnector repository,
+  required DateTime date,
+  String? rowId,
+}) =>
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => TimelineScreen(
+        view: view,
+        repository: repository,
+        initialDate: DateTime(date.year, date.month, date.day),
+        highlightKeys: {?rowId},
+      ),
+    ));
+
 /// Date-filtered list of records for a single view. Merges:
 ///   - logged rows from the sheet (filtered to selected date)
 ///   - planned rows from local plan store (filtered to selected date)
@@ -682,6 +707,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
                           selectedKeys: _selectedKeys,
                           selectionMode: _selectionMode,
                           expandedKeys: _expandedLoggedKeys,
+                          highlightKeys: _highlightKeys,
                           repository: widget.repository,
                           // Read-only views: tap toggles inline expand
                           // only (no edit/delete entry points). Long-
@@ -2180,6 +2206,10 @@ class _CompletedSection extends StatelessWidget {
   final List<_Item> items;
   final Set<String> selectedKeys;
   final Set<String> expandedKeys;
+
+  /// Rows flashed with the arrival tint ([loggedRowHighlight]) — a
+  /// history / previous-record / breakdown tap, or a just-logged row.
+  final Set<String> highlightKeys;
   final bool selectionMode;
   final WarehouseConnector repository;
   final void Function(_Item) onTap;
@@ -2204,6 +2234,7 @@ class _CompletedSection extends StatelessWidget {
     required this.items,
     required this.selectedKeys,
     required this.expandedKeys,
+    this.highlightKeys = const {},
     required this.selectionMode,
     required this.repository,
     required this.onTap,
@@ -2269,6 +2300,7 @@ class _CompletedSection extends StatelessWidget {
             item: item,
             selected: selectedKeys.contains(item.keyString),
             expanded: expandedKeys.contains(item.keyString),
+            highlighted: highlightKeys.contains(item.keyString),
             isBest: best.contains(item.keyString),
             isWarmup: warmups.contains(item.keyString),
             setType: item.isBatch ? null : parseSetType(item.logged?['set_type']),
@@ -2303,6 +2335,9 @@ class _CompactLoggedTile extends StatelessWidget {
   final _Item item;
   final bool selected;
   final bool expanded;
+
+  /// Arrival tint ([loggedRowHighlight]); fades out when cleared.
+  final bool highlighted;
 
   /// The day's best set for its exercise — tinted + bold like the
   /// history panel's day-top row.
@@ -2340,6 +2375,7 @@ class _CompactLoggedTile extends StatelessWidget {
     required this.item,
     required this.selected,
     required this.expanded,
+    this.highlighted = false,
     this.isBest = false,
     this.isWarmup = false,
     this.setType,
@@ -2385,12 +2421,18 @@ class _CompactLoggedTile extends StatelessWidget {
     final headerRow = InkWell(
       onTap: onTap,
       onLongPress: onLongPress,
-      child: Container(
-        color: selected
-            ? scheme.primaryContainer.withValues(alpha: 0.4)
-            : (expanded
-                ? scheme.surfaceContainerHighest
-                : (isBest ? scheme.primaryContainer : null)),
+      child: AnimatedContainer(
+        key: ValueKey('logged-row-${item.keyString}'),
+        duration: const Duration(milliseconds: 600),
+        color: highlighted
+            ? loggedRowHighlight(scheme)
+            : (selected
+                ? scheme.primaryContainer.withValues(alpha: 0.4)
+                : (expanded
+                    ? scheme.surfaceContainerHighest
+                    : (isBest
+                        ? scheme.primaryContainer
+                        : scheme.surface.withValues(alpha: 0)))),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         child: Row(
           children: [

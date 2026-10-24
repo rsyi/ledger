@@ -9,6 +9,7 @@ import '../../services/list_display_render.dart';
 import '../../services/sheets_repository.dart';
 import '../../services/warehouse_connector.dart';
 import '../../services/working_sets.dart' show warmupIndices;
+import '../timeline_screen.dart' show openLoggedRowInTimeline;
 import 'chart_bottom_axis.dart';
 import 'chart_range.dart';
 import 'pinned_tooltip_line_chart.dart';
@@ -21,6 +22,11 @@ import 'pinned_tooltip_line_chart.dart';
 /// Generalized via the `history: true` opt-in on a dimension's input spec.
 /// The trigger lives on the field widget (form view) and on the record
 /// tile (timeline view).
+///
+/// Tapping a past record (2026-10-23) closes the sheet and opens that
+/// record's day in the view's timeline with the row expanded + tinted
+/// ([openLoggedRowInTimeline]). Records without a parseable date stay
+/// inert.
 Future<void> showHistorySheet({
   required BuildContext context,
   required ViewSchema view,
@@ -221,9 +227,27 @@ class _HistorySheetState extends State<_HistorySheet> {
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, i) {
         final r = rows[i];
+        final date = _parseDate(
+          widget.view.dateField == null ? null : r[widget.view.dateField!],
+        );
         return _HistoryTile(
           view: widget.view,
           record: r,
+          onTap: date == null
+              ? null
+              : () {
+                  // Push from the sheet's parent route, then close.
+                  final nav = Navigator.of(context);
+                  final parent = nav.context;
+                  nav.pop();
+                  openLoggedRowInTimeline(
+                    parent,
+                    view: widget.view,
+                    repository: widget.repository,
+                    date: date,
+                    rowId: r['id']?.toString(),
+                  );
+                },
           isDayMax: _isDayTop(
             r: r,
             score: scores[i],
@@ -245,10 +269,14 @@ class _HistoryTile extends StatelessWidget {
   /// (or longest hold, or highest reps) for each day.
   final bool isDayMax;
 
+  /// Opens the record's day in the timeline; null = not tappable.
+  final VoidCallback? onTap;
+
   const _HistoryTile({
     required this.view,
     required this.record,
     this.isDayMax = false,
+    this.onTap,
   });
 
   @override
@@ -261,6 +289,10 @@ class _HistoryTile extends StatelessWidget {
     final titleText = subtitle ?? ListDisplayRender.title(view, record);
     return ListTile(
       dense: true,
+      onTap: onTap,
+      trailing: onTap == null
+          ? null
+          : Icon(Icons.chevron_right, size: 18, color: scheme.outline),
       tileColor: isDayMax ? scheme.primaryContainer : null,
       leading: dateStr == null
           ? null
@@ -395,6 +427,12 @@ bool _isDayTop({
   if (max == null) return false;
   // Tolerance handles float-arithmetic equality (`e1rm` rounding noise).
   return (score - max).abs() < 1e-6;
+}
+
+DateTime? _parseDate(Object? raw) {
+  if (raw is DateTime) return raw;
+  if (raw == null) return null;
+  return DateTime.tryParse(raw.toString());
 }
 
 String _dayKey(Object? raw) {
